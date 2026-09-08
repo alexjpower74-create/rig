@@ -114,6 +114,43 @@ Only real input at real speed, hit-tested, finds the bug.
 On its first use against this project's own scoring tests, 6 of 14 checks came back VOID. They had
 been written by me, they looked reasonable, and they were watching nothing.
 
+## An agent stuck waiting on a person
+
+The failure this was blindest to. An agent sitting on a permission prompt looks exactly like an
+agent thinking hard — no commits, a few dirty files, quiet. The foreman reads `status`, sees
+nothing alarming, and everybody waits; one of them for as long as the desk is empty.
+
+```console
+$ rig status
+WAITING ON YOU — 1 session stopped for a person:
+
+  impress-steve-clarke:3 (claude 2)
+     Allow reads outside the working directories?
+       ❯ 1. Yes, keep allowing reads outside the working directories
+         2. No, block reads outside the working directories from now on
+     answer it in that pane — do not send keys from here, it kills the turn
+```
+
+Only the tail of the scrollback counts, because a prompt answered ten minutes ago is still sitting
+further up and would otherwise read as a live block forever.
+
+Briefs also tell agents to keep scratch files inside their own worktree. A debug screenshot written
+to `/tmp` is what caused the block this was built to catch.
+
+## goto() will not call an error page a load
+
+Chrome fires the load event on its **own** error page, and that page's `document.title` is the
+hostname. A failed navigation is therefore indistinguishable, to any naive check, from a successful
+one that rendered a short page.
+
+Found the hard way. A live site answered `curl` with a 200 and gave Chrome `ERR_EMPTY_RESPONSE`.
+`goto()` returned cleanly, `document.title` read back the domain, and twenty minutes went into
+believing a working collector was broken. `goto()` now checks where the page actually landed and
+throws with the underlying `ERR_` code.
+
+It is worth saying plainly that this was a check that could not fail, living inside the harness
+built to catch checks that cannot fail.
+
 ## Real input, not synthetic events
 
 `harness/input.js` drives through `Input.dispatchMouseEvent` and `Input.dispatchTouchEvent` — the
