@@ -48,5 +48,8 @@ ${agent.task || '(none stated in the plan — ask before inventing one)'}
 Write to \`${ctx.reportPath}\` — what you built, what you verified and how it could have failed,
 what you left undone, and anything you need from another slice. Mark items DONE or REJECTED in
 place. This file is a record, not a queue.
+
+**Commit it along with your work.** It is a tracked file, deliberately: your reasoning is worth
+more than your diff to whoever picks this up, and it should survive your worktree being removed.
 `
 }

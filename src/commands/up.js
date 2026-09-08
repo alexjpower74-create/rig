@@ -29,8 +29,11 @@ export default function up (args) {
       continue
     }
     const wt = ensureWorktree(root, cfg, agent.id, base)
-    const reportPath = `.rig/report-${agent.id}.md`
+    // NOT .rig/ — that is gitignored, so a report written there is never committed and goes away
+    // with the worktree. The point of a report is that it outlives the session that wrote it.
+    const reportPath = `docs/build-report-${agent.id}.md`
     mkdirSync(join(wt.path, '.rig'), { recursive: true })
+    mkdirSync(join(wt.path, 'docs'), { recursive: true })
     const brief = briefFor(plan, agent, {
       branch: wt.branch, path: wt.path, planPath: cfg.plan, reportPath
     })

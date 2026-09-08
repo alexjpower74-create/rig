@@ -28,6 +28,8 @@ export default function down (args) {
     // is protected by the commit check above; the account of the work was not protected by
     // anything. On this project those reports ran to 500 lines and were the most detailed record
     // of how the thing was built.
+    // Belt and braces behind the real fix, which is briefs pointing reports at a tracked path.
+    // Older builds wrote them here, and an agent can always ignore where it was told to write.
     const dir = join(path, '.rig')
     if (existsSync(dir)) {
       for (const f of readdirSync(dir)) {
