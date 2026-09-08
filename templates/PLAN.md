@@ -8,6 +8,9 @@ One plan file. It is the contract, and it lives at the repo root so every agent 
   else's file, say so in your report — do not reach in. `rig guard` enforces this.
 - Verify, then commit, then report. Never leave a verified step uncommitted: a usage-limit pause
   lands mid-task with no warning and the next session inherits your uncommitted tree.
+- Your report goes in `docs/build-report-<your id>.md` and is committed with your work. It is a
+  tracked file on purpose: your reasoning outlives your worktree, and it is worth more than your
+  diff to whoever picks this up. `guard` exempts your own report from your slice.
 - Commit only your own paths: `git commit -- <paths>`.
 - Never grade the shared tree. Numbers come from a QA worktree pinned to HEAD (`rig qa`).
 - A check that cannot fail measured nothing. Before you call something green, say what would

@@ -4,6 +4,7 @@ import { repoRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
 import { briefFor } from '../brief.js'
+import { reportPath } from '../reports.js'
 import { hasTmux, sessionExists, newSession, newWindow, listWindows } from '../tmux.js'
 import { git } from '../sh.js'
 
@@ -29,13 +30,11 @@ export default function up (args) {
       continue
     }
     const wt = ensureWorktree(root, cfg, agent.id, base)
-    // NOT .rig/ — that is gitignored, so a report written there is never committed and goes away
-    // with the worktree. The point of a report is that it outlives the session that wrote it.
-    const reportPath = `docs/build-report-${agent.id}.md`
+    const report = reportPath(agent.id)
     mkdirSync(join(wt.path, '.rig'), { recursive: true })
     mkdirSync(join(wt.path, 'docs'), { recursive: true })
     const brief = briefFor(plan, agent, {
-      branch: wt.branch, path: wt.path, planPath: cfg.plan, reportPath
+      branch: wt.branch, path: wt.path, planPath: cfg.plan, reportPath: report
     })
     writeFileSync(join(wt.path, '.rig', 'BRIEF.md'), brief)
     made.push({ agent, wt })

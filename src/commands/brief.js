@@ -3,6 +3,7 @@ import { repoRoot, loadConfig, currentBranch } from '../config.js'
 import { loadPlan } from '../plan.js'
 import { worktreePath } from '../worktrees.js'
 import { briefFor } from '../brief.js'
+import { reportPath } from '../reports.js'
 
 // Prints the briefing so you can hand it over deliberately — paste it, or send it with whatever
 // message channel your agents use. The rig will not type into a pane on your behalf.
@@ -19,6 +20,6 @@ export default function brief (args) {
     branch: cfg.branchPrefix + id,
     path: worktreePath(root, cfg, id),
     planPath: cfg.plan,
-    reportPath: `.rig/report-${id}.md`
+    reportPath: reportPath(id)
   }))
 }
