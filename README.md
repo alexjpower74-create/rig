@@ -61,6 +61,36 @@ Every number you report from here belongs to 40c0d72. Say the sha when you repor
 Agents are mid-edit in their own trees by definition. A number taken there measured a half-finished
 checkout, and you will not find out until someone tries to reproduce it.
 
+## `rig qa` is also your scratch tree
+
+Its name says grading, which undersells it. It makes a detached worktree pinned to an exact commit
+— a tree whose state you are free to wreck and whose wreckage belongs to nobody.
+
+```console
+rig qa --ref main      # break things in here
+```
+
+Use it for anything destructive: testing that `guard` refuses what it should, checking what a
+half-deleted repo does, trying a migration. The alternative is what I actually did — running a
+destructive test inside another agent's worktree, staging a deletion of their build report without
+noticing, and leaving them to find an unexplained deletion in their own tree. The tool refused
+correctly. The mistake was needing it to.
+
+## When a number comes through a wrapper, check which layer produced it
+
+Three times in one build, a measurement answered a question adjacent to the one asked — and every
+time it was an extra verification step nobody had required, which is why it felt like diligence:
+
+- `guard | tail` reporting exit 0, because that is `tail`'s exit code. A refusal read as a pass.
+- Counting Chrome processes two seconds after a suite exited — inside Chrome's own shutdown
+  sequence. A clean run looked like a leak.
+- Counting processes matching `--remote-debugging-port`, which Chrome's renderer helpers inherit
+  from their parent. One browser looked like nine.
+
+The common shape is a wrapper around the thing you care about. **The wrapper always answers, and it
+always answers about itself.** "Be careful with numbers" is advice nobody can act on. "When a number
+comes through a wrapper, check which layer produced it" is something you can catch yourself doing.
+
 ## A check that cannot fail measured nothing
 
 This is the part worth stealing even if you never run the CLI.
