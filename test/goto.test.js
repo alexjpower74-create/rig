@@ -20,11 +20,20 @@ const base = `http://127.0.0.1:${server.address().port}`
 
 const browser = await launch({ headless: true, port: 9800 + Math.floor(Math.random() * 150) })
 
+// The navigation budget must sit INSIDE the check's budget, not outside it.
+//
+// A check abandoned by the harness does not stop the work it started: the navigation carries on,
+// in a page belonging to a browser every later check is still using. One slow check then fails
+// the ones after it, which teaches people to re-run a suite instead of read it — and the next
+// time it happens, a real defect gets dismissed as the known flake.
+const NAV_TIMEOUT = 8_000
+const CHECK_TIMEOUT = 20_000
+
 /** Navigate and say only whether it threw. */
 async function tryGoto (url) {
   const page = await browser.newPage(null)
   try {
-    await page.goto(url, { timeout: 15_000 })
+    await page.goto(url, { timeout: NAV_TIMEOUT })
     return { threw: false, title: await page.eval('document.title') }
   } catch (e) {
     return { threw: true, why: e.message }
@@ -36,6 +45,7 @@ await suite('goto refuses to call an error page a load', async t => {
   let target = `${base}/dead`
 
   await t.check('a server that hangs up is reported as a failed navigation', {
+    timeout: CHECK_TIMEOUT,
     assert: async () => {
       const r = await tryGoto(target)
       return r.threw && /ERR_|failed/.test(r.why)
@@ -48,6 +58,7 @@ await suite('goto refuses to call an error page a load', async t => {
   let good = `${base}/ok`
 
   await t.check('a real page still loads, with its real title', {
+    timeout: CHECK_TIMEOUT,
     assert: async () => {
       const r = await tryGoto(good)
       return !r.threw && r.title === 'A Real Page'
@@ -69,6 +80,7 @@ import { liveBrowsers } from '../harness/cdp.js'
 
 await suite('browsers do not leak', async t => {
   await t.check('a closed browser is no longer tracked', {
+    timeout: CHECK_TIMEOUT,
     // Absolute, not relative. A before/after delta stays true no matter how many browsers are
     // already leaking, which is exactly the state this check exists to notice — and it marked
     // itself VOID for saying so.
