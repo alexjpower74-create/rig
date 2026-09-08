@@ -61,6 +61,27 @@ export function touchedFiles (worktree, base) {
   return [...set]
 }
 
+/**
+ * Paths this worktree has DELETED relative to base — staged, unstaged or committed.
+ *
+ * A deletion needs its own answer. A cross-slice edit is someone reaching where they should not,
+ * and a refusal reads as the tool doing its job. A cross-slice deletion is usually someone who
+ * does not know they touched the file at all, and the same refusal reads as a nuisance in the way
+ * of a commit — right up until it turns out to have been the only copy of something.
+ */
+export function deletedFiles (cwd, base) {
+  const out = new Set()
+  const committed = tryGit(['diff', '--name-status', '--diff-filter=D', `${base}...HEAD`], cwd)
+  if (committed.ok) committed.out.split('\n').filter(Boolean).forEach(l => out.add(l.split('\t').pop()))
+  const r = gitRaw(['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'], cwd)
+  if (r.ok) {
+    for (const line of r.out.split('\n').filter(Boolean)) {
+      if (line[0] === 'D' || line[1] === 'D') out.add(line.slice(3))
+    }
+  }
+  return [...out]
+}
+
 export function stagedFiles (cwd) {
   const r = tryGit(['diff', '--cached', '--name-only'], cwd)
   return r.ok ? r.out.split('\n').filter(Boolean) : []

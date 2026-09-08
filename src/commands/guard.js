@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import { repoRoot, loadConfig, currentBranch } from '../config.js'
 import { loadPlan, matchesAny } from '../plan.js'
-import { worktreePath, touchedFiles, stagedFiles } from '../worktrees.js'
+import { worktreePath, touchedFiles, stagedFiles, deletedFiles } from '../worktrees.js'
 import { isOwnReport } from '../reports.js'
 
 // Enforces the one rule that keeps a multi-agent build from turning into a merge disaster:
@@ -21,14 +21,27 @@ export default function guard (args) {
   const inferred = branch.startsWith(cfg.branchPrefix) ? branch.slice(cfg.branchPrefix.length) : null
   const id = named || inferred
 
-  const check = (agent, files, where) => {
+  const check = (agent, files, where, cwd) => {
     // An agent's own report is exempt: it is deliberately tracked, deliberately outside every
     // slice, and the brief instructs the agent to commit it. Refusing it would make following the
     // brief impossible. The path carries the agent's own id, so this is not a general escape.
     const stray = files.filter(f => !matchesAny(f, agent.owns) && !f.startsWith('.rig/') && !isOwnReport(f, agent.id))
     if (!stray.length) { console.log(`\x1b[32mok\x1b[0m  ${agent.id}: ${files.length} file(s), all inside slice ${where}`); return 0 }
+
+    // Deletions get their own sentence. Somebody reaching into another slice usually knows they
+    // did it; somebody deleting a file there usually does not, and the report they are removing
+    // may be the only copy of another agent's reasoning.
+    const deleted = new Set(cwd ? deletedFiles(cwd, base) : [])
+    const goneReports = stray.filter(f => deleted.has(f) && /^docs\/build-report-.*\.md$/.test(f))
+
     console.error(`\x1b[31mREFUSED\x1b[0m  ${agent.id} reached outside its slice ${where}:`)
-    for (const f of stray) console.error(`  ${f}`)
+    for (const f of stray) console.error(`  ${f}${deleted.has(f) ? '  \x1b[31m(deleted)\x1b[0m' : ''}`)
+    if (goneReports.length) {
+      console.error(`\n  \x1b[33mThat is another agent's build report, and you are deleting it.\x1b[0m`)
+      console.error('  Reports are tracked because they outlive the worktree that wrote them, and')
+      console.error('  they are usually the only record of why the code looks the way it does.')
+      console.error('  If you did not mean to touch it:  git checkout -- ' + goneReports.join(' '))
+    }
     console.error(`\n  ${agent.id} owns: ${agent.owns.join(', ')}`)
     console.error('  If the task genuinely needs this file, say so in your report and let its owner make the change.')
     return stray.length
@@ -39,13 +52,13 @@ export default function guard (args) {
     const agent = plan.agents.find(a => a.id === id)
     if (!agent) { console.error(`No slice "${id}" in ${cfg.plan}.`); process.exit(2) }
     const files = staged ? stagedFiles(process.cwd()) : touchedFiles(process.cwd(), base)
-    bad += check(agent, files, staged ? '(staged)' : `(vs ${base})`)
+    bad += check(agent, files, staged ? '(staged)' : `(vs ${base})`, process.cwd())
   } else {
     // No agent context — sweep every worktree instead.
     for (const agent of plan.agents) {
       const path = worktreePath(root, cfg, agent.id)
       if (!existsSync(path)) continue
-      bad += check(agent, touchedFiles(path, base), `(vs ${base})`)
+      bad += check(agent, touchedFiles(path, base), `(vs ${base})`, path)
     }
   }
   if (bad) process.exit(1)
