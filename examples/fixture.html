@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>rig harness fixture</title>
+<style>
+  :root { color-scheme: light dark }
+  body { margin: 0; height: 4000px; font: 15px/1.5 system-ui, sans-serif; background: #0f1115; color: #e6e9ef }
+  header {
+    position: fixed; inset: 0 0 auto 0; height: 90px; background: #171a21;
+    border-bottom: 1px solid #262b36; display: flex; align-items: center; padding: 0 24px; z-index: 10;
+    transition: transform .25s ease; will-change: transform;
+  }
+  header.hidden { transform: translateY(-100%) }
+  #cta {
+    position: absolute; top: 1545px; left: 24px; width: 220px; height: 40px;
+    display: grid; place-items: center; background: #3a8f8f; color: #06110f;
+    border-radius: 8px; font-weight: 600; cursor: pointer;
+  }
+  #log { position: absolute; top: 1620px; left: 24px; font-family: ui-monospace, monospace; opacity: .6 }
+</style>
+<header id="nav">rig fixture — sticky nav</header>
+<div id="cta">Get a quote</div>
+<div id="log">scroll down to reach the CTA</div>
+<script>
+  // A sticky nav that hides on scroll-down so it stops covering the page.
+  //
+  // The bug: the guard below was added to ignore "jumps" (anchor links, restored scroll position).
+  // It also ignores every delta a fast wheel or a hard flick produces — so at speed the nav never
+  // hides, and it sits on top of the CTA. Slow, eased, programmatic scrolling never triggers it.
+  let last = 0
+  const nav = document.getElementById('nav')
+  addEventListener('scroll', () => {
+    const y = scrollY
+    const delta = y - last
+    if (Math.abs(delta) > 120) { last = y; return }   // <-- the defect
+    if (delta > 0 && y > 100) nav.classList.add('hidden')
+    else if (delta < 0) nav.classList.remove('hidden')
+    last = y
+  }, { passive: true })
+  document.getElementById('cta').addEventListener('click', () => {
+    document.getElementById('log').textContent = 'CTA clicked'
+  })
+</script>

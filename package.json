@@ -1,0 +1,10 @@
+{
+  "name": "@alexpower/rig",
+  "version": "0.1.0",
+  "description": "Multi-agent build orchestration for Claude Code. File-ownership slices, a plan file as the contract, QA worktrees pinned to HEAD, and checks that must prove they can fail.",
+  "type": "module",
+  "bin": { "rig": "./bin/rig.js" },
+  "engines": { "node": ">=22" },
+  "license": "MIT",
+  "files": ["bin", "src", "harness", "templates"]
+}
