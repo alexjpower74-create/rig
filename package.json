@@ -22,6 +22,8 @@
     "./*": "./*"
   },
   "scripts": {
-    "test": "node test/goto.test.js && node examples/demo.test.js"
+    "test": "node test/goto.test.js",
+    "demo": "node examples/demo.test.js || true",
+    "demo:watch": "node examples/demo-visible.js"
   }
 }
