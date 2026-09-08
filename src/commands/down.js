@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { repoRoot, loadConfig, sessionName } from '../config.js'
 import { loadPlan } from '../plan.js'
@@ -16,11 +16,32 @@ export default function down (args) {
   // Refuse to tear down over uncommitted work. Branches are always kept — the rig removes
   // checkouts, never commits.
   const blocked = []
+  const reports = []
   for (const id of ids) {
     const path = worktreePath(root, cfg, id)
     if (!existsSync(path)) continue
     const dirty = dirtyFiles(path)
     if (dirty.length && id !== 'qa') blocked.push({ id, path, dirty })
+
+    // An agent's report lives in .rig/, which is gitignored by design — so it is never "dirty",
+    // never committed, and teardown would take the only copy of its reasoning with it. The work
+    // is protected by the commit check above; the account of the work was not protected by
+    // anything. On this project those reports ran to 500 lines and were the most detailed record
+    // of how the thing was built.
+    const dir = join(path, '.rig')
+    if (existsSync(dir)) {
+      for (const f of readdirSync(dir)) {
+        if (/^report-.*\.md$/.test(f)) reports.push({ id, file: join(dir, f) })
+      }
+    }
+  }
+
+  if (reports.length && !args.includes('--discard-reports')) {
+    console.error(`\x1b[33m${reports.length} agent report(s) live only inside the worktrees:\x1b[0m`)
+    for (const r of reports) console.error(`  ${r.file}`)
+    console.error('\nThese are gitignored, so they were never committed and removing the worktrees deletes them.')
+    console.error('Copy them somewhere first, then re-run — or pass --discard-reports if you genuinely do not want them.')
+    process.exit(1)
   }
 
   if (blocked.length && !force) {
