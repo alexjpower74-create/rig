@@ -12,6 +12,31 @@ import { join } from 'node:path'
 
 const CHROME = process.env.RIG_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
+/**
+ * Every browser this process launched and has not closed.
+ *
+ * Chrome does not reliably die with its parent, and a suite that throws before reaching close()
+ * leaks one. Run several suites back to back and the survivors pile up until they starve each
+ * other — which presents as unrelated tests failing intermittently, then passing when re-run
+ * alone, which is the single most expensive shape a bug can have.
+ */
+const live = new Set()
+let reaperInstalled = false
+
+function installReaper () {
+  if (reaperInstalled) return
+  reaperInstalled = true
+  const reap = () => { for (const b of live) { try { b.proc.kill('SIGKILL') } catch {} } live.clear() }
+  process.on('exit', reap)
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => { reap(); process.exit(130) })
+  }
+  process.on('uncaughtException', err => { reap(); throw err })
+}
+
+/** How many browsers this process still has open. Exported so a suite can assert it cleaned up. */
+export const liveBrowsers = () => live.size
+
 export async function launch ({ headless = true, port = 9333, width = 1440, height = 900, args: extraArgs = [] } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'rig-chrome-'))
   const args = [
@@ -34,10 +59,12 @@ export async function launch ({ headless = true, port = 9333, width = 1440, heig
   const proc = spawn(CHROME, args, { stdio: 'ignore', detached: false })
   const version = await waitForEndpoint(`http://127.0.0.1:${port}/json/version`, 10_000)
 
+  installReaper()
   const browser = {
     proc, port, profile, version,
     async newPage (url, opts = {}) { return newPage(port, url, { width, height, ...opts }) },
     async close () {
+      live.delete(browser)
       try { proc.kill('SIGTERM') } catch {}
       // Chrome does not always go quietly; make sure of it, then take the profile with it.
       await new Promise(r => setTimeout(r, 300))
@@ -45,6 +72,7 @@ export async function launch ({ headless = true, port = 9333, width = 1440, heig
       try { rmSync(profile, { recursive: true, force: true }) } catch {}
     }
   }
+  live.add(browser)
   return browser
 }
 

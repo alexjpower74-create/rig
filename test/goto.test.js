@@ -60,3 +60,30 @@ await suite('goto refuses to call an error page a load', async t => {
 
 await browser.close()
 server.close()
+
+// A leaked browser is not a tidiness problem. Chrome does not reliably die with its parent, so a
+// suite that throws before close() leaves one running; several suites back to back leave a crowd
+// that starves each other, and that presents as unrelated tests failing intermittently and then
+// passing when re-run alone. That is the most expensive shape a bug can take.
+import { liveBrowsers } from '../harness/cdp.js'
+
+await suite('browsers do not leak', async t => {
+  await t.check('a closed browser is no longer tracked', {
+    // Absolute, not relative. A before/after delta stays true no matter how many browsers are
+    // already leaking, which is exactly the state this check exists to notice — and it marked
+    // itself VOID for saying so.
+    assert: async () => {
+      const b = await launch({ headless: true, port: 9860 + Math.floor(Math.random() * 60) })
+      const during = liveBrowsers()
+      await b.close()
+      return during >= 1 && liveBrowsers() === 0
+    },
+    // If close() stopped untracking, the count would not come back down. Prove the counter moves
+    // by leaving one open — and clean it up in the restore, because this suite must not be the
+    // thing that leaks.
+    breaks: async () => {
+      const b = await launch({ headless: true, port: 9930 + Math.floor(Math.random() * 60) })
+      return async () => { await b.close() }
+    }
+  })
+})
