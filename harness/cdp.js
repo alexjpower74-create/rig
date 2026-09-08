@@ -12,7 +12,7 @@ import { join } from 'node:path'
 
 const CHROME = process.env.RIG_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
-export async function launch ({ headless = true, port = 9333, width = 1440, height = 900 } = {}) {
+export async function launch ({ headless = true, port = 9333, width = 1440, height = 900, args: extraArgs = [] } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'rig-chrome-'))
   const args = [
     `--remote-debugging-port=${port}`,
@@ -25,6 +25,10 @@ export async function launch ({ headless = true, port = 9333, width = 1440, heig
     `--window-size=${width},${height}`
   ]
   if (headless) args.push('--headless=new')
+  // Caller-supplied flags. Needed for things only the caller knows it wants — retrying a site
+  // whose server speaks broken HTTP/2 with `--disable-http2`, for instance, which turns a
+  // graceful non-answer into a real measurement.
+  args.push(...extraArgs)
   args.push('about:blank')
 
   const proc = spawn(CHROME, args, { stdio: 'ignore', detached: false })
@@ -53,7 +57,7 @@ async function waitForEndpoint (url, ms) {
   throw new Error(`Chrome never opened a debugging endpoint at ${url}. Is it installed at ${CHROME}?`)
 }
 
-async function newPage (port, url, { width, height, dpr = 2, mobile = false }) {
+async function newPage (port, url, { width, height, dpr = 2, mobile = false, emulate = true }) {
   const target = await (await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent('about:blank')}`, { method: 'PUT' })).json()
   const ws = new WebSocket(target.webSocketDebuggerUrl)
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('could not attach to the page')) })
@@ -82,7 +86,11 @@ async function newPage (port, url, { width, height, dpr = 2, mobile = false }) {
   await send('DOM.enable')
   // Headless lays out at a ~500px floor no matter what --window-size says. Pin the viewport
   // explicitly or every mobile measurement you take is measuring the wrong page.
-  await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: dpr, mobile })
+  //
+  // In a window someone is actually watching, do the opposite: an override forces a layout
+  // viewport that does not match the visible window, so anything pinned to the bottom of the
+  // screen lands below the part you can see. `emulate: false` keeps the real window size.
+  if (emulate) await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: dpr, mobile })
 
   const page = { send, on, ws, target,
     async goto (u, { waitUntil = 'load', timeout = 30_000 } = {}) {
