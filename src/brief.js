@@ -39,6 +39,10 @@ ${agent.task || '(none stated in the plan — ask before inventing one)'}
    another agent's eyes while the work is still cheap to change.
 7. **You will not be messaged by keystrokes.** Nobody types into your pane. If you need something,
    put it in your report.
+8. **Keep scratch files inside your own worktree.** Debug screenshots, scratch HTML, throwaway
+   scripts — put them under your slice, not in \`/tmp\`. Reading or writing outside the working
+   directory triggers a permission prompt, and a prompt stops you dead until a human notices.
+   The foreman cannot answer it for you, and if nobody is at the desk you will wait all night.
 
 ## Reporting
 Write to \`${ctx.reportPath}\` — what you built, what you verified and how it could have failed,

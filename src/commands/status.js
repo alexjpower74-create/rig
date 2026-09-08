@@ -5,6 +5,7 @@ import { loadPlan, matchesAny } from '../plan.js'
 import { worktreePath, touchedFiles, dirtyFiles } from '../worktrees.js'
 import { tryGit } from '../sh.js'
 import { hasTmux, sessionExists, listWindows } from '../tmux.js'
+import { blockedPanes } from '../blocked.js'
 
 const RED = s => `\x1b[31m${s}\x1b[0m`
 const GRN = s => `\x1b[32m${s}\x1b[0m`
@@ -45,6 +46,20 @@ export default function status (args) {
     }
     const report = join(path, '.rig', `report-${agent.id}.md`)
     if (existsSync(report)) console.log(`   ${DIM('report: ' + relative(root, report))}`)
+    console.log()
+  }
+
+  // An agent stuck on a permission prompt is the failure this was blindest to: it looks exactly
+  // like an agent thinking hard. Nothing else in `status` can tell the two apart.
+  const blocked = hasTmux() ? blockedPanes() : []
+  if (blocked.length) {
+    console.log(YEL('WAITING ON YOU') + ` — ${blocked.length} session${blocked.length === 1 ? '' : 's'} stopped for a person:\n`)
+    for (const b of blocked) {
+      console.log(`  ${YEL(b.session + ':' + b.index)} ${DIM('(' + b.name + ')')}`)
+      console.log(`     ${b.question}`)
+      for (const o of b.options) console.log(`       ${DIM(o)}`)
+      console.log(`     ${DIM('answer it in that pane — do not send keys from here, it kills the turn')}`)
+    }
     console.log()
   }
 
