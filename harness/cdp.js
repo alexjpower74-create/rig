@@ -93,10 +93,34 @@ async function newPage (port, url, { width, height, dpr = 2, mobile = false, emu
   if (emulate) await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: dpr, mobile })
 
   const page = { send, on, ws, target,
+    /**
+     * Navigate, and refuse to call a browser error page a successful load.
+     *
+     * Chrome fires the load event on its OWN error page, and that page's document.title is the
+     * hostname — so a failed navigation looks, to every naive check, exactly like a successful
+     * one that happened to render a short page. A harness that trusts the load event here is
+     * measuring "This page isn't working" and reporting it as the site.
+     *
+     * Observed live: a live site returned ERR_EMPTY_RESPONSE to Chrome while answering curl
+     * with a 200. goto() reported success, document.title read "a live site", and the audit
+     * would have scored Chrome's error page as the business's home page.
+     */
     async goto (u, { waitUntil = 'load', timeout = 30_000 } = {}) {
       const done = new Promise(res => on(waitUntil === 'load' ? 'Page.loadEventFired' : 'Page.domContentEventFired', res))
-      await send('Page.navigate', { url: u })
+      const nav = await send('Page.navigate', { url: u })
+      if (nav.errorText) throw new Error(`navigation to ${u} failed: ${nav.errorText}`)
       await Promise.race([done, new Promise((_, rej) => setTimeout(() => rej(new Error(`navigation to ${u} timed out`)), timeout))])
+
+      // The load event is not proof. Ask where we actually ended up.
+      const landed = await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true })
+      const href = landed.result?.value || ''
+      if (/^chrome-error:\/\//.test(href)) {
+        const why = await send('Runtime.evaluate', {
+          expression: '(document.body ? document.body.innerText : "").match(/ERR_[A-Z0-9_]+/)?.[0] || "unknown"',
+          returnByValue: true
+        })
+        throw new Error(`navigation to ${u} landed on a browser error page: ${why.result?.value || 'unknown'}`)
+      }
     },
     async eval (expression, { awaitPromise = true } = {}) {
       const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise })

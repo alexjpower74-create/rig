@@ -20,5 +20,8 @@
     ".": "./harness/index.js",
     "./harness": "./harness/index.js",
     "./*": "./*"
+  },
+  "scripts": {
+    "test": "node test/goto.test.js && node examples/demo.test.js"
   }
 }
