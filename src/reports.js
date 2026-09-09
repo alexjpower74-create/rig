@@ -5,8 +5,17 @@
 // which command briefed it — and the path that would win was whichever it read last. A constant
 // duplicated across three files is not a constant.
 
-/** The report path for an agent, relative to the repo root. Tracked by git on purpose. */
-export const reportPath = id => `docs/build-report-${id}.md`
+/**
+ * The report path for an agent, relative to the repo root. Tracked by git on purpose.
+ *
+ * Takes the agent, not the id, because a slice may declare `Report:` in the plan. Deriving it
+ * from the id alone gave two sources of truth: `rig brief` promised one path in its boilerplate
+ * while the plan's own task text named another, and `rig guard` — enforcing the derived one —
+ * refused the agent for writing the file the contract asked for.
+ */
+export const reportPath = agent =>
+  (typeof agent === 'string' ? null : agent?.report) ||
+  `docs/build-report-${typeof agent === 'string' ? agent : agent?.id}.md`
 
 /**
  * True if this path is the given agent's own report.
@@ -17,7 +26,10 @@ export const reportPath = id => `docs/build-report-${id}.md`
  * session. Best case the agent reports the contradiction; worst case it decides the report does
  * not matter and drops it.
  *
- * It cannot be abused as a general escape hatch: the path contains the agent's own id, so `c1`
- * can only ever reach `docs/build-report-c1.md` through it.
+ * It cannot be abused as a general escape hatch: it resolves to exactly one path per agent,
+ * declared in the plan or derived from the id, and the plan refuses two agents sharing one.
  */
-export const isOwnReport = (path, id) => path === reportPath(id)
+export const isOwnReport = (path, agent) => path === reportPath(agent)
+
+/** Every report path this plan declares — used to recognise one being deleted. */
+export const allReportPaths = plan => plan.agents.map(reportPath)

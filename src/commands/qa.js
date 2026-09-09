@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { repoRoot, loadConfig, currentBranch } from '../config.js'
+import { mainRoot, loadConfig, currentBranch } from '../config.js'
 import { ensureDetachedWorktree } from '../worktrees.js'
 import { git } from '../sh.js'
 
@@ -9,7 +9,7 @@ import { git } from '../sh.js'
 // on its own port, so every number you report can be traced to a sha.
 
 export default function qa (args) {
-  const root = repoRoot()
+  const root = mainRoot()
   const cfg = loadConfig(root)
   const ref = argOf(args, '--ref') || argOf(args, '--branch') || currentBranch(root)
   const port = Number(argOf(args, '--port') || cfg.qaPort)

@@ -1,6 +1,6 @@
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { repoRoot, loadConfig, sessionName, currentBranch } from '../config.js'
+import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
 import { briefFor } from '../brief.js'
@@ -9,7 +9,7 @@ import { hasTmux, sessionExists, newSession, newWindow, listWindows } from '../t
 import { git } from '../sh.js'
 
 export default function up (args) {
-  const root = repoRoot()
+  const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const dry = args.includes('--dry-run')
@@ -30,7 +30,7 @@ export default function up (args) {
       continue
     }
     const wt = ensureWorktree(root, cfg, agent.id, base)
-    const report = reportPath(agent.id)
+    const report = reportPath(agent)
     mkdirSync(join(wt.path, '.rig'), { recursive: true })
     mkdirSync(join(wt.path, 'docs'), { recursive: true })
     const brief = briefFor(plan, agent, {

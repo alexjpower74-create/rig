@@ -1,13 +1,13 @@
 import { writeFileSync, existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { repoRoot, loadConfig, saveConfig, DEFAULTS } from '../config.js'
+import { mainRoot, loadConfig, saveConfig, DEFAULTS } from '../config.js'
 import { git } from '../sh.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
 export default function init (args) {
-  const root = repoRoot()
+  const root = mainRoot()
   const cfg = { ...DEFAULTS, ...loadConfig(root) }
   saveConfig(root, cfg)
 

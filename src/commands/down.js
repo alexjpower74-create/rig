@@ -1,13 +1,13 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { repoRoot, loadConfig, sessionName } from '../config.js'
+import { mainRoot, loadConfig, sessionName } from '../config.js'
 import { loadPlan } from '../plan.js'
 import { worktreePath, dirtyFiles } from '../worktrees.js'
 import { tryGit, git } from '../sh.js'
 import { sessionExists, killSession, hasTmux } from '../tmux.js'
 
 export default function down (args) {
-  const root = repoRoot()
+  const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const force = args.includes('--force')

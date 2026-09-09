@@ -1,15 +1,15 @@
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
-import { repoRoot, loadConfig, currentBranch } from '../config.js'
+import { mainRoot, loadConfig, currentBranch } from '../config.js'
 import { loadPlan, matchesAny } from '../plan.js'
 import { worktreePath, touchedFiles, stagedFiles, deletedFiles } from '../worktrees.js'
-import { isOwnReport } from '../reports.js'
+import { isOwnReport, allReportPaths } from '../reports.js'
 
 // Enforces the one rule that keeps a multi-agent build from turning into a merge disaster:
 // you edit your slice and nothing else. Runs as a pre-commit hook (`rig init --hook`) or by hand.
 
 export default function guard (args) {
-  const root = repoRoot()
+  const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const staged = args.includes('--staged')
@@ -25,14 +25,15 @@ export default function guard (args) {
     // An agent's own report is exempt: it is deliberately tracked, deliberately outside every
     // slice, and the brief instructs the agent to commit it. Refusing it would make following the
     // brief impossible. The path carries the agent's own id, so this is not a general escape.
-    const stray = files.filter(f => !matchesAny(f, agent.owns) && !f.startsWith('.rig/') && !isOwnReport(f, agent.id))
+    const stray = files.filter(f => !matchesAny(f, agent.owns) && !f.startsWith('.rig/') && !isOwnReport(f, agent))
     if (!stray.length) { console.log(`\x1b[32mok\x1b[0m  ${agent.id}: ${files.length} file(s), all inside slice ${where}`); return 0 }
 
     // Deletions get their own sentence. Somebody reaching into another slice usually knows they
     // did it; somebody deleting a file there usually does not, and the report they are removing
     // may be the only copy of another agent's reasoning.
     const deleted = new Set(cwd ? deletedFiles(cwd, base) : [])
-    const goneReports = stray.filter(f => deleted.has(f) && /^docs\/build-report-.*\.md$/.test(f))
+    const declared = new Set(allReportPaths(plan))
+    const goneReports = stray.filter(f => deleted.has(f) && declared.has(f))
 
     console.error(`\x1b[31mREFUSED\x1b[0m  ${agent.id} reached outside its slice ${where}:`)
     for (const f of stray) console.error(`  ${f}${deleted.has(f) ? '  \x1b[31m(deleted)\x1b[0m' : ''}`)

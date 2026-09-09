@@ -1,6 +1,6 @@
 import { join, relative } from 'node:path'
 import { existsSync } from 'node:fs'
-import { repoRoot, loadConfig, sessionName, currentBranch } from '../config.js'
+import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan, matchesAny } from '../plan.js'
 import { worktreePath, touchedFiles, dirtyFiles } from '../worktrees.js'
 import { tryGit } from '../sh.js'
@@ -13,7 +13,7 @@ const DIM = s => `\x1b[2m${s}\x1b[0m`
 const YEL = s => `\x1b[33m${s}\x1b[0m`
 
 export default function status (args) {
-  const root = repoRoot()
+  const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const base = argOf(args, '--base') || currentBranch(root)

@@ -22,6 +22,8 @@ One plan file. It is the contract, and it lives at the repo root so every agent 
 Owns:
 - src/<area>/**
 
+Report: docs/build-report-c1.md
+
 Task:
 <what this agent is building, in enough detail that it does not have to guess>
 

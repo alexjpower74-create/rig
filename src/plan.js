@@ -10,6 +10,8 @@
 //   - src/hero/**
 //   - src/motion/**
 //
+//   Report: docs/build-report-hero.md      (optional; defaults to docs/build-report-<id>.md)
+//
 //   Task:
 //   Build the hero section...
 
@@ -57,7 +59,7 @@ export function parsePlan (text) {
     const head = line.match(/^###\s+(\S+)\s*(?:[—–-]\s*(.*))?$/)
     if (head) {
       push()
-      cur = { id: head[1], title: (head[2] || '').trim(), owns: [], task: [] }
+      cur = { id: head[1], title: (head[2] || '').trim(), owns: [], task: [], report: null }
       mode = null
       continue
     }
@@ -68,6 +70,11 @@ export function parsePlan (text) {
 
     if (/^owns:/i.test(line)) { mode = 'owns'; continue }
     if (/^task:/i.test(line)) { mode = 'task'; continue }
+    // A slice may name its own report. Without this the path was derived from the id while the
+    // plan's prose named something else, and the agent was refused by the guard for writing the
+    // file its own brief told it to write.
+    const rep = line.match(/^report:\s*(.+)$/i)
+    if (rep) { cur.report = rep[1].trim().replace(/^`|`$/g, ''); mode = null; continue }
 
     if (mode === 'owns') {
       const item = line.match(/^\s*[-*]\s+(.+)$/)
@@ -96,6 +103,14 @@ export function loadPlan (planPath) {
     if (seen.has(a.id)) throw new Error(`Duplicate agent id "${a.id}" in the plan. Ids are addresses; they must be unique.`)
     seen.add(a.id)
     if (a.owns.length === 0) throw new Error(`Agent "${a.id}" owns no files. Every agent needs a slice, or it will edit someone else's.`)
+  }
+  // Two slices writing to one report is two agents overwriting each other's reasoning, and the
+  // loser never knows. Reports are addresses too.
+  const reports = new Map()
+  for (const a of plan.agents) {
+    const r = a.report || `docs/build-report-${a.id}.md`
+    if (reports.has(r)) throw new Error(`Agents "${reports.get(r)}" and "${a.id}" both report to ${r}. One of them would overwrite the other.`)
+    reports.set(r, a.id)
   }
   return plan
 }
