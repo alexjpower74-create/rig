@@ -9,6 +9,7 @@ export const DEFAULTS = {
   portBase: 5180,
   qaPort: 5199,
   launch: 'claude',
+  terminal: 'auto', // auto | herdr | tmux
   devCommand: null
 }
 

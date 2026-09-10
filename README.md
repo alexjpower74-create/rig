@@ -208,7 +208,20 @@ screenshot of one is a picture of a lie.
 the build, and the standing rules. `rig brief <id>` prints it so you can hand it over yourself.
 
 The rig never types into an agent's pane. Keystrokes sent to a running session land as an interrupt
-and kill the turn it is in the middle of. Panes are read-only from outside: `tmux capture-pane -p`.
+and kill the turn it is in the middle of. Panes are read-only from outside: `herdr pane read <id>` or
+`tmux capture-pane -p`.
+
+## herdr or tmux
+
+`rig up` launches agents in whichever multiplexer it is running inside. Under [herdr](https://herdr.dev)
+(`HERDR_ENV=1`) a build is a workspace named `rig-<repo>` with one tab per slice; anywhere else it is
+a tmux session with one window per slice. Force one with `"terminal": "herdr"` or `"tmux"` in
+`.rig/config.json`.
+
+Under herdr, `rig status` trusts herdr's own agent state: a slice herdr reports as `blocked` is
+listed under WAITING ON YOU whether or not the prompt text is still on screen, and one it reports as
+`working` is never mistaken for blocked by a stale prompt in scrollback. The text scan is the fallback
+for `unknown`.
 
 ## Install
 

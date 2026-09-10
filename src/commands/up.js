@@ -5,7 +5,7 @@ import { loadPlan } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
 import { briefFor } from '../brief.js'
 import { reportPath } from '../reports.js'
-import { hasTmux, sessionExists, newSession, newWindow, listWindows } from '../tmux.js'
+import { terminal } from '../terminal.js'
 import { git } from '../sh.js'
 
 export default function up (args) {
@@ -44,22 +44,24 @@ export default function up (args) {
   if (dry) { console.log('\ndry run — nothing created'); return }
 
   if (!noLaunch) {
-    if (!hasTmux()) {
-      console.log('\ntmux not found — worktrees and briefs are ready, but nothing was launched.')
+    const term = terminal(cfg)
+    if (!term.available()) {
+      console.log(`\n${term.name} not available — worktrees and briefs are ready, but nothing was launched.`)
+      if (term.name === 'herdr') console.log('(run `rig up` from inside a herdr pane, or set "terminal": "tmux" in .rig/config.json)')
     } else {
       const cmd = `${cfg.launch} "Read .rig/BRIEF.md and follow it."`
-      if (!sessionExists(session)) {
+      if (!term.sessionExists(session)) {
         const first = made[0]
-        newSession(session, first.agent.id, first.wt.path, cmd)
-        for (const m of made.slice(1)) newWindow(session, m.agent.id, m.wt.path, cmd)
+        term.newSession(session, first.agent.id, first.wt.path, cmd)
+        for (const m of made.slice(1)) term.newWindow(session, m.agent.id, m.wt.path, cmd)
       } else {
-        const have = new Set(listWindows(session))
-        for (const m of made) if (!have.has(m.agent.id)) newWindow(session, m.agent.id, m.wt.path, cmd)
+        const have = new Set(term.listWindows(session))
+        for (const m of made) if (!have.has(m.agent.id)) term.newWindow(session, m.agent.id, m.wt.path, cmd)
       }
-      console.log(`\ntmux session: ${session}  (windows: ${listWindows(session).join(', ')})`)
-      console.log(`attach with:  tmux attach -t ${session}`)
+      console.log(`\n${term.name} session: ${session}  (${term.name === 'herdr' ? 'tabs' : 'windows'}: ${term.listWindows(session).join(', ')})`)
+      console.log(`attach with:  ${term.attachHint(session)}`)
       console.log('\nDo not type into an agent pane — keystrokes interrupt the turn. Read one with:')
-      console.log(`  tmux capture-pane -p -t ${session}:<id>`)
+      console.log(`  ${term.readHint(session)}`)
     }
   }
 

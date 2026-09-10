@@ -4,7 +4,7 @@ import { mainRoot, loadConfig, sessionName } from '../config.js'
 import { loadPlan } from '../plan.js'
 import { worktreePath, dirtyFiles } from '../worktrees.js'
 import { tryGit, git } from '../sh.js'
-import { sessionExists, killSession, hasTmux } from '../tmux.js'
+import { terminal } from '../terminal.js'
 
 export default function down (args) {
   const root = mainRoot()
@@ -53,9 +53,10 @@ export default function down (args) {
     process.exit(1)
   }
 
-  if (hasTmux() && sessionExists(sessionName(root))) {
-    killSession(sessionName(root))
-    console.log(`killed tmux session ${sessionName(root)}`)
+  const term = terminal(cfg)
+  if (term.available() && term.sessionExists(sessionName(root))) {
+    term.killSession(sessionName(root))
+    console.log(`closed ${term.name} session ${sessionName(root)}`)
   }
 
   for (const id of ids) {

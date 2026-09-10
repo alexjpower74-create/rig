@@ -4,7 +4,7 @@ import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan, matchesAny } from '../plan.js'
 import { worktreePath, touchedFiles, dirtyFiles } from '../worktrees.js'
 import { tryGit } from '../sh.js'
-import { hasTmux, sessionExists, listWindows } from '../tmux.js'
+import { terminal } from '../terminal.js'
 import { blockedPanes } from '../blocked.js'
 
 const RED = s => `\x1b[31m${s}\x1b[0m`
@@ -18,7 +18,8 @@ export default function status (args) {
   const plan = loadPlan(join(root, cfg.plan))
   const base = argOf(args, '--base') || currentBranch(root)
   const session = sessionName(root)
-  const live = hasTmux() && sessionExists(session) ? new Set(listWindows(session)) : new Set()
+  const term = terminal(cfg)
+  const live = term.available() && term.sessionExists(session) ? new Set(term.listWindows(session)) : new Set()
 
   console.log(`${plan.title}  ${DIM('base ' + base)}\n`)
 
@@ -51,11 +52,11 @@ export default function status (args) {
 
   // An agent stuck on a permission prompt is the failure this was blindest to: it looks exactly
   // like an agent thinking hard. Nothing else in `status` can tell the two apart.
-  const blocked = hasTmux() ? blockedPanes() : []
+  const blocked = term.available() ? blockedPanes() : []
   if (blocked.length) {
     console.log(YEL('WAITING ON YOU') + ` — ${blocked.length} session${blocked.length === 1 ? '' : 's'} stopped for a person:\n`)
     for (const b of blocked) {
-      console.log(`  ${YEL(b.session + ':' + b.index)} ${DIM('(' + b.name + ')')}`)
+      console.log(`  ${YEL(b.session + ':' + b.index)} ${DIM('(' + b.name + (b.pane ? ' · ' + b.pane : '') + ')')}`)
       console.log(`     ${b.question}`)
       for (const o of b.options) console.log(`       ${DIM(o)}`)
       console.log(`     ${DIM('answer it in that pane — do not send keys from here, it kills the turn')}`)
