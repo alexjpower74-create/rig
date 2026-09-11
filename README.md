@@ -214,9 +214,14 @@ and kill the turn it is in the middle of. Panes are read-only from outside: `her
 ## herdr or tmux
 
 `rig up` launches agents in whichever multiplexer it is running inside. Under [herdr](https://herdr.dev)
-(`HERDR_ENV=1`) a build is a workspace named `rig-<repo>` with one tab per slice; anywhere else it is
-a tmux session with one window per slice. Force one with `"terminal": "herdr"` or `"tmux"` in
-`.rig/config.json`.
+(`HERDR_ENV=1`) it **stays in the workspace it was run from** and splits off one pane per slice,
+labelled with the slice id — main and every helper on one screen, never a new workspace. Under
+tmux it makes a session with one window per slice. Force one with `"terminal": "herdr"` or
+`"tmux"` in `.rig/config.json`. `rig down` closes only the slice panes; the workspace is yours.
+
+If the helper panes already exist (someone made them by hand), label them with the slice ids
+(`herdr pane rename <id> c1`) and use `rig up --no-launch`: the worktrees and briefs get made,
+`rig status` finds the panes by label, and you brief them yourself.
 
 Under herdr, `rig status` trusts herdr's own agent state: a slice herdr reports as `blocked` is
 listed under WAITING ON YOU whether or not the prompt text is still on screen, and one it reports as

@@ -58,7 +58,7 @@ export default function up (args) {
         const have = new Set(term.listWindows(session))
         for (const m of made) if (!have.has(m.agent.id)) term.newWindow(session, m.agent.id, m.wt.path, cmd)
       }
-      console.log(`\n${term.name} session: ${session}  (${term.name === 'herdr' ? 'tabs' : 'windows'}: ${term.listWindows(session).join(', ')})`)
+      console.log(`\n${term.name} session: ${session}  (${term.name === 'herdr' ? 'panes' : 'windows'}: ${term.listWindows(session).join(', ')})`)
       console.log(`attach with:  ${term.attachHint(session)}`)
       console.log('\nDo not type into an agent pane — keystrokes interrupt the turn. Read one with:')
       console.log(`  ${term.readHint(session)}`)
