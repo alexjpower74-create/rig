@@ -1,5 +1,5 @@
 // herdr backend. A build lives in the workspace `rig up` is run from — never a new one. Each
-// slice is a pane split off inside that workspace, labelled with the slice id, so the person
+// slice is its own TAB in that workspace, labelled with the slice id, so the person
 // running the rig keeps main and every helper on one screen (Alexander's rule, 2026-09-11:
 // "always stay in your own space when working on a project and create more panes").
 // Same rule as tmux: panes are read-only from out here. herdr can type into an agent
@@ -28,8 +28,19 @@ export const homeWorkspace = () => homePane().split(':')[0]
 export function workspaces () { return json(['workspace', 'list'])?.workspaces ?? [] }
 export function panes (wid = homeWorkspace()) { return json(['pane', 'list', '--workspace', wid])?.panes ?? [] }
 
-/** Slice panes are the ones in our workspace labelled with a slice id. */
-const slicePanes = () => panes().filter(p => p.label && p.pane_id !== homePane())
+/** Tabs in our workspace. Each slice gets its own TAB (Alexander's rule, 2026-09-12: one agent per
+ *  page so he can watch each one; panes split inside the lead's tab crammed four agents together). */
+export function tabs (wid = homeWorkspace()) { return json(['tab', 'list', '--workspace', wid])?.tabs ?? [] }
+const homeTab = () => panes().find(p => p.pane_id === homePane())?.tab_id
+/** Slice tabs are the labelled tabs in our workspace other than the one we are in. */
+const sliceTabs = () => { const h = homeTab(); return tabs().filter(t => t.label && t.tab_id !== h && /^[a-z]\d+$/i.test(t.label)) }
+/** The root pane of a tab (the agent lives there). */
+const tabPane = (tabId) => panes().find(p => p.tab_id === tabId)?.pane_id
+/** Slice panes: one per slice tab, carrying the tab's label. */
+const slicePanes = () => sliceTabs().map(t => {
+  const pane = panes().find(p => p.tab_id === t.tab_id)
+  return pane ? { ...pane, label: t.label, agent_status: t.agent_status ?? pane.agent_status } : null
+}).filter(Boolean)
 
 // The "session" name is kept for the shared driver shape; under herdr it is always our own
 // workspace, so it exists as soon as we are inside one.
@@ -46,23 +57,20 @@ function launch (paneId, command) {
   return paneId
 }
 
-function split (from, direction, cwd, label) {
-  const r = json(['pane', 'split', from, '--direction', direction, '--cwd', cwd])
-  const id = r?.pane?.pane_id
-  if (!id) throw new Error('herdr: could not split pane ' + from)
-  tryRun('herdr', ['pane', 'rename', id, label])
+/** A new tab in our workspace, labelled with the slice id, not focused (the lead keeps its tab). */
+function newTab (cwd, label) {
+  const r = json(['tab', 'create', '--workspace', homeWorkspace(), '--cwd', cwd, '--label', label, '--no-focus'])
+  const id = r?.root_pane?.pane_id ?? (r?.tab?.tab_id && tabPane(r.tab.tab_id))
+  if (!id) throw new Error('herdr: could not create a tab for ' + label)
   return id
 }
 
-/** First slice: split main to the right. Later slices: split the newest slice pane down. */
 export function newSession (name, windowName, cwd, command) {
-  return launch(split(homePane(), 'right', cwd, windowName), command)
+  return launch(newTab(cwd, windowName), command)
 }
 
 export function newWindow (name, windowName, cwd, command) {
-  const existing = slicePanes()
-  const from = existing.length ? existing[existing.length - 1].pane_id : homePane()
-  return launch(split(from, existing.length ? 'down' : 'right', cwd, windowName), command)
+  return launch(newTab(cwd, windowName), command)
 }
 
 export function listWindows () { return slicePanes().map(p => p.label) }
@@ -85,9 +93,9 @@ export function capture (name, windowName, lines = 40) {
   return p ? readPane(p.pane, lines) : ''
 }
 
-/** Close only the slice panes; the workspace is the person's, not ours. */
+/** Close only the slice tabs; the workspace is the person's, not ours. */
 export function killSession () {
-  for (const p of slicePanes()) tryRun('herdr', ['pane', 'close', p.pane_id])
+  for (const t of sliceTabs()) tryRun('herdr', ['tab', 'close', t.tab_id])
 }
 
 /** Panes across every workspace, for the blocked scan. */
@@ -100,7 +108,7 @@ export function allPanes () {
 }
 
 export function attachHint () {
-  return `already on screen — the slices are panes in this workspace (${homeWorkspace()})`
+  return `already on screen — one tab per slice in this workspace (${homeWorkspace()})`
 }
 export function readHint (name) {
   const ids = sessionPanes(name).map(p => `${p.name}=${p.pane}`).join(' ')
