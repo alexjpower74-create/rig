@@ -1,5 +1,7 @@
 # rig
 
+[![test](https://github.com/alexjpower74-create/rig/actions/workflows/test.yml/badge.svg)](https://github.com/alexjpower74-create/rig/actions/workflows/test.yml)
+
 Orchestration for builds where several Claude Code sessions work the same repo at once.
 
 Three sessions in one checkout will quietly overwrite each other, review their own blind spots, and
