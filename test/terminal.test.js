@@ -5,7 +5,13 @@
 
 import { suite } from '../harness/check.js'
 
-const setEnv = (v) => { if (v == null) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = v }
+// herdr is detected by HERDR_ENV=1 *and* HERDR_PANE_ID (both injected into every pane it manages).
+// The test controls both: a machine where one is already set must not make the check pass or void.
+const setEnv = (v) => {
+  if (v == null) { delete process.env.HERDR_ENV; delete process.env.HERDR_PANE_ID }
+  else { process.env.HERDR_ENV = v; process.env.HERDR_PANE_ID = 'w0:p0' }
+}
+const saved = { env: process.env.HERDR_ENV, pane: process.env.HERDR_PANE_ID }
 
 await suite('terminal backend', async s => {
   const { terminal } = await import('../src/terminal.js')
@@ -46,5 +52,6 @@ await suite('terminal backend', async s => {
     assert: async () => inspect('no-such-pane', status2).blocked === false,
     breaks: async () => { status2 = 'blocked'; return () => { status2 = 'working' } }
   })
-  setEnv('1')
+  if (saved.env == null) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = saved.env
+  if (saved.pane == null) delete process.env.HERDR_PANE_ID; else process.env.HERDR_PANE_ID = saved.pane
 })
