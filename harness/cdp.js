@@ -10,7 +10,18 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const CHROME = process.env.RIG_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+import { existsSync } from 'node:fs'
+
+// Where Chrome lives, per platform. RIG_CHROME wins; otherwise the first path that exists.
+// Linux (and GitHub Actions' ubuntu runners) ship google-chrome on PATH; macOS keeps the app bundle.
+const CHROME_CANDIDATES = {
+  darwin: ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
+  linux: ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'],
+  win32: ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'],
+}
+const CHROME = process.env.RIG_CHROME
+  || (CHROME_CANDIDATES[process.platform] || []).find(p => existsSync(p))
+  || CHROME_CANDIDATES.darwin[0]
 
 /**
  * Every browser this process launched and has not closed.
