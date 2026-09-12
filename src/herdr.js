@@ -11,6 +11,7 @@
 // socket is not ours to drive, so `available()` is false and the tmux backend takes over.
 
 import { tryRun } from './sh.js'
+import { preTrust } from './trust.js'
 
 const json = (args) => {
   const r = tryRun('herdr', args)
@@ -66,10 +67,12 @@ function newTab (cwd, label) {
 }
 
 export function newSession (name, windowName, cwd, command) {
+  preTrust(cwd)
   return launch(newTab(cwd, windowName), command)
 }
 
 export function newWindow (name, windowName, cwd, command) {
+  preTrust(cwd)
   return launch(newTab(cwd, windowName), command)
 }
 

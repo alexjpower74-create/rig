@@ -1,4 +1,5 @@
 import { tryRun, run } from './sh.js'
+import { preTrust } from './trust.js'
 
 // The rig never types into an agent's pane. Keystrokes land as an interrupt and kill the turn
 // the agent is in the middle of. Panes are read-only from out here; briefing goes over
@@ -11,10 +12,12 @@ export function sessionExists (name) {
 }
 
 export function newSession (name, windowName, cwd, command) {
+  preTrust(cwd)
   run('tmux', ['new-session', '-d', '-s', name, '-n', windowName, '-c', cwd, command])
 }
 
 export function newWindow (name, windowName, cwd, command) {
+  preTrust(cwd)
   run('tmux', ['new-window', '-t', name, '-n', windowName, '-c', cwd, command])
 }
 
