@@ -8,7 +8,7 @@ export const DEFAULTS = {
   worktreeDir: '../.rig-worktrees',
   portBase: 5180,
   qaPort: 5199,
-  launch: 'claude',
+  launch: 'claude --model claude-fable-5-1 --effort low',
   terminal: 'auto', // auto | herdr | tmux
   devCommand: null
 }
