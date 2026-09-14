@@ -94,8 +94,11 @@ export async function suite (name, fn, opts) {
 }
 
 function withTimeout (p, ms, what) {
-  return Promise.race([
-    Promise.resolve(p),
-    new Promise((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms}ms: ${what}`)), ms).unref?.())
-  ])
+  // The timer must keep the event loop alive while the check is in flight: with an unref'd timer, a check whose
+  // promise never settles let Node 22 run out of work and exit before the timeout could fire (CI, 2026-09-13:
+  // "Promise resolution is still pending but the event loop has already resolved"). Clear it once the race settles
+  // so a passing check does not hold the process open for the full timeout.
+  let timer
+  const deadline = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timed out after ${ms}ms: ${what}`)), ms) })
+  return Promise.race([Promise.resolve(p), deadline]).finally(() => clearTimeout(timer))
 }
