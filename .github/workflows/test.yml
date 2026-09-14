@@ -18,3 +18,11 @@ jobs:
       - run: google-chrome --version
       - run: npm ci --ignore-scripts || npm install --ignore-scripts
       - run: npm test
+
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      # Personal-data guard: proves it can fail, then scans the tree. Allow list: .personal-data-allow
+      - run: tools/check-no-personal-data --self-test && tools/check-no-personal-data
