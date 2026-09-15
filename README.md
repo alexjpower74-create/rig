@@ -4,19 +4,29 @@
 
 Orchestration for builds where several Claude Code sessions work the same repo at once.
 
+**Rig 2.0 builds the workflow in:** a plan that is a brief first, hard rules that reach every agent,
+a fresh-eyes review step, and a finish gate that will not call a build done until the tests have
+passed on the exact commit being called done. See [CHANGELOG.md](CHANGELOG.md) for what changed and
+why.
+
 Three sessions in one checkout will quietly overwrite each other, review their own blind spots, and
 hand you a green test suite for a broken page. `rig` is the set of rules that stops each of those,
 made executable. Every one of them came from a build where the absence of it cost real time.
 
 ```
-rig init     scaffold PLAN.md + .rig/config.json  (--hook installs the pre-commit guard)
+rig init     scaffold a brief-first PLAN.md, the AGENTS.md rulebook, .rig/config.json  (--hook: pre-commit guard)
 rig up       a worktree + branch per slice, an agent launched in each
-rig status   commits ahead, uncommitted work, and anything edited outside its slice
+rig status   agent state, commits ahead, uncommitted work, anything edited outside its slice
 rig guard    refuse work that reaches outside its slice
-rig qa       pin a QA worktree to an exact commit, on its own port
+rig qa       rig qa <sha> --run "<tests>": pin a QA worktree to that commit, run, record the exit
+rig review   rig review <id>: a read-only, fresh-eyes review brief for one slice's diff
+rig finish   the done gate: merged, clean, QA green on this commit; writes docs/FINISH.md
+rig rule     rig rule "<rule>": add a learned rule to the rulebook every agent reads
 rig brief    print an agent's briefing so you can hand it over deliberately
-rig down     tear down; refuses over uncommitted work
+rig down     close this build's tabs, stop what its worktrees left running, remove them
 ```
+
+The loop every build runs: **plan, build, prove, review, show, ship.**
 
 ## The plan file is the contract
 
@@ -33,6 +43,27 @@ Visit a site and fill in a Measurement, exactly as src/contract.js defines it.
 ```
 
 `Owns:` is not documentation. It is enforced.
+
+## A plan is a brief first
+
+`rig init` writes a plan that starts with the five things a good brief covers, then the slices:
+
+```markdown
+## What it's for
+## Who uses it, on what
+## What done looks like
+## What must not happen
+- Never claim a refund amount it can't back up.
+## Where it lives
+## Size and mode        small: one agent · medium: builder + reviewer · big: a crew
+## Checks
+## Agents
+```
+
+The stack, the file layout and the libraries are not in the brief; the plan's author chooses them.
+`rig up` names any part of the brief still empty before it creates anything, and every slice's
+`.rig/BRIEF.md` carries the plan's **What must not happen** rules word for word, above its task. An
+agent that knows what must not happen can refuse to do it. One that only knows its files cannot.
 
 ## Ownership is enforced, not requested
 
@@ -52,16 +83,23 @@ in another agent's file produces a defect nobody owns and nobody can find.
 ## Grade from a QA worktree, never the shared tree
 
 ```console
-$ rig qa --ref main --port 5199
-QA worktree pinned to main @ 40c0d72
+$ rig qa 40c0d72 --run "npm test"
+QA worktree pinned to 40c0d72 @ 40c0d72
   Scoring: 25 rules in two voices, with penalties that decay instead of summing
   port 5199
 
 Every number you report from here belongs to 40c0d72. Say the sha when you report it.
+...
+rig qa: exit 0 at 40c0d72  — recorded in .rig/qa-history.jsonl
 ```
 
 Agents are mid-edit in their own trees by definition. A number taken there measured a half-finished
 checkout, and you will not find out until someone tries to reproduce it.
+
+`rig qa` exits with the test command's own status, and three ways that status used to lie are gone:
+a bare `rig qa <sha>` used to be ignored and pin the current branch instead; `npm test | tail` used to
+report `tail`'s success (the command now runs under `pipefail`); and a run killed by a signal used to
+exit 0 (it now exits 128 + the signal). Every run is recorded with its sha, for `rig finish`.
 
 ## `rig qa` is also your scratch tree
 
@@ -146,6 +184,52 @@ Only real input at real speed, hit-tested, finds the bug.
 On its first use against this project's own scoring tests, 6 of 14 checks came back VOID. They had
 been written by me, they looked reasonable, and they were watching nothing.
 
+## Fresh eyes before done
+
+Every real defect on a multi-agent build crossed the line between two people's work, and self-review
+found none of them: an author's tests share the author's blind spots.
+
+```console
+$ rig review c2 --by c1
+review brief for c2: .rig/REVIEW-c2.md
+  diff: git diff main...rig/c2  (14 file(s))
+  findings go to: docs/review-c2.md
+
+hand it to c1 when it is idle: "Read .rig/REVIEW-c2.md and follow it."
+```
+
+The brief is read-only, points at exactly that slice's diff and the plan's hard rules, and asks for
+where the slice meets another, checks that cannot fail, and paths nobody ran. `--launch` opens a
+fresh reviewer in its own tab instead. Ask early, while the diff is still cheap to change.
+
+## Done means the finish gate passed
+
+```console
+$ rig finish
+Depot draw — finish gate on main @ 9153198
+
+  ok   c1 merged
+  ok   c2 merged
+  ok   no uncommitted work
+  ok   QA green on 9153198  — npm test
+  ok   c1 report
+  ok   a check was shown to go red
+ warn  screenshots  — none under docs/ — show it before calling it done
+```
+
+It fails while a slice is unmerged, a tree is dirty, or the tests have not run green on the exact
+commit being called done — a green run on the commit before does not count. It warns when no report
+mentions a check made to go red, when there are no screenshots, and when the brief is incomplete. Then
+it writes `docs/FINISH.md` in the shape a person can check: what changed, the proof, the pictures,
+where it lives, the hard rules it had to keep, and what is still owed. Shipping — a deploy, a release,
+a post — stays the owner's call.
+
+## Rules learned go in the rulebook
+
+`rig init` writes `AGENTS.md` and links `CLAUDE.md` to it, so every agent tool reads one text.
+`rig rule "Never round refunds up."` adds a learned rule under **Rules learned**, once. A rule said in
+a conversation is gone by the next session; a rule in the rulebook is read by every future agent.
+
 ## An agent stuck waiting on a person
 
 The failure this was blindest to. An agent sitting on a permission prompt looks exactly like an
@@ -219,7 +303,14 @@ and kill the turn it is in the middle of. Panes are read-only from outside: `her
 (`HERDR_ENV=1`) it **stays in the workspace it was run from** and opens one tab per slice,
 labelled with the slice id — main and every helper on one screen, never a new workspace. Under
 tmux it makes a session with one window per slice. Force one with `"terminal": "herdr"` or
-`"tmux"` in `.rig/config.json`. `rig down` closes only the slice tabs; the workspace is yours.
+`"tmux"` in `.rig/config.json`. `rig down` closes only this plan's slice tabs; the workspace is yours.
+
+Slice tabs are found by **the plan's own ids**, never by a label pattern. Rig 1 matched "one letter,
+then digits": on a night with fifteen crews in one workspace, every crew used two-letter ids so their
+tabs could not collide, and Rig could see none of them — while a crew using `c1` could have closed
+another project's `c1`. Give each project its own prefix (`jr1`, `tw1`, …) and Rig 2.0 finds exactly
+its own tabs. `rig down` also stops any process still running inside a worktree it removes (a dev
+server outlives its directory and keeps its port), and nothing else: never a process by name.
 
 If the helper tabs already exist (someone made them by hand), label them with the slice ids
 (`herdr tab rename <tab-id> c1`) and use `rig up --no-launch`: the worktrees and briefs get made,
@@ -229,6 +320,24 @@ Under herdr, `rig status` trusts herdr's own agent state: a slice herdr reports 
 listed under WAITING ON YOU whether or not the prompt text is still on screen, and one it reports as
 `working` is never mistaken for blocked by a stale prompt in scrollback. The text scan is the fallback
 for `unknown`.
+
+## Several builds at once: a lead per project
+
+The pattern that ran fifteen builds overnight without a person at the desk:
+
+- **One lead session per project, in its own tab.** The lead writes the plan, runs `rig up` for its
+  slices with a prefix unique in the workspace, merges, reviews, runs `rig finish`, and writes a short
+  status file: done or stuck, the proof, how to open it, and anything waiting on the owner.
+- **Two crews at a time.** More burns the usage window without finishing sooner.
+- **Anything that needs the owner goes in the status file, and the lead moves on.** A decision only a
+  person can make never stalls the night.
+- **The foreman reviews every finished build on its real screens** before calling it done, and sends
+  a short second round when the screens show what the tests did not.
+- **Leave a demo running detached** (`setsid nohup npm run demo &`), so it outlives the session that
+  started it, and **stop only what you started**.
+- **Keep a watchdog outside the agents.** A usage limit stops every session on an account at once,
+  so whatever resumes them cannot be one of them: a timer that reads each pane and prompts it to
+  continue once the limit has reset.
 
 ## Install
 
@@ -253,3 +362,11 @@ Each one replaced a specific bad afternoon:
 - **Hit-testing** — the button measured 44×44 and could not be tapped.
 - **Notes files are not queues** — a killed agent's notes outlived its reasoning and the next agent
   worked from stale instructions.
+- **Tabs by the plan's ids** — a label pattern could not see two-letter slice ids, and could close
+  another crew's tabs.
+- **QA exit codes that cannot lie** — a sha typed without `--ref` was ignored, and a test run piped
+  through `tail` or killed by a signal came back 0.
+- **A finish gate** — "done" was a claim nobody had checked against the commit it was about.
+- **Hard rules in every brief** — an agent cannot keep a rule it was never told.
+- **Stop what the worktree left running** — an orphaned dev server held a demo's port after its
+  worktree was gone.

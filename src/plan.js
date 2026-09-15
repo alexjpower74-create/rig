@@ -87,7 +87,58 @@ export function parsePlan (text) {
   push()
 
   for (const a of agents) a.task = a.task.join('\n').trim()
-  return { title, agents }
+  const sections = parseSections(lines)
+  return { title, agents, sections, ...briefFields(sections) }
+}
+
+/**
+ * Every `## ` section of the plan, in order: [{ heading, body }]. The agent list is one of them;
+ * the brief is the rest.
+ */
+export function parseSections (lines) {
+  const out = []
+  let cur = null
+  for (const raw of lines) {
+    const h = raw.match(/^##\s+(.+?)\s*$/)
+    if (h) { cur = { heading: h[1], body: [] }; out.push(cur); continue }
+    if (/^#\s/.test(raw)) { cur = null; continue }
+    if (cur) cur.body.push(raw)
+  }
+  return out.map(s => ({ heading: s.heading, body: s.body.join('\n').trim() }))
+}
+
+/** Bullet lines of a section body, without their markers. */
+export function bullets (body) {
+  return (body || '').split('\n').map(l => l.match(/^\s*[-*]\s+(.+)$/)?.[1]?.trim()).filter(Boolean)
+}
+
+/**
+ * The five parts of a good brief, found by heading. A plan is a brief first and a slice list
+ * second: an agent that knows what must not happen can refuse to do it, and one that only knows its
+ * files cannot.
+ */
+export function briefFields (sections) {
+  const find = re => sections.find(s => re.test(s.heading))?.body || ''
+  const mustNot = find(/must not happen|hard rules/i)
+  return {
+    purpose: find(/what it'?s for|purpose|goal/i),
+    users: find(/who uses it/i),
+    done: find(/what done looks like|definition of done|done means/i),
+    mustNot,
+    mustNotRules: bullets(mustNot),
+    lives: find(/where it lives/i),
+    size: find(/size/i),
+    checks: find(/^checks|how we prove/i),
+    openQuestions: find(/open questions|needs (you|the owner)/i)
+  }
+}
+
+/** Which of the five brief parts a plan leaves empty. `rig up` warns; it does not refuse. */
+export function missingBrief (plan) {
+  const want = [['purpose', "What it's for"], ['users', 'Who uses it, on what'], ['done', 'What done looks like'], ['mustNot', 'What must not happen'], ['lives', 'Where it lives']]
+  // A section still holding the template's <placeholder> lines counts as empty.
+  const placeholder = text => text.split('\n').map(l => l.replace(/^\s*[-*]\s+/, '').trim()).filter(Boolean).every(l => /^<.*>$/.test(l))
+  return want.filter(([k]) => !plan[k] || placeholder(plan[k])).map(([, label]) => label)
 }
 
 export function loadPlan (planPath) {

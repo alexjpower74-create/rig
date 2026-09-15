@@ -5,13 +5,15 @@ import { loadPlan } from '../plan.js'
 import { worktreePath, dirtyFiles } from '../worktrees.js'
 import { tryGit, git } from '../sh.js'
 import { terminal } from '../terminal.js'
+import { processesIn, stopProcesses } from '../procs.js'
 
-export default function down (args) {
+export default async function down (args) {
   const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const force = args.includes('--force')
-  const ids = [...plan.agents.map(a => a.id), 'qa']
+  const sliceIds = plan.agents.map(a => a.id)
+  const ids = [...sliceIds, 'qa']
 
   // Refuse to tear down over uncommitted work. Branches are always kept — the rig removes
   // checkouts, never commits.
@@ -53,11 +55,23 @@ export default function down (args) {
     process.exit(1)
   }
 
+  // Close the agents first (so they stop writing), then anything they left running.
   const term = terminal(cfg)
   if (term.available() && term.sessionExists(sessionName(root))) {
-    term.killSession(sessionName(root))
-    console.log(`closed ${term.name} session ${sessionName(root)}`)
+    const closed = term.killSession(sessionName(root), sliceIds)
+    if (Array.isArray(closed)) console.log(closed.length ? `closed slice tabs: ${closed.join(', ')}` : 'no slice tabs of this plan were open')
+    else console.log(`closed ${term.name} session ${sessionName(root)}`)
   }
+
+  // A dev server started inside a worktree outlives the worktree and keeps its port. Stop only
+  // processes whose working directory is inside a worktree being removed — never by name.
+  for (const id of ids) {
+    const path = worktreePath(root, cfg, id)
+    if (!existsSync(path)) continue
+    const stopped = stopProcesses(processesIn(path))
+    if (stopped.length) console.log(`stopped ${stopped.length} process(es) still running inside ${id}: ${stopped.join(' ')}`)
+  }
+  await new Promise(resolve => setTimeout(resolve, 500))
 
   for (const id of ids) {
     const path = worktreePath(root, cfg, id)

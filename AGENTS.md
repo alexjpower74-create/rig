@@ -11,3 +11,8 @@ CLAUDE.md is a symlink to this file, so Onyx (Claude Code) and Cobalt (Codex) re
 - **Public-repo hygiene.** No secrets, no machine names, no home-folder paths, no invented businesses. Real businesses appear only where Alexander chose to show them. Run `check-no-personal-data` before pushing a public repo.
 - **Browser work.** Playwright is the default; WebKit check before calling a WKWebView page done; the Chrome extension only for pages that need his real login.
 - **Keep this file short:** commands, gotchas with a why, hard rules. Architecture belongs in the code and README.
+
+## Rules learned
+- Slice tabs are found by the plan's own ids, never a label pattern: give every project its own slice-id prefix. (2026-09-15)
+- Never read a test run's exit code through a pipe; rig qa runs under pipefail and records the exit. (2026-09-15)
+- Stop only processes whose working directory is inside your worktree; never pkill by name. (2026-09-15)

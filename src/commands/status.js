@@ -19,7 +19,11 @@ export default function status (args) {
   const base = argOf(args, '--base') || currentBranch(root)
   const session = sessionName(root)
   const term = terminal(cfg)
-  const live = term.available() && term.sessionExists(session) ? new Set(term.listWindows(session)) : new Set()
+  const ids = plan.agents.map(a => a.id)
+  const up = term.available() && term.sessionExists(session)
+  const live = up ? new Set(term.listWindows(session, ids)) : new Set()
+  // herdr knows whether each agent is working, idle, done or blocked; show it next to the slice.
+  const states = new Map(up ? term.slicePanes(session, ids).map(p => [p.name, p.agentStatus]) : [])
 
   console.log(`${plan.title}  ${DIM('base ' + base)}\n`)
 
@@ -35,7 +39,9 @@ export default function status (args) {
     violations += stray.length
 
     const pane = live.has(agent.id) ? GRN('●') : DIM('○')
-    const head = `${pane} ${agent.id}${agent.title ? DIM(' · ' + agent.title) : ''}`
+    const state = states.get(agent.id)
+    const stateTag = !state ? '' : state === 'blocked' ? ' ' + YEL('[blocked]') : ' ' + DIM('[' + state + ']')
+    const head = `${pane} ${agent.id}${stateTag}${agent.title ? DIM(' · ' + agent.title) : ''}`
     console.log(head)
     console.log(`   ${ahead.ok ? ahead.out : '?'} commit(s) ahead · ${dirty.length} dirty · ${touched.length} file(s) touched`)
     if (stray.length) {

@@ -1,6 +1,6 @@
 {
   "name": "@alexpower/rig",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Multi-agent build orchestration for Claude Code. File-ownership slices, a plan file as the contract, QA worktrees pinned to HEAD, and checks that must prove they can fail.",
   "type": "module",
   "bin": {
@@ -22,7 +22,7 @@
     "./*": "./*"
   },
   "scripts": {
-    "test": "node test/goto.test.js && node test/plan-and-config.test.js && node test/terminal.test.js && node --test test/negative-control.test.js test/trust.test.js",
+    "test": "node test/goto.test.js && node test/plan-and-config.test.js && node test/terminal.test.js && node test/crew.test.js && node test/workflow.test.js && node --test test/negative-control.test.js test/trust.test.js",
     "demo": "node examples/demo.test.js || true",
     "demo:watch": "node examples/demo-visible.js"
   }

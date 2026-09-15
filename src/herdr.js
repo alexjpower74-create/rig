@@ -33,12 +33,28 @@ export function panes (wid = homeWorkspace()) { return json(['pane', 'list', '--
  *  page so he can watch each one; panes split inside the lead's tab crammed four agents together). */
 export function tabs (wid = homeWorkspace()) { return json(['tab', 'list', '--workspace', wid])?.tabs ?? [] }
 const homeTab = () => panes().find(p => p.pane_id === homePane())?.tab_id
-/** Slice tabs are the labelled tabs in our workspace other than the one we are in. */
-const sliceTabs = () => { const h = homeTab(); return tabs().filter(t => t.label && t.tab_id !== h && /^[a-z]\d+$/i.test(t.label)) }
+
+/**
+ * The slice tabs of THIS build: tabs whose label is exactly one of the plan's slice ids, never the
+ * tab we are running in.
+ *
+ * This used to be a label pattern, /^[a-z]\d+$/i — "one letter, then digits". Two things went
+ * wrong with it on a night of fifteen crews sharing one workspace. Every crew used two-letter ids
+ * so their tab labels could not collide (jr1, tw1, nb1…), and the pattern could not see any of
+ * them: `rig status` showed no panes and `rig down` closed nothing, silently. And a crew that did
+ * use c1/c2 would have had `rig down` close another project's c1/c2 as well, because the pattern
+ * knew nothing about which plan the tabs belonged to. The plan is the contract, so the plan says
+ * which tabs are ours.
+ */
+export function selectSliceTabs (allTabs, ids, homeTabId) {
+  const want = new Set(ids ?? [])
+  return allTabs.filter(t => t.label && t.tab_id !== homeTabId && want.has(t.label))
+}
+const sliceTabs = (ids) => selectSliceTabs(tabs(), ids, homeTab())
 /** The root pane of a tab (the agent lives there). */
 const tabPane = (tabId) => panes().find(p => p.tab_id === tabId)?.pane_id
 /** Slice panes: one per slice tab, carrying the tab's label. */
-const slicePanes = () => sliceTabs().map(t => {
+const slicePanes = (ids) => sliceTabs(ids).map(t => {
   const pane = panes().find(p => p.tab_id === t.tab_id)
   return pane ? { ...pane, label: t.label, agent_status: t.agent_status ?? pane.agent_status } : null
 }).filter(Boolean)
@@ -76,11 +92,12 @@ export function newWindow (name, windowName, cwd, command) {
   return launch(newTab(cwd, windowName), command)
 }
 
-export function listWindows () { return slicePanes().map(p => p.label) }
+/** Labels of this build's slice tabs that exist right now. `ids` are the plan's slice ids. */
+export function listWindows (name, ids) { return slicePanes(ids).map(p => p.label) }
 
-/** Every slice pane in this workspace, with the herdr-detected agent state attached. */
-export function sessionPanes (name) {
-  return slicePanes().map(p => ({
+/** This build's slice panes, with the herdr-detected agent state attached. */
+export function sessionPanes (name, ids) {
+  return slicePanes(ids).map(p => ({
     session: name, name: p.label, index: p.pane_id, pane: p.pane_id,
     agent: p.agent ?? null, agentStatus: p.agent_status ?? 'unknown'
   }))
@@ -92,13 +109,15 @@ export function readPane (paneId, lines = 40) {
 }
 
 export function capture (name, windowName, lines = 40) {
-  const p = sessionPanes(name).find(x => x.name === windowName)
+  const p = sessionPanes(name, [windowName]).find(x => x.name === windowName)
   return p ? readPane(p.pane, lines) : ''
 }
 
-/** Close only the slice tabs; the workspace is the person's, not ours. */
-export function killSession () {
-  for (const t of sliceTabs()) tryRun('herdr', ['tab', 'close', t.tab_id])
+/** Close only this build's slice tabs (labels equal to the plan's ids); the workspace is the person's. */
+export function killSession (name, ids) {
+  const closed = []
+  for (const t of sliceTabs(ids)) if (tryRun('herdr', ['tab', 'close', t.tab_id]).ok) closed.push(t.label)
+  return closed
 }
 
 /** Panes across every workspace, for the blocked scan. */
@@ -113,7 +132,7 @@ export function allPanes () {
 export function attachHint () {
   return `already on screen — one tab per slice in this workspace (${homeWorkspace()})`
 }
-export function readHint (name) {
-  const ids = sessionPanes(name).map(p => `${p.name}=${p.pane}`).join(' ')
+export function readHint (name, sliceIds) {
+  const ids = sessionPanes(name, sliceIds).map(p => `${p.name}=${p.pane}`).join(' ')
   return `herdr pane read <pane-id> --lines 40${ids ? '   (' + ids + ')' : ''}`
 }

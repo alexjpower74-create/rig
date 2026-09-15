@@ -22,21 +22,50 @@ export function listWorktrees (root) {
   return trees
 }
 
-/** Create a worktree on a branch, reusing it if it already exists. Never destroys work. */
-export function ensureWorktree (root, cfg, id, base) {
+/**
+ * Create a worktree on a branch, reusing it if it already exists. Never destroys work.
+ *
+ * A branch left over from an earlier build is the trap. `rig down` keeps branches (it removes
+ * checkouts, never commits), so the second build in a repo used to reattach `rig/c1` wherever the
+ * first build left it: once 50 commits behind main, without the directories its slice owned. The
+ * agent started work on a tree that did not have the files it was told to edit.
+ *
+ * So a leftover branch whose every commit is already in `base` is moved up to `base` before it is
+ * checked out — nothing on it can be lost, by definition. A branch holding commits that are NOT in
+ * `base` is left exactly as it is and reported, because that is someone's unmerged work.
+ * `opts.keepBranches` turns the move off.
+ */
+export function ensureWorktree (root, cfg, id, base, opts = {}) {
   const path = worktreePath(root, cfg, id)
   const branch = cfg.branchPrefix + id
   mkdirSync(worktreeBase(root, cfg), { recursive: true })
 
   const existing = listWorktrees(root).find(w => w.path === path)
-  if (existing) return { path, branch: existing.branch, created: false }
+  if (existing) return { path, branch: existing.branch, created: false, ...divergence(root, existing.branch, base) }
 
   if (existsSync(path)) throw new Error(`${path} exists but is not a registered worktree. Move it aside; the rig will not delete it for you.`)
 
   const branchExists = tryGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], root).ok
-  if (branchExists) git(['worktree', 'add', path, branch], root)
-  else git(['worktree', 'add', '-b', branch, path, base], root)
-  return { path, branch, created: true }
+  if (!branchExists) {
+    git(['worktree', 'add', '-b', branch, path, base], root)
+    return { path, branch, created: true, ahead: 0, behind: 0, moved: false }
+  }
+
+  const d = divergence(root, branch, base)
+  let moved = false
+  if (!opts.keepBranches && d.ahead === 0 && d.behind > 0) {
+    git(['branch', '-f', branch, base], root) // every commit on it is already in base
+    moved = true
+  }
+  git(['worktree', 'add', path, branch], root)
+  return { path, branch, created: true, moved, ...divergence(root, branch, base), staleBehind: d.behind }
+}
+
+/** How far `branch` is from `base`: commits only on the branch (ahead) and only on base (behind). */
+export function divergence (root, branch, base) {
+  const ahead = tryGit(['rev-list', '--count', `${base}..${branch}`], root)
+  const behind = tryGit(['rev-list', '--count', `${branch}..${base}`], root)
+  return { ahead: ahead.ok ? Number(ahead.out) : 0, behind: behind.ok ? Number(behind.out) : 0 }
 }
 
 export function ensureDetachedWorktree (root, cfg, id, ref) {
