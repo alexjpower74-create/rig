@@ -53,31 +53,48 @@ export function ensureWorktree (root, cfg, id, base, opts = {}) {
 
   const d = divergence(root, branch, base)
   let moved = false
-  if (!opts.keepBranches && d.ahead === 0 && d.behind > 0) {
-    git(['branch', '-f', branch, base], root) // every commit on it is already in base
+  if (shouldMoveLeftover(d, opts)) {
+    try { git(['branch', '-f', branch, base], root) } catch (e) { // every commit on it is already in base
+      throw new Error(`could not move leftover ${branch} up to ${base}: ${String(e.message).split('\n')[0]}. ` +
+        'If that branch is checked out in another checkout, switch that checkout off it, or re-run with --keep-branches.')
+    }
     moved = true
   }
   git(['worktree', 'add', path, branch], root)
   return { path, branch, created: true, moved, ...divergence(root, branch, base), staleBehind: d.behind }
 }
 
-/** How far `branch` is from `base`: commits only on the branch (ahead) and only on base (behind). */
+/** Move a leftover branch only when nothing on it is missing from base, and base has moved on. */
+export const shouldMoveLeftover = (d, opts = {}) => !opts.keepBranches && d.ahead === 0 && d.behind > 0
+
+/**
+ * How far `branch` is from `base`: commits only on the branch (ahead) and only on base (behind).
+ *
+ * The branch is named by its full ref. Git resolves a short name tags-first, so with a tag that
+ * happens to share the branch's name, `main..rig/c1` measured the tag — and a branch holding
+ * unmerged work read as "nothing ahead" and was moved.
+ */
 export function divergence (root, branch, base) {
-  const ahead = tryGit(['rev-list', '--count', `${base}..${branch}`], root)
-  const behind = tryGit(['rev-list', '--count', `${branch}..${base}`], root)
+  const ref = branch.startsWith('refs/') ? branch : `refs/heads/${branch}`
+  const ahead = tryGit(['rev-list', '--count', `${base}..${ref}`], root)
+  const behind = tryGit(['rev-list', '--count', `${ref}..${base}`], root)
   return { ahead: ahead.ok ? Number(ahead.out) : 0, behind: behind.ok ? Number(behind.out) : 0 }
 }
 
 export function ensureDetachedWorktree (root, cfg, id, ref) {
   const path = worktreePath(root, cfg, id)
   mkdirSync(worktreeBase(root, cfg), { recursive: true })
+  // Resolve the ref in the MAIN checkout, once. `HEAD` or `HEAD~1` resolved inside the QA worktree
+  // means "the QA worktree's own last pin", so re-pinning to HEAD used to stay on the old commit
+  // while printing "pinned to HEAD".
+  const sha = git(['rev-parse', '--verify', `${ref}^{commit}`], root)
   const existing = listWorktrees(root).find(w => w.path === path)
   if (existing) {
-    // Re-pin it, so `rig qa` twice in a row measures the newer HEAD rather than lying quietly.
-    git(['checkout', '--detach', ref], path)
+    // Re-pin it, so `rig qa` twice in a row measures the newer commit rather than lying quietly.
+    git(['checkout', '--detach', sha], path)
     return { path, created: false, sha: git(['rev-parse', 'HEAD'], path) }
   }
-  git(['worktree', 'add', '--detach', path, ref], root)
+  git(['worktree', 'add', '--detach', path, sha], root)
   return { path, created: true, sha: git(['rev-parse', 'HEAD'], path) }
 }
 

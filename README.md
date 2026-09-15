@@ -334,7 +334,8 @@ The pattern that ran fifteen builds overnight without a person at the desk:
 - **The foreman reviews every finished build on its real screens** before calling it done, and sends
   a short second round when the screens show what the tests did not.
 - **Leave a demo running detached** (`setsid nohup npm run demo &`), so it outlives the session that
-  started it, and **stop only what you started**.
+  started it — and start it from the **main checkout**, not a worktree: `rig down` stops whatever is
+  still running inside the worktrees it removes. **Stop only what you started.**
 - **Keep a watchdog outside the agents.** A usage limit stops every session on an account at once,
   so whatever resumes them cannot be one of them: a timer that reads each pane and prompts it to
   continue once the limit has reset.

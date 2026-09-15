@@ -2,10 +2,13 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName } from '../config.js'
 import { loadPlan } from '../plan.js'
-import { worktreePath, dirtyFiles } from '../worktrees.js'
+import { worktreePath, worktreeBase, dirtyFiles } from '../worktrees.js'
 import { tryGit, git } from '../sh.js'
 import { terminal } from '../terminal.js'
-import { processesIn, stopProcesses } from '../procs.js'
+import { processesIn, stopProcesses, insideDir } from '../procs.js'
+import { realpathSync } from 'node:fs'
+
+const real = p => { try { return realpathSync(p) } catch { return p } }
 
 export default async function down (args) {
   const root = mainRoot()
@@ -14,6 +17,16 @@ export default async function down (args) {
   const force = args.includes('--force')
   const sliceIds = plan.agents.map(a => a.id)
   const ids = [...sliceIds, 'qa']
+
+  // Run from inside a worktree it is about to remove, `rig down` would stop its own shell and the
+  // agent that called it, then fail to remove the (busy) directory, leaving it half torn down.
+  const here = real(process.cwd())
+  for (const id of ids) {
+    const p = worktreePath(root, cfg, id)
+    if (existsSync(p) && insideDir(here, real(p))) {
+      throw new Error(`rig down is running inside the ${id} worktree it would remove. Run it from the main checkout: ${root}`)
+    }
+  }
 
   // Refuse to tear down over uncommitted work. Branches are always kept — the rig removes
   // checkouts, never commits.
@@ -58,17 +71,21 @@ export default async function down (args) {
   // Close the agents first (so they stop writing), then anything they left running.
   const term = terminal(cfg)
   if (term.available() && term.sessionExists(sessionName(root))) {
-    const closed = term.killSession(sessionName(root), sliceIds)
+    const closed = term.killSession(sessionName(root), [...sliceIds, ...sliceIds.map(i => 'rv-' + i)])
     if (Array.isArray(closed)) console.log(closed.length ? `closed slice tabs: ${closed.join(', ')}` : 'no slice tabs of this plan were open')
     else console.log(`closed ${term.name} session ${sessionName(root)}`)
   }
 
   // A dev server started inside a worktree outlives the worktree and keeps its port. Stop only
   // processes whose working directory is inside a worktree being removed — never by name.
+  const base = real(worktreeBase(root, cfg))
   for (const id of ids) {
     const path = worktreePath(root, cfg, id)
     if (!existsSync(path)) continue
-    const stopped = stopProcesses(processesIn(path))
+    // Only ever a directory strictly inside the worktree base: never the base, never above it.
+    const rp = real(path)
+    if (rp === base || !insideDir(rp, base)) { console.log(`skipped stopping processes for ${id}: ${rp} is not inside ${base}`); continue }
+    const stopped = stopProcesses(processesIn(rp))
     if (stopped.length) console.log(`stopped ${stopped.length} process(es) still running inside ${id}: ${stopped.join(' ')}`)
   }
   await new Promise(resolve => setTimeout(resolve, 500))

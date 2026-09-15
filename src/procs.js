@@ -10,17 +10,24 @@
 // dozen other projects' demos that is how you stop all of them. So this finds only processes whose
 // working directory is inside the given directory, and nothing else.
 
-import { readdirSync, readlinkSync } from 'node:fs'
+import { readdirSync, readlinkSync, realpathSync } from 'node:fs'
 import { sep } from 'node:path'
 import { tryRun } from './sh.js'
 
-const inside = (cwd, dir) => {
+/** Is `cwd` the directory `dir` or below it? A deleted working directory still counts. */
+export function insideDir (cwd, dir) {
   const clean = cwd.replace(/ \(deleted\)$/, '')
   return clean === dir || clean.startsWith(dir.endsWith(sep) ? dir : dir + sep)
 }
+const inside = insideDir
 
-/** PIDs (other than this process) whose current working directory is `dir` or below it. */
-export function processesIn (dir) {
+/**
+ * PIDs (other than this process) whose current working directory is `dir` or below it.
+ * `dir` is resolved through symlinks first: the kernel reports canonical working directories, so a
+ * worktree reached through a symlinked home or /tmp would otherwise match nothing.
+ */
+export function processesIn (dir, { resolve = true } = {}) {
+  if (resolve) { try { dir = realpathSync(dir) } catch { /* gone already: compare as given */ } }
   const found = []
   if (process.platform === 'linux') {
     let entries = []

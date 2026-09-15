@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mainRoot, loadConfig, currentBranch } from '../config.js'
 import { ensureDetachedWorktree } from '../worktrees.js'
@@ -25,6 +25,10 @@ export default async function qa (args) {
   console.log(`  port ${port}`)
   console.log(`\nEvery number you report from here belongs to ${sha}. Say the sha when you report it.`)
 
+  if (args.includes('--run') && !argOf(args, '--run')) {
+    console.error('rig qa: --run needs a command, e.g. --run "npm test". Nothing was run.')
+    process.exit(2)
+  }
   const cmd = argOf(args, '--run') || cfg.devCommand
   if (!cmd) {
     console.log('\nNo dev command configured. Set "devCommand" in .rig/config.json or pass --run "<cmd>".')
@@ -77,16 +81,23 @@ export function exitCodeFor (code, signal) {
  * so `npm test | tail -20` fails when the tests fail instead of reporting tail's success — the
  * other way a red QA run came back 0.
  */
-export function runShell (cmd, { cwd, env, shell } = {}) {
-  const bash = shell ?? (existsSync('/bin/bash') ? '/bin/bash' : null)
+export function runShell (cmd, { cwd, env, shell, mapExit = exitCodeFor } = {}) {
+  const bash = shell ?? findBash()
+  if (!bash) console.error('rig qa: bash not found — running under sh without pipefail; a failure inside a pipe can read as exit 0.')
   const [file, argv] = bash
     ? [bash, bash.endsWith('bash') ? ['-o', 'pipefail', '-c', cmd] : ['-c', cmd]]
     : ['/bin/sh', ['-c', cmd]]
   return new Promise(resolve => {
     const child = spawn(file, argv, { cwd, env, stdio: 'inherit' })
-    child.on('exit', (code, signal) => resolve(exitCodeFor(code, signal)))
+    child.on('exit', (code, signal) => resolve(mapExit(code, signal)))
     child.on('error', () => resolve(127))
   })
+}
+
+/** bash from /bin, or anywhere on PATH (NixOS and some containers have no /bin/bash). */
+function findBash () {
+  if (existsSync('/bin/bash')) return '/bin/bash'
+  return spawnSync('bash', ['-c', 'exit 0']).status === 0 ? 'bash' : null
 }
 
 function argOf (args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }

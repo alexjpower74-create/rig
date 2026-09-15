@@ -53,21 +53,43 @@ export function finishChecks (root, cfg, plan, base) {
   // 1. Every slice's work is on base.
   for (const a of plan.agents) {
     const branch = cfg.branchPrefix + a.id
-    const exists = tryGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], root).ok
-    if (!exists) { add(`${a.id} merged`, 'ok', 'no branch left'); continue }
-    const ahead = Number(tryGit(['rev-list', '--count', `${base}..${branch}`], root).out || 0)
-    add(`${a.id} merged`, ahead === 0 ? 'ok' : 'fail', ahead === 0 ? '' : `${branch} has ${ahead} commit(s) not on ${base}`)
+    const ref = `refs/heads/${branch}` // full ref: a same-named tag must not answer for the branch
+    const exists = tryGit(['show-ref', '--verify', '--quiet', ref], root).ok
+    if (!exists) {
+      // No branch is fine when the slice's report is on base. No branch and no report is a slice that
+      // was never built, and "merged" must not be the word for that.
+      const reported = tryGit(['cat-file', '-e', `${base}:${reportPath(a)}`], root).ok
+      add(`${a.id} merged`, reported ? 'ok' : 'fail', reported ? 'no branch left' : `no branch and no ${reportPath(a)} on ${base}: was ${a.id} ever built?`)
+      continue
+    }
+    const ahead = Number(tryGit(['rev-list', '--count', `${base}..${ref}`], root).out || 0)
+    if (ahead === 0) { add(`${a.id} merged`, 'ok'); continue }
+    // Squash and rebase merges leave the branch's own commits "ahead" forever, so ask the question
+    // that matters: would merging this branch into base change anything? If the merged tree is base's
+    // own tree, every change is already there. (`git cherry` compares commit by commit and misses a
+    // squash of several commits.) Older git without merge-tree --write-tree falls back to cherry.
+    let applied = false
+    const mt = tryGit(['merge-tree', '--write-tree', base, ref], root)
+    if (mt.ok) {
+      applied = mt.out.split('\n')[0] === git(['rev-parse', `${base}^{tree}`], root)
+    } else if (!/conflict/i.test(mt.out + mt.err)) {
+      const cherry = tryGit(['cherry', base, ref], root)
+      const lines = cherry.ok ? cherry.out.split('\n').filter(Boolean) : []
+      applied = lines.length > 0 && lines.every(l => l.startsWith('-'))
+    }
+    add(`${a.id} merged`, applied ? 'ok' : 'fail', applied ? 'squash or rebase merge (every change already on base)' : `${branch} has ${ahead} commit(s) not on ${base}`)
   }
 
   // 2. Nothing verified is sitting uncommitted.
   const trees = [{ id: 'main', path: root }, ...plan.agents.map(a => ({ id: a.id, path: worktreePath(root, cfg, a.id) }))]
   const dirty = trees.filter(t => existsSync(t.path)).map(t => ({ ...t, files: dirtyFiles(t.path).filter(f => !f.startsWith('.rig/') && f !== 'docs/FINISH.md') })).filter(t => t.files.length)
-  add('no uncommitted work', dirty.length ? 'fail' : 'ok', dirty.map(t => `${t.id}: ${t.files.length} file(s)`).join(', '))
+  add('no uncommitted work', dirty.length ? 'fail' : 'ok', dirty.map(t => `${t.id}: ${t.files.slice(0, 3).join(', ')}${t.files.length > 3 ? ` …+${t.files.length - 3}` : ''}`).join('; '))
 
   // 3. The tests ran, and passed, on exactly this commit.
   const qa = lastQaOn(root, sha)
   if (!qa) add(`QA green on ${short}`, 'fail', `no \`rig qa ${short} --run …\` recorded on this commit`)
   else add(`QA green on ${short}`, qa.exit === 0 ? 'ok' : 'fail', qa.exit === 0 ? qa.cmd : `last run exited ${qa.exit}: ${qa.cmd}`)
+  if (qa && cfg.devCommand && qa.cmd !== cfg.devCommand) add('QA ran the project’s test command', 'warn', `ran "${qa.cmd}", the config's devCommand is "${cfg.devCommand}"`)
 
   // 4. Every slice left its reasoning on base.
   for (const a of plan.agents) {

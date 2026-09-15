@@ -40,7 +40,8 @@ ${agent.task || '(none stated in the plan — ask before inventing one)'}
    A bug you fix gets a test that fails without the fix.
 4. **Never grade the shared tree.** Numbers come from the QA worktree pinned to a commit, on its
    own port: \`rig qa <sha> --run "<your test command>"\`. Report the sha and the exit line it
-   prints. Don't pipe a test run through \`tail\` or \`head\` and then read the exit code: write the
+   prints. Always give the sha: without one, \`rig qa\` pins the MAIN checkout's branch, not yours.
+   Don't pipe a test run through \`tail\` or \`head\` and then read the exit code: write the
    output to a file instead. Your own working tree is half-finished by definition.
 5. **Fresh eyes before done.** Your tests share your blind spots, and every real defect crosses a
    boundary between two people's work. Ask for a review of your diff early (\`rig review ${agent.id}\`),

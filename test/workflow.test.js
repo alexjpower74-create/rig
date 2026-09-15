@@ -1,5 +1,6 @@
 // Rig 2.0: the workflow built in — a brief that reaches every agent, fresh-eyes review, the finish
-// gate, and the rulebook. Every check is shown to go red.
+// gate, and the rulebook. Every check is shown to go red. Gate checks are broken by changing the
+// repository's state, which is the honest control for a gate: the same code must give the other answer.
 
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, lstatSync, existsSync } from 'node:fs'
@@ -23,6 +24,9 @@ Depot customers, on their phones.
 ## What done looks like
 A customer enters in under 30 seconds and sees "You're in".
 
+### Phone
+The entry page fits a 390-pixel screen without scrolling.
+
 ## What must not happen
 - Never claim a refund amount it can't back up.
 - Nothing is sent to a customer without the owner.
@@ -43,6 +47,19 @@ Build the entry page.
 - Which prize?
 `
 
+function repoAt (name, planText) {
+  const repo = join(tmp, name)
+  mkdirSync(join(repo, 'docs', 'shots'), { recursive: true })
+  git(['init', '-q', '-b', 'main'], repo)
+  git(['config', 'user.email', 'test@example.invalid'], repo)
+  git(['config', 'user.name', 'Rig Test'], repo)
+  writeFileSync(join(repo, '.gitignore'), '.rig/\n.worktrees/\n')
+  writeFileSync(join(repo, 'PLAN.md'), planText)
+  writeFileSync(join(repo, 'README.md'), '# Depot draw\n')
+  git(['add', '-A'], repo); git(['commit', '-qm', 'plan'], repo)
+  return repo
+}
+
 await suite('rig 2.0, workflow', async s => {
   const { parsePlan, missingBrief, loadPlan } = await import('../src/plan.js')
   const { briefFor } = await import('../src/brief.js')
@@ -53,14 +70,35 @@ await suite('rig 2.0, workflow', async s => {
   const { ensureRulebook } = await import('../src/commands/init.js')
 
   // ---------------------------------------------------------------------------------------------
+  // The brief.
   let planText = FILLED
+  const ctx = { branch: 'rig/c1', path: '/x', planPath: 'PLAN.md', reportPath: 'docs/build-report-c1.md' }
   await s.check('every agent’s brief carries the plan’s “must not happen” rules word for word', {
     assert: async () => {
       const plan = parsePlan(planText)
-      const text = briefFor(plan, plan.agents[0], { branch: 'rig/c1', path: '/x', planPath: 'PLAN.md', reportPath: 'docs/build-report-c1.md' })
-      return text.includes("Never claim a refund amount it can't back up.") && text.includes('Nothing is sent to a customer without the owner.') && text.includes('A customer enters in under 30 seconds')
+      const text = briefFor(plan, plan.agents[0], ctx)
+      return text.includes("- Never claim a refund amount it can't back up.") && text.includes('- Nothing is sent to a customer without the owner.')
     },
     breaks: async () => { planText = FILLED.replace(/## What must not happen[\s\S]*?## Where/, '## Where'); return () => { planText = FILLED } }
+  })
+
+  let scopedText = FILLED
+  await s.check('a ### subheading in the brief is not a slice (slices live under ## Agents)', {
+    assert: async () => {
+      const p = join(tmp, 'scoped-plan.md'); writeFileSync(p, scopedText)
+      try { return loadPlan(p).agents.map(a => a.id).join(',') === 'c1' } catch { return false }
+    },
+    // Without an ## Agents section the old reading applies, and ### Phone becomes a slice with no files.
+    breaks: async () => { scopedText = FILLED.replace('## Agents\n', ''); return () => { scopedText = FILLED } }
+  })
+
+  let badId = '..'
+  await s.check('a slice id that is a path (like ..) is refused before anything uses it', {
+    assert: async () => {
+      const p = join(tmp, 'id-plan.md'); writeFileSync(p, FILLED.replace('### c1 — Entry page', `### ${badId} — Entry page`))
+      try { loadPlan(p); return false } catch (e) { return /not a plain name/.test(e.message) }
+    },
+    breaks: async () => { badId = 'c9'; return () => { badId = '..' } }
   })
 
   const template = readFileSync(join(here, '..', 'templates', 'PLAN.md'), 'utf8').replaceAll('{{PROJECT}}', 'x')
@@ -71,16 +109,8 @@ await suite('rig 2.0, workflow', async s => {
   })
 
   // ---------------------------------------------------------------------------------------------
-  // A scaffold repo for review and finish.
-  const repo = join(tmp, 'repo')
-  mkdirSync(join(repo, 'docs', 'shots'), { recursive: true })
-  git(['init', '-q', '-b', 'main'], repo)
-  git(['config', 'user.email', 'test@example.invalid'], repo)
-  git(['config', 'user.name', 'Rig Test'], repo)
-  writeFileSync(join(repo, '.gitignore'), '.rig/\n.worktrees/\n')
-  writeFileSync(join(repo, 'PLAN.md'), FILLED)
-  writeFileSync(join(repo, 'README.md'), '# Depot draw\n')
-  git(['add', '-A'], repo); git(['commit', '-qm', 'plan'], repo)
+  // Review.
+  const repo = repoAt('repo', FILLED)
   git(['branch', 'rig/c1'], repo)
   execFileSync('git', ['checkout', '-q', 'rig/c1'], { cwd: repo })
   mkdirSync(join(repo, 'app'))
@@ -105,8 +135,7 @@ await suite('rig 2.0, workflow', async s => {
   // The finish gate.
   await s.check('finish refuses while a slice’s work is not on base', {
     assert: async () => {
-      const plan = loadPlan(join(repo, 'PLAN.md'))
-      const r = finishChecks(repo, cfg, plan, 'main')
+      const r = finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main')
       return r.failed && r.checks.some(c => c.name === 'c1 merged' && c.state === 'fail')
     },
     breaks: async () => {
@@ -133,6 +162,41 @@ await suite('rig 2.0, workflow', async s => {
     breaks: async () => { recordQa(repo, { sha: head, exit: 0, cmd: 'npm test' }); return () => writeLog([{ sha: oldSha, exit: 0, cmd: 'npm test' }]) }
   })
 
+  // A plan with a second slice nobody built: no branch, no report.
+  const TWO = FILLED.replace('## Open questions', '### c2 — Admin page\nOwns:\n- admin/**\n\nTask:\nBuild it.\n\n## Open questions')
+  const repo2 = repoAt('repo2', TWO)
+  writeFileSync(join(repo2, 'docs', 'build-report-c1.md'), '# c1\nnegative control went red\n')
+  git(['add', '-A'], repo2); git(['commit', '-qm', 'c1 report'], repo2)
+  recordQa(repo2, { sha: git(['rev-parse', 'HEAD'], repo2), exit: 0, cmd: 'npm test' })
+  await s.check('a slice that was never built (no branch, no report) fails the gate instead of reading “merged”', {
+    assert: async () => { const r = finishChecks(repo2, cfg, loadPlan(join(repo2, 'PLAN.md')), 'main'); return r.checks.some(c => c.name === 'c2 merged' && c.state === 'fail') },
+    breaks: async () => {
+      writeFileSync(join(repo2, 'docs', 'build-report-c2.md'), '# c2\n'); git(['add', '-A'], repo2); git(['commit', '-qm', 'c2 report'], repo2)
+      return () => { git(['reset', '-q', '--hard', 'HEAD~1'], repo2) }
+    }
+  })
+
+  // A squash merge leaves the branch's commits "ahead" forever; its changes are on base all the same.
+  const repo3 = repoAt('repo3', FILLED)
+  git(['branch', 'rig/c1'], repo3)
+  execFileSync('git', ['checkout', '-q', 'rig/c1'], { cwd: repo3 })
+  mkdirSync(join(repo3, 'app')); writeFileSync(join(repo3, 'app', 'entry.js'), 'export const entry = 1\n')
+  git(['add', '-A'], repo3); git(['commit', '-qm', 'c1 part 1'], repo3)
+  writeFileSync(join(repo3, 'app', 'entry.js'), 'export const entry = 2\n')
+  git(['add', '-A'], repo3); git(['commit', '-qm', 'c1 part 2'], repo3)
+  execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo3 })
+  execFileSync('git', ['merge', '-q', '--squash', 'rig/c1'], { cwd: repo3 })
+  git(['commit', '-qm', 'squash c1'], repo3)
+  await s.check('a squash-merged slice counts as merged', {
+    assert: async () => { const r = finishChecks(repo3, cfg, loadPlan(join(repo3, 'PLAN.md')), 'main'); return r.checks.some(c => c.name === 'c1 merged' && c.state === 'ok') },
+    breaks: async () => {
+      execFileSync('git', ['checkout', '-q', 'rig/c1'], { cwd: repo3 })
+      writeFileSync(join(repo3, 'app', 'more.js'), 'unmerged\n'); git(['add', '-A'], repo3); git(['commit', '-qm', 'c1 part 3, never merged'], repo3)
+      execFileSync('git', ['checkout', '-q', 'main'], { cwd: repo3 })
+      return () => { git(['branch', '-f', 'rig/c1', 'rig/c1~1'], repo3) }
+    }
+  })
+
   // ---------------------------------------------------------------------------------------------
   // The rulebook.
   const book = join(tmp, 'AGENTS.md')
@@ -150,15 +214,15 @@ await suite('rig 2.0, workflow', async s => {
   })
 
   const proj = join(tmp, 'proj')
-  let precreate = false
+  const agentsOnly = (root) => { writeFileSync(join(root, 'AGENTS.md'), '# rules\n'); return ['wrote AGENTS.md'] }
+  let rulebook = ensureRulebook
   await s.check('init links CLAUDE.md to AGENTS.md so every agent tool reads one rulebook', {
     assert: async () => {
       rmSync(proj, { recursive: true, force: true }); mkdirSync(proj)
-      if (precreate) writeFileSync(join(proj, 'CLAUDE.md'), 'a second rulebook\n')
-      ensureRulebook(proj, 'proj')
-      return existsSync(join(proj, 'AGENTS.md')) && lstatSync(join(proj, 'CLAUDE.md')).isSymbolicLink()
+      rulebook(proj, 'proj')
+      try { return existsSync(join(proj, 'AGENTS.md')) && lstatSync(join(proj, 'CLAUDE.md')).isSymbolicLink() } catch { return false }
     },
-    breaks: async () => { precreate = true; return () => { precreate = false } }
+    breaks: async () => { rulebook = agentsOnly; return () => { rulebook = ensureRulebook } }
   })
 })
 

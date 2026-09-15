@@ -53,10 +53,18 @@ export function parsePlan (text) {
 
   const push = () => { if (cur) agents.push(cur) }
 
+  // Slices are `###` headings inside `## Agents` (or `## Slices`). A plan is a brief first now, and a
+  // brief invites subheadings — `### Phone` under "What done looks like" used to become an agent with
+  // no files and stop every command. Plans with no such section keep the old reading.
+  const scoped = lines.some(l => /^##\s+(agents|slices)\b/i.test(l))
+  let inAgents = false
+
   for (const raw of lines) {
     const line = raw.replace(/\s+$/, '')
+    const section = line.match(/^##\s+(.+)$/)
+    if (section) inAgents = /^(agents|slices)\b/i.test(section[1])
 
-    const head = line.match(/^###\s+(\S+)\s*(?:[—–-]\s*(.*))?$/)
+    const head = (!scoped || inAgents) && line.match(/^###\s+(\S+)\s*(?:[—–-]\s*(.*))?$/)
     if (head) {
       push()
       cur = { id: head[1], title: (head[2] || '').trim(), owns: [], task: [], report: null }
@@ -118,18 +126,19 @@ export function bullets (body) {
  * files cannot.
  */
 export function briefFields (sections) {
+  // Anchored, so a coincidental heading ("Page sizes", "Non-goals") cannot fill a brief field.
   const find = re => sections.find(s => re.test(s.heading))?.body || ''
-  const mustNot = find(/must not happen|hard rules/i)
+  const mustNot = find(/^(what must not happen|hard rules)\b/i)
   return {
-    purpose: find(/what it'?s for|purpose|goal/i),
-    users: find(/who uses it/i),
-    done: find(/what done looks like|definition of done|done means/i),
+    purpose: find(/^(what it'?s for|purpose|goals?)\b/i),
+    users: find(/^who uses it\b/i),
+    done: find(/^(what done looks like|definition of done|done means)\b/i),
     mustNot,
     mustNotRules: bullets(mustNot),
-    lives: find(/where it lives/i),
-    size: find(/size/i),
-    checks: find(/^checks|how we prove/i),
-    openQuestions: find(/open questions|needs (you|the owner)/i)
+    lives: find(/^where it lives\b/i),
+    size: find(/^size (and|&) mode\b/i),
+    checks: find(/^(checks|how we prove)\b/i),
+    openQuestions: find(/^(open questions|needs (you|the owner))\b/i)
   }
 }
 
@@ -151,6 +160,9 @@ export function loadPlan (planPath) {
   }
   const seen = new Set()
   for (const a of plan.agents) {
+    // Ids become directory names and tab labels. `..` or `a/b` would put a worktree — and the
+    // processes `rig down` stops inside it — somewhere else entirely.
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(a.id)) throw new Error(`Slice id "${a.id}" is not a plain name. Use letters, digits, - and _ only (e.g. c1, jr2).`)
     if (seen.has(a.id)) throw new Error(`Duplicate agent id "${a.id}" in the plan. Ids are addresses; they must be unique.`)
     seen.add(a.id)
     if (a.owns.length === 0) throw new Error(`Agent "${a.id}" owns no files. Every agent needs a slice, or it will edit someone else's.`)

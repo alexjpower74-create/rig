@@ -14,7 +14,7 @@ export default function review (args) {
   const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
-  const id = args.find(a => !a.startsWith('-') && !VALUE_FLAGS.has(prev(args, a)))
+  const id = firstBare(args)
   if (!id) throw new Error('usage: rig review <slice-id> [--base <ref>] [--by <slice-id>] [--launch]')
   const agent = plan.agents.find(a => a.id === id)
   if (!agent) throw new Error(`no slice "${id}" in ${cfg.plan}`)
@@ -48,7 +48,13 @@ export default function review (args) {
 }
 
 const VALUE_FLAGS = new Set(['--base', '--by', '--launch-cmd'])
-function prev (args, a) { const i = args.indexOf(a); return i > 0 ? args[i - 1] : null }
+function firstBare (args) {
+  for (let i = 0; i < args.length; i++) {
+    if (VALUE_FLAGS.has(args[i])) { i++; continue }
+    if (!args[i].startsWith('-')) return args[i]
+  }
+  return null
+}
 function argOf (args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
 
 /** The review brief text, and the files and output path it names. Pure apart from reading git. */
