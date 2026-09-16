@@ -157,3 +157,26 @@ Graded: `rig qa 1f599ea --run "npm test && node test/roll.test.js"` → `rig rol
 8. **UTC date in the roll name — DONE.** Local date, as `rig qa`'s history. No test (cosmetic).
 9. **`--no-fetch` undocumented — DONE.** In `USAGE` for `status` and `finish`; rg4's help text should carry
    it: `rig roll status|finish [<rollDir>] [--no-fetch]`.
+
+## Second-round review findings acted on (A–E, fixed in 8277c5e)
+
+Graded under rig 3.0.0: `rig qa 8277c5e --run "npm test && node test/roll.test.js"` → `rig roll: 33
+passed, 0 failed, 0 void, 0 unproven`, `rig qa: test exit 0 at 8277c5e`, and the repo's negative
+control `rig qa: negative exit 0 at 8277c5e`. Scanner clean.
+
+- **A. fetch named `origin` — DONE.** `repoState` fetches `remoteName(path)`. Red: the rewind check
+  repeated with the remote renamed `github`, control reads with `fetch: false` (stale ref says pushed).
+- **B. SKIPPED outranked a real commit — DONE.** `rollCommit` is read first; SKIPPED plus a roll commit
+  is state `contradiction` with the sha, and `finishChecks` fails it with "report says SKIPPED but
+  <sha> carries the roll's commit subject". Red: the commit's subject amended away, so the same line is
+  an honest SKIPPED.
+- **C. scan stopped on author date — DONE.** Cutoff and match use committer date (`%ct`). Red: an owner
+  commit on top authored 2020 but committed now leaves the tab's sha visible; with committer date 2020
+  too it stops the scan.
+- **D. case — DONE.** Report keys are lower-cased; `namedIn`/`skippedIn` look up lower-cased slugs. Red:
+  the previous parser swapped in; and the line without its colon for the lookup functions.
+- **E. unquoted `--add-dir` — DONE.** `shellQuote` single-quotes any path outside `[A-Za-z0-9_/.:+@%,-]`.
+  Red: the unquoted first-round `addDirs` swapped in. The cwd goes to herdr/tmux as an argv element, not
+  through a shell, so it needs no quoting.
+- Test helper: the fixture's `git` now pipes stderr, so a control that goes red by a failing git call no
+  longer prints into the run.

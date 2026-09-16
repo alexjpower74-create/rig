@@ -147,8 +147,11 @@ function launchTabs (cfg, name, ids, tabs, rollDir, launchCmd) {
 /** Claude Code takes extra working directories with --add-dir; another launcher gets none. */
 export function addDirs (launchCmd, repos) {
   if (!/^\s*claude(\s|$)/.test(launchCmd)) return ''
-  return repos.slice(1).map(r => ` --add-dir ${r.path}`).join('')
+  // The launch line is typed into a shell: a path with a space (a registry code: can point anywhere)
+  // would split into two arguments and land the tab in the wrong place.
+  return repos.slice(1).map(r => ` --add-dir ${shellQuote(r.path)}`).join('')
 }
+export function shellQuote (s) { return /^[A-Za-z0-9_\/.:+@%,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'` }
 
 function uniqueName (base, name) {
   if (!existsSync(join(base, name, 'roll.json'))) return name
@@ -230,7 +233,7 @@ export function finishChecks (rollDir, opts = {}) {
     for (const r of t.repos) {
       rows.push({ slug: r.slug, tab: id, state: r.state, sha: r.sha })
       const ok = r.state === 'pushed' || r.state === 'local only' || r.state === 'skipped'
-      const why = r.state === 'in progress' ? 'uncommitted changes' : r.state === 'committed' ? `${r.sha} is not on ${r.remote}` : r.state === 'untouched' ? 'no commit since the roll started and not SKIPPED in the report' : r.state === 'missing' ? 'folder is gone' : `${r.state}${r.sha ? ' ' + r.sha : ''}`
+      const why = r.state === 'contradiction' ? `report says SKIPPED but ${r.sha} carries the roll's commit subject; one of them is wrong` : r.state === 'in progress' ? 'uncommitted changes' : r.state === 'committed' ? `${r.sha} is not on ${r.remote}` : r.state === 'untouched' ? 'no commit since the roll started and not SKIPPED in the report' : r.state === 'missing' ? 'folder is gone' : `${r.state}${r.sha ? ' ' + r.sha : ''}`
       checks.push({ name: `${r.slug} (${id})`, ok, detail: why })
     }
   }
