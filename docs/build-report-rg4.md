@@ -95,3 +95,5 @@ Verified after the fixes: `rig qa|roll|finish --help` print the new text, `npm t
 (7 files), `check-no-personal-data` clean.
 Follow-up from the lead: USAGE.roll carries `[--no-fetch]` on status and finish (rg3 1f599ea); README and
 CHANGELOG say a 2.0 config's literal `../.rig-worktrees` reads as unset and becomes per-repo (rg2 fix 1). DONE.
+Second pass, finding 1: the QA lock sits beside the worktree (`<worktreeDir>/qa.lock`, `qa-2.lock`…), not
+inside it at `.rig/qa.lock`; README and CHANGELOG corrected to rg1's `worktrees.js`. DONE.
