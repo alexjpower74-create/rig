@@ -24,7 +24,7 @@ A plan is a brief first and a slice list second.
 
 ## Checks
 <how "done" is proved: which suites, which must be shown to go red once, which screens get screenshots>
-Negative controls: <the command whose failures prove the checks can fail, e.g. `npm run demo`; `rig finish` wants it green on the final sha>
+Negative controls: <the one command whose run proves the checks can go red, e.g. npm run demo; rig finish wants it green on the final sha>
 
 ## Rules
 

@@ -85,8 +85,10 @@ export function parsePlan (text) {
     if (rep) { cur.report = rep[1].trim().replace(/^`|`$/g, ''); mode = null; continue }
     // A slice may name an existing GitHub issue (`Issue: 42` or `Issue: #42`); `rig up` then records
     // that number instead of opening a new one. Kept out of the task text like Report:.
+    // Inside a Task block the line is taken out of the text but the block goes on: an `Issue:` at
+    // the end of a slice used to drop everything after it.
     const iss = line.match(/^issue:\s*#?(\d+)\s*$/i)
-    if (iss) { cur.issue = Number(iss[1]); mode = null; continue }
+    if (iss) { cur.issue = Number(iss[1]); if (mode !== 'task') mode = null; continue }
 
     if (mode === 'owns') {
       const item = line.match(/^\s*[-*]\s+(.+)$/)
@@ -105,15 +107,18 @@ export function parsePlan (text) {
 }
 
 /**
- * The plan's negative-control command: a `Negative controls: <cmd>` line under Checks. `rig finish`
- * refuses until that command is recorded green on the sha being finished (`cfg.negativeCommand`
- * wins when set). Backticks around the command are stripped; `null` when the plan names none.
+ * The plan's negative-control command: a line under Checks that starts "Negative controls:" (or
+ * "Negative-control command for this repo:", the wording plans already use). `rig finish` refuses
+ * until that command is recorded green on the sha being finished (`cfg.negativeCommand` wins when
+ * set). When the value holds a backticked span, the span is the command and the rest is prose
+ * ("`npm run demo` must still print one VOID"); otherwise the whole value is. `null` when unnamed.
  */
 export function negativeCommand (checksBody) {
   for (const raw of (checksBody || '').split('\n')) {
-    const m = raw.replace(/^\s*[-*]\s+/, '').match(/^negative controls?:\s*(.+?)\s*$/i)
+    const m = raw.replace(/^\s*[-*]\s+/, '').match(/^negative[- ]controls?[^:`]*:\s*(.+?)\s*$/i)
     if (m) {
-      const cmd = m[1].replace(/^`|`$/g, '').trim()
+      const span = m[1].match(/`([^`]+)`/)
+      const cmd = (span ? span[1] : m[1]).trim()
       if (cmd && !/^<.*>$/.test(cmd)) return cmd
     }
   }

@@ -36,7 +36,10 @@ stub(bin, 'gh', `echo "$@" >> "${logs.gh}"
 case "$1 $2" in
   "--version ") echo "gh 0.0 (stub)";;
   "auth status") exit \${GH_AUTH_EXIT:-0};;
-  "issue list") cat "${ghState.list}";;
+  "issue list") if [ -n "$GH_FULL" ]; then "${which('node')}" -e '
+      const a=process.argv.slice(1); const st=a[a.indexOf("--state")+1]||"open"; const li=a.includes("--limit")?Number(a[a.indexOf("--limit")+1]):30;
+      const all=JSON.parse(require("fs").readFileSync(process.env.GH_FULL,"utf8")).sort((x,y)=>y.number-x.number);
+      console.log(JSON.stringify(all.filter(i=>st==="all"||i.state.toLowerCase()===st).slice(0,li)))' -- "$@"; else cat "${ghState.list}"; fi;;
   "issue view") echo "{\\"number\\": $3, \\"url\\": \\"https://example.invalid/o/r/issues/$3\\"}";;
   "issue create") n=$(cat "${ghState.next}"); echo "https://example.invalid/o/r/issues/$n"; echo $((n+1)) > "${ghState.next}";;
   *) exit 1;;
@@ -130,12 +133,12 @@ function repoAt (name, planText, opts = {}) {
 await suite('rig 3.0: up, guard, init', async s0 => {
   // The harness records a thrown assertion's message but does not print it; RIG_TEST_DEBUG=1 does.
   const s = { check: (name, o) => s0.check(name, { ...o, assert: async () => { try { return await o.assert() } catch (e) { if (process.env.RIG_TEST_DEBUG) console.error('      ' + e.message); throw e } } }) }
-  const { loadConfig, currentBranchOrNull, DEFAULTS } = await import('../src/config.js')
+  const { loadConfig, currentBranchOrNull, headState, DEFAULTS } = await import('../src/config.js')
   const { worktreeBase } = await import('../src/worktrees.js')
   const { parsePlan, loadPlan } = await import('../src/plan.js')
   const { briefFor } = await import('../src/brief.js')
   const { openSliceIssues, loadIssues, issuesPath } = await import('../src/issues.js')
-  const { ensureRegistry, slugFor } = await import('../src/commands/init.js')
+  const { slugFor } = await import('../src/commands/init.js')
   const { terminal } = await import('../src/terminal.js')
 
   // -------------------------------------------------------------------------------------------
@@ -151,7 +154,8 @@ await suite('rig 3.0: up, guard, init', async s0 => {
       return dirname(a) === dirname(b) && DEFAULTS.worktreeDir === '../.rig-worktrees'
     },
     breaks: async () => {
-      for (const r of [alpha, beta]) { mkdirSync(join(r, '.rig')); writeFileSync(join(r, '.rig', 'config.json'), JSON.stringify({ worktreeDir: '../.rig-worktrees' })) }
+      // One explicit shared directory in both configs (the literal 2.0 default now reads as unset).
+      for (const r of [alpha, beta]) { mkdirSync(join(r, '.rig')); writeFileSync(join(r, '.rig', 'config.json'), JSON.stringify({ worktreeDir: '../.shared-trees' })) }
       return () => { for (const r of [alpha, beta]) rmSync(join(r, '.rig'), { recursive: true }) }
     }
   })
@@ -357,6 +361,7 @@ await suite('rig 3.0: up, guard, init', async s0 => {
   const appsCalls = () => (existsSync(logs.apps) ? readFileSync(logs.apps, 'utf8') : '').split('\n').filter(Boolean)
   const regFile = join(home, '.claude', 'apps', 'depot-draw.md')
   const reg = repoAt('reg', null)
+  let betweenRuns = () => {}
   await s.check('rig init --slug --name creates the registry file with `apps new` once, and never when it exists', {
     assert: async () => {
       rmSync(regFile, { force: true }); rmSync(logs.apps, { force: true }); rmSync(join(reg, '.rig'), { recursive: true, force: true })
@@ -366,20 +371,15 @@ await suite('rig 3.0: up, guard, init', async s0 => {
       if (!existsSync(regFile)) throw new Error('registry file not created')
       if (!r.stdout.includes(regFile) || !/fill in What it is \/ Where it stands \/ Next/.test(r.stdout)) throw new Error(r.stdout)
       if (JSON.parse(readFileSync(join(reg, '.rig', 'config.json'), 'utf8')).slug !== 'depot-draw') throw new Error('slug not written to config')
+      betweenRuns()
       const again = rig(['init'], reg)
       if (again.status !== 0) throw new Error(again.stderr)
       if (appsCalls().length !== 1) throw new Error(`apps called again: ${appsCalls().join(' | ')}`)
       return /exists; left alone/.test(again.stdout)
     },
-    breaks: async () => {
-      // A pre-existing file (say, with a verdict in it) must never be touched: apps is not run,
-      // so the "called exactly once" assertion goes red.
-      const original = ensureRegistry
-      writeFileSync(join(home, '.claude', 'apps', 'sentinel'), '')
-      const p = join(bin, 'apps'); const body = readFileSync(p, 'utf8')
-      writeFileSync(p, body.replace('printf --', 'echo "$*" >> "' + logs.apps + '"; printf --'))
-      return () => { writeFileSync(p, body); rmSync(join(home, '.claude', 'apps', 'sentinel'), { force: true }); void original }
-    }
+    // Red when: the file is gone before the second run, so `apps new` legitimately runs twice. That
+    // is the "never when it exists" half failing on its own terms (the stub is untouched).
+    breaks: async () => { betweenRuns = () => rmSync(regFile, { force: true }); return () => { betweenRuns = () => {} } }
   })
   const initFlags = ['--no-registry']
   await s.check('rig init --no-registry skips apps; a bare rig init derives the slug from the repo dir', {
@@ -426,6 +426,94 @@ await suite('rig 3.0: up, guard, init', async s0 => {
   await s.check('the AGENTS.md template says review before merge and a clean tree after npm test', {
     assert: async () => /Review before merge:.*no slice merges without a review file on base/.test(agentsTpl) && /After `npm test`, the tree is clean/.test(agentsTpl),
     breaks: async () => { agentsTpl = agentsTpl.replace(/^- \*\*Review before merge.*\n/m, ''); return () => { agentsTpl = agentsOriginal } }
+  })
+
+  // -------------------------------------------------------------------------------------------
+  // Review findings (docs/review-rg2.md, 2026-09-16), one check each.
+
+  // 1. A repo 2.0 initialised carries the literal shared default in its config. Red when: the config
+  //    holds some other explicit value, which must be honoured as is.
+  let legacyValue = '../.rig-worktrees'
+  await s.check('review 1: the 2.0 literal "../.rig-worktrees" in a config reads as unset and gets the per-repo path', {
+    assert: async () => {
+      mkdirSync(join(alpha, '.rig'), { recursive: true }); writeFileSync(join(alpha, '.rig', 'config.json'), JSON.stringify({ worktreeDir: legacyValue }))
+      try { return loadConfig(alpha).worktreeDir === '../.rig-worktrees/alpha' } finally { rmSync(join(alpha, '.rig'), { recursive: true, force: true }) }
+    },
+    breaks: async () => { legacyValue = '../.trees'; return () => { legacyValue = '../.rig-worktrees' } }
+  })
+
+  // 2. The wording this repo's PLAN.md uses, and a trailing note after the backticked span.
+  //    Red when: the span is removed from the prose form (no command left to take).
+  let prose = 'Negative-control command for this repo: `npm run demo` must still print exactly one VOID and one FAIL'
+  const { negativeCommand } = await import('../src/plan.js')
+  await s.check('review 2: "Negative-control command for this repo: `cmd` …" and "Negative controls: `cmd` (note)" both yield cmd', {
+    assert: async () =>
+      negativeCommand(prose) === 'npm run demo' &&
+      negativeCommand('Negative controls: `npm run demo` (one VOID and one FAIL)') === 'npm run demo' &&
+      negativeCommand('Negative controls: npm run demo') === 'npm run demo' &&
+      negativeCommand(readFileSync(join(here, '..', 'PLAN.md'), 'utf8').split('## Checks')[1].split('## Rules')[0]) === 'npm run demo',
+    breaks: async () => { prose = 'Negative-control command for this repo: npm run demo must still print one VOID'; return () => { prose = 'Negative-control command for this repo: `npm run demo` must still print exactly one VOID and one FAIL' } }
+  })
+
+  // 3. Detached HEAD is not unborn: with --agent the slice is enforced. Red when: the staged file is
+  //    inside the slice.
+  const det = repoAt('detached', PLAN())
+  git(['checkout', '-q', '--detach'], det)
+  mkdirSync(join(det, 'app')); writeFileSync(join(det, 'app', 'x.js'), '1\n')
+  let detStray = 'README.md'
+  await s.check('review 3: on a detached HEAD, --staged --agent c1 still refuses a file outside c1; headState tells detached from unborn', {
+    assert: async () => {
+      if (headState(det) !== 'detached') throw new Error(`headState ${headState(det)}`)
+      if (headState(fresh) !== 'unborn') throw new Error(`fresh: ${headState(fresh)}`)
+      writeFileSync(join(det, 'README.md'), 'edited\n'); git(['add', detStray], det)
+      const r = rig(['guard', '--staged', '--agent', 'c1'], det)
+      const bare = rig(['guard', '--staged'], det)
+      git(['reset', '-q'], det)
+      if (bare.status !== 0 || !/detached HEAD/.test(bare.stdout)) throw new Error(`without --agent: ${bare.status} ${bare.stdout} ${bare.stderr}`)
+      if (/unborn/.test(r.stdout + bare.stdout)) throw new Error('detached reported as unborn')
+      return r.status === 1 && /REFUSED/.test(r.stderr)
+    },
+    breaks: async () => { detStray = 'app/x.js'; return () => { detStray = 'README.md' } }
+  })
+
+  // 4. Reuse survives gh's page of 30: 31 closed `c1 …` issues newer than the one open one. The stub
+  //    models gh (newest first, --state honoured, --limit default 30) and is checked on its own first.
+  //    Red when: the open issue's title no longer starts with "c1 ".
+  const full = join(tmp, 'gh-full.json')
+  const busy = (openTitle) => JSON.stringify([
+    { number: 1, title: openTitle, state: 'OPEN', url: 'https://example.invalid/o/r/issues/1' },
+    ...Array.from({ length: 31 }, (_, i) => ({ number: 100 + i, title: 'c1 old build', state: 'CLOSED', url: `https://example.invalid/o/r/issues/${100 + i}` }))
+  ])
+  let openTitle = 'c1 The entry page'
+  await s.check('review 4: with 31 closed "c1 …" issues on the first page, the one open one is still reused (no duplicate created)', {
+    assert: async () => {
+      writeFileSync(full, busy(openTitle))
+      const env = { ...process.env, GH_FULL: full }
+      const page = JSON.parse(execFileSync('gh', ['issue', 'list', '--state', 'all', '--search', 'c1 in:title', '--json', 'x'], { encoding: 'utf8', env }))
+      if (page.length !== 30 || page.some(i => i.state === 'OPEN')) throw new Error('stub does not page like gh: ' + page.length)
+      process.env.GH_FULL = full
+      try {
+        rmSync(issuesPath(iss), { force: true }); rmSync(logs.gh, { force: true })
+        const plan = loadPlan(join(iss, 'PLAN.md'))
+        openSliceIssues(iss, plan, loadConfig(iss))
+        const creates = ghCalls(/^issue create/)
+        if (creates.some(l => /--title c1 /.test(l))) throw new Error('c1 was created again: ' + creates.join(' | '))
+        return loadIssues(iss).c1?.number === 1
+      } finally { delete process.env.GH_FULL }
+    },
+    breaks: async () => { openTitle = 'c1x not this slice'; return () => { openTitle = 'c1 The entry page' } }
+  })
+
+  // 5. An Issue: line inside Task keeps the rest of the task. Red when: the line is moved to before
+  //    Task: — then nothing follows it and the check's "More." expectation… still holds; so the control
+  //    instead drops the Issue: line, which must make `issue` null.
+  let issueLine = 'Issue: 5\n'
+  await s.check('review 5: "Task:\\nDo it.\\nIssue: 5\\nMore." keeps "More." in the task and reads issue 5', {
+    assert: async () => {
+      const a = parsePlan(`# t\n## Agents\n### c1 — x\nOwns:\n- a/**\n\nTask:\nDo it.\n${issueLine}More.\n`).agents[0]
+      return a.task === 'Do it.\nMore.' && a.issue === 5
+    },
+    breaks: async () => { issueLine = ''; return () => { issueLine = 'Issue: 5\n' } }
   })
 
   // -------------------------------------------------------------------------------------------

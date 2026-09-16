@@ -74,7 +74,10 @@ export function defaultWorktreeDir (root) {
 
 function withWorktreeDir (root, fileCfg) {
   const cfg = { ...DEFAULTS, ...fileCfg }
-  if (!fileCfg.worktreeDir) cfg.worktreeDir = defaultWorktreeDir(root)
+  // 2.0's `rig init` saved all of DEFAULTS, so every repo it initialised carries the literal shared
+  // value. That is the value that collided; it reads as "unset" and gets the per-repo default. Any
+  // other explicit value is the person's choice. `rig init` writes the resolved path back.
+  if (!fileCfg.worktreeDir || fileCfg.worktreeDir === DEFAULTS.worktreeDir) cfg.worktreeDir = defaultWorktreeDir(root)
   return cfg
 }
 
@@ -99,4 +102,12 @@ export function currentBranchOrNull (cwd) {
   const r = tryGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)
   if (!r.ok || !r.out || r.out === 'HEAD') return null
   return r.out
+}
+
+/** 'unborn' (no commit yet), 'detached' (a commit but no branch), or the branch name. */
+export function headState (cwd) {
+  const branch = currentBranchOrNull(cwd)
+  if (branch) return branch
+  // `--verify HEAD` fails only when HEAD points at nothing: a fresh repo. A detached HEAD resolves.
+  return tryGit(['rev-parse', '--verify', '-q', 'HEAD'], cwd).ok ? 'detached' : 'unborn'
 }

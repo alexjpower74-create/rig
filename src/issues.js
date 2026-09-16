@@ -37,9 +37,13 @@ const json = (args, cwd) => {
   try { return JSON.parse(r.out) } catch { return null }
 }
 
-/** An OPEN issue whose title starts with `<id> ` — the one an earlier `rig up` or a person opened. */
+/**
+ * An OPEN issue whose title starts with `<id> ` — the one an earlier `rig up` or a person opened.
+ * Only open ones are asked for: slice ids repeat across builds (c1 on every plan), and with
+ * `--state all` the one open `c1 …` fell off gh's first page of 30 behind the closed ones.
+ */
 export function findOpenIssue (root, id) {
-  const list = json(['issue', 'list', '--state', 'all', '--search', `${id} in:title`, '--json', 'number,title,state,url'], root) || []
+  const list = json(['issue', 'list', '--state', 'open', '--limit', '200', '--search', `${id} in:title`, '--json', 'number,title,state,url'], root) || []
   return list.find(i => i.state === 'OPEN' && typeof i.title === 'string' && i.title.startsWith(`${id} `)) || null
 }
 
