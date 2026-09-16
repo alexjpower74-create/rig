@@ -1,5 +1,55 @@
 # Review — rg4 · 3.0.0: entry point, per-command help, changelog, README, rulebook, test runner
 
+## Second pass (2026-09-16, main 28828ac)
+
+`git diff main...rig/rg4` is empty: rg4 is merged. This pass reads rg4's commits since the first
+review (b2b7f69, 8fd8432) as they stand on main, against the merged qa.js, finish.js and roll.js
+rather than against the plan. Read only; nothing edited.
+
+What held up on 28828ac: `npm test` through `test/run.js` is green (10 files); a copy of the tree
+with `test/aaa-red.test.js` (a node:test file asserting 1 == 2) exits 1 and the runner stops there.
+`rig init|up|status|guard|qa|brief|review|finish|rule|roll|down --help` on a fresh `git init` with
+no commit each exit 0, `git status --porcelain` is empty after, and no `.rig-worktrees` appears
+beside the repo. `rig bogus --help` exits 2, `rig --version` prints 3.0.0. USAGE in bin/rig.js
+matches each module's own flag parsing (qa `--run/--negative/--port/--fresh`, finish
+`--no-review/--no-desk/--no-write/--wrap`, roll `--dir/--no-launch/--dry-run/--launch/--no-fetch/
+--force`). `check-no-personal-data --self-test` and the check are clean. `npm run demo` prints one
+VOID and one FAIL. All seven findings from the first pass are resolved in b2b7f69 and 8fd8432.
+
+### Findings
+
+#### 1. README and CHANGELOG place the QA lock at `.rig/qa.lock`; rg1 put it beside the worktree (README.md line 118, CHANGELOG.md line 24)
+`src/worktrees.js` lines 156-162: the lock is `<worktreeBase>/<id>.lock`, next to the worktree and
+not inside it, on purpose (a lock inside the tree could only be written after checkout). qa.js's
+own USAGE says so. A person hunting a stale lock after a crash, or a `rig down` that reports "qa-2
+is in use by pid N", will look inside the worktree's `.rig/` and find nothing. Say
+`<worktreeDir>/qa.lock`, `qa-2.lock`… in both places.
+
+#### 2. Wrapped "What must not happen" bullets reach every agent cut at the line break (owner rg2, `src/plan.js` line 146; noted here because rg4 owns docs/** where it shows)
+`bullets()` keeps only a bullet's first physical line. PLAN.md wraps three of its hard rules, so the
+review brief that produced this file, every `.rig/BRIEF.md`, and `docs/FINISH.md` "Hard rules this
+build had to keep" all carry "QA worktrees may only be" and "Never run" with nothing after them. The
+rule that got lost is "Never run `wrap` or `sync` unless `--wrap` was passed. Never push, release,
+deploy or post", which is the one a crew most needs. rg4 cannot fix it: the lead should have rg2 join
+continuation lines (a line that does not start a bullet and is indented belongs to the bullet above)
+and re-run workflow.test.js, or unwrap the bullets in PLAN.md before the next `rig up`.
+
+#### 3. `docs/FINISH.md` is untracked and records a failing gate (docs/FINISH.md, `git status`)
+It says "Commit: 28828ac (gates failing — not finished)" with the four "reviewed" gates red because
+each review file predates the slice's post-review commit. The plan asks for the transcript of
+`rig finish` on the final sha in that file. Once the four second-pass reviews are on base, the lead
+should re-run `rig finish`, check the file reads as passed, and commit it; a FINISH.md that says
+"not finished" must not ship in the 3.0 tree.
+
+### Minor, no action needed unless cheap
+- `rig finish` warns "screenshots — none under docs/" although the plan says none are needed for a CLI.
+  A warn, not a fail; rg1's gate could read a "Screenshots are not needed" line in Checks.
+- `bin/rig.js` line 67: `rig rule "-h"` prints help instead of writing that rule (unchanged from pass one).
+
+---
+
+## First pass (rig/rg4 at ef61904) — all seven resolved in b2b7f69 and 8fd8432
+
 Reviewed `git diff main...rig/rg4` (ef61904) against PLAN.md and the other three slice branches as
 they stand today (rig/rg1 971b1ed, rig/rg2 44e9cc2, rig/rg3 28a3c1f). Read only; nothing edited.
 
