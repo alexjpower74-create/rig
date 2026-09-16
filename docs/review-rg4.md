@@ -1,6 +1,34 @@
 # Review — rg4 · 3.0.0: entry point, per-command help, changelog, README, rulebook, test runner
 
-## Second pass (2026-09-16, main 28828ac)
+## Final (confirmation pass, 2026-09-16, main 31e42ce; rg4 fix commit 73af664)
+
+Checked each second-round finding on main as merged. `npm test` is green on 31e42ce (10 files).
+
+### 1. QA lock path in README and CHANGELOG — CONFIRMED FIXED
+73af664 changes README.md line 118 and CHANGELOG.md line 24 to "the lock beside it (`qa.lock`,
+`qa-2.lock`… in the worktree directory)", which is what `src/worktrees.js` line 162 (`qaLockPath =
+path + '.lock'`) writes. `grep 'rig/qa\.lock'` over README, CHANGELOG, bin and src finds nothing; the
+one hit left is the build report's own note of the fix. Docs have no test; the check is that grep,
+which was red on 28828ac and is clean now. Nit, no re-review needed: the CHANGELOG line now reads
+"while a / the lock beside each" — the leftover "a" at the end of line 23 should go.
+
+### 2. Wrapped "What must not happen" bullets truncated (rg2, src/plan.js) — CONFIRMED FIXED
+rg2's 60291fd makes `bullets()` join an indented continuation line to the bullet above it.
+`bullets('- wraps here\n  and continues')` returns one item, "wraps here and continues". The test is
+`review D` in test/up-guard-init.test.js line 561, which asserts the joined rule reaches the brief
+whole. It can fail: with `src/plan.js` reverted to f52c760 in a scratch copy, that check prints FAIL
+and the file exits 1; on main it passes.
+
+### 3. docs/FINISH.md untracked and reading "not finished" — STILL OPEN
+`git ls-files docs/FINISH.md` is empty and the file still says "Commit: 28828ac (gates failing — not
+finished)". It is the lead's step, not rg4's: once this file and the other final reviews are on base,
+re-run `rig finish` on the final sha, confirm it passes, and commit `docs/FINISH.md`.
+
+---
+
+## History
+
+### Second pass (2026-09-16, main 28828ac)
 
 `git diff main...rig/rg4` is empty: rg4 is merged. This pass reads rg4's commits since the first
 review (b2b7f69, 8fd8432) as they stand on main, against the merged qa.js, finish.js and roll.js
@@ -48,7 +76,7 @@ should re-run `rig finish`, check the file reads as passed, and commit it; a FIN
 
 ---
 
-## First pass (rig/rg4 at ef61904) — all seven resolved in b2b7f69 and 8fd8432
+### First pass (rig/rg4 at ef61904) — all seven resolved in b2b7f69 and 8fd8432
 
 Reviewed `git diff main...rig/rg4` (ef61904) against PLAN.md and the other three slice branches as
 they stand today (rig/rg1 971b1ed, rig/rg2 44e9cc2, rig/rg3 28a3c1f). Read only; nothing edited.
