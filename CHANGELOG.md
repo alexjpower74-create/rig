@@ -21,7 +21,7 @@ is now the tool's, and each way the night's numbers lied is now refused.
   second build found it pinned to another build's sha, refused, and its numbers came off the shared
   tree instead.
 - **Now:** the QA worktree is per project and per run (`qa`, then `qa-2`, `qa-3`… while a
-  `.rig/qa.lock` holds a live pid), detached, reset and cleaned before the pin, and pinned to
+  the lock beside each, `qa.lock`, `qa-2.lock`…, holds a live pid), detached, reset and cleaned before the pin, and pinned to
   exactly the sha you named. `rig qa <sha>` always grades; it never asks you to clean up first.
   `--fresh` also removes ignored files (`git clean -x`), so `node_modules` reinstalls.
 

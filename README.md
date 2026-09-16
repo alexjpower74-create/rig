@@ -115,7 +115,7 @@ the shared tree. A tool that refuses to grade gets routed around.
 
 `rig qa <sha>` now never refuses. The worktree is per project and per run: the first run takes `qa`,
 a second running at the same time takes `qa-2`, and so on, each on its own port. A slot is in use
-while its `.rig/qa.lock` holds a live pid. Before the pin the tree is reset and cleaned, and what
+while the lock beside it (`qa.lock`, `qa-2.lock`… in the worktree directory) holds a live pid. Before the pin the tree is reset and cleaned, and what
 was reset is printed by path. `--fresh` also removes ignored files (`git clean -x`, so
 `node_modules` reinstalls): the line to read before passing it on a Playwright suite. What it does
 refuse is to reset a tree that is not a detached QA worktree: a branch checkout sitting in a slot is
