@@ -184,6 +184,31 @@ export function qaSlots (root, cfg) {
 const slotIndex = id => id === 'qa' ? 1 : Number(id.slice(3))
 
 /**
+ * Claim the right to remove a stale lock: an exclusive takeover file named by the dead pid, so of
+ * two runs that saw the same stale lock exactly one wins; the loser moves on. The winner removes
+ * the lock and the takeover file; a takeover file left by a crashed winner is itself stale when its
+ * pid is dead and is taken over the same way.
+ */
+export function takeOverStaleLock (path, stalePid, attempt = 0) {
+  const claim = `${qaLockPath(path)}.takeover-${stalePid}`
+  try { writeFileSync(claim, String(process.pid) + '\n', { flag: 'wx' }) } catch (e) {
+    if (e.code !== 'EEXIST') throw e
+    let holder = 0
+    try { holder = Number(readFileSync(claim, 'utf8').trim()) } catch {}
+    if (holder && !pidAlive(holder) && attempt < 3) { rmSync(claim, { force: true }); return takeOverStaleLock(path, stalePid, attempt + 1) }
+    return false
+  }
+  try {
+    // The lock must still be the one we saw; if the winner of an earlier round already replaced it,
+    // this claim was for a lock that is gone.
+    const now = readQaLock(path)
+    if (now.pid !== stalePid || now.live) return false
+    rmSync(qaLockPath(path), { force: true })
+    return true
+  } finally { rmSync(claim, { force: true }) }
+}
+
+/**
  * Pick, lock, clean and pin a QA worktree for this process. Returns the worktree, the names of the
  * files the clean touched, `notes` for the person, and `release()`.
  */
@@ -195,7 +220,12 @@ export function acquireQaWorktree (root, cfg, ref, opts = {}) {
     const path = worktreePath(root, cfg, id)
     const lock = readQaLock(path)
     if (lock.live) { notes.push(`${id} is in use by pid ${lock.pid}`); continue }
-    if (lock.pid) { notes.push(`removed a stale lock in ${id} (pid ${lock.pid} is not running)`); rmSync(qaLockPath(path), { force: true }) }
+    if (lock.pid) {
+      // Never remove a lock you did not write without winning the right to: two runs that both saw
+      // the same dead pid used to both remove it, and the second removed the first's fresh lock.
+      if (!takeOverStaleLock(path, lock.pid)) { notes.push(`${id} was taken while we looked`); continue }
+      notes.push(`removed a stale lock in ${id} (pid ${lock.pid} is not running)`)
+    }
     const existing = findWorktree(root, path)
     // Somebody's branch checkout in a QA slot is left exactly as it is; the run takes the next slot.
     if (existing && !existing.detached) { notes.push(`${id} is on branch ${existing.branch}, not a QA worktree: left alone`); continue }
