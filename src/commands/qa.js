@@ -20,15 +20,15 @@ export const USAGE = `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--por
 
   <ref>              the commit to pin (a sha, a branch, a tag); defaults to the current branch of
                      the MAIN checkout. Give the sha: "rig qa" alone grades main, not your slice.
-  --run "<cmd>"      the test command (default: devCommand in .rig/config.json); its exit status is
-                     recorded as kind "test" and becomes rig qa's own exit status
+  --run "<cmd>"      the test command (default: devCommand in .rig/config.json); recorded as kind
+                     "test". rig qa exits with the first non-zero of the test run, then the negative
   --negative "<cmd>" the negative-control command (default: negativeCommand in the config or the
                      plan's "Negative controls:" line); recorded as kind "negative" on the same sha
   --port <n>         PORT for the command (default: qaPort, +1 per extra QA worktree in use)
   --fresh            clean ignored files too (git clean -fdx): node_modules is reinstalled
   --help, -h         this text
 
-The worktree is <worktreeDir>/qa when free, else qa-2, qa-3…; a run holds it with .rig/qa.lock.
+The worktree is <worktreeDir>/qa when free, else qa-2, qa-3…; a run holds it with <worktreeDir>/<id>.lock.
 Tracked files the clean reset and files the run dirtied are printed by path and recorded in
 .rig/qa-history.jsonl, which \`rig finish\` reads.
 `
@@ -114,13 +114,30 @@ function planNegative (root, cfg) {
   try { return loadPlan(join(root, cfg.plan)).negativeCommand || null } catch { return null }
 }
 
-/** Release the run lock however this process ends: normal exit, ctrl-c, or a kill. */
+/**
+ * Release the run lock however this process ends: normal exit, ctrl-c, or a kill.
+ *
+ * A signal is passed on to the command still running in the worktree, and the lock is released only
+ * once that child has exited. Releasing first said "free" while `npm test` was still writing into
+ * the tree, and the next `rig qa` reset and re-pinned it under the running suite: the one thing the
+ * lock exists to stop. The child is ours, running in the worktree we hold, so stopping it keeps the
+ * rule that a process is only ever stopped by the working directory it is in.
+ */
 function holdLock (wt) {
   process.on('exit', wt.release)
   for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
-    process.on(sig, () => { wt.release(); process.exit(code) })
+    process.on(sig, () => {
+      const child = running
+      if (!child || child.exitCode !== null || child.signalCode !== null) { wt.release(); process.exit(code) }
+      child.once('exit', () => { wt.release(); process.exit(code) })
+      child.kill(sig)
+      setTimeout(() => { try { child.kill('SIGKILL') } catch {} }, 5000).unref()
+    })
   }
 }
+
+/** The command currently running in the QA worktree, so a signal can reach it. */
+let running = null
 
 const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative'])
 
@@ -170,7 +187,8 @@ export function runShell (cmd, { cwd, env, shell, mapExit = exitCodeFor } = {}) 
     : ['/bin/sh', ['-c', cmd]]
   return new Promise(resolve => {
     const child = spawn(file, argv, { cwd, env, stdio: 'inherit' })
-    child.on('exit', (code, signal) => resolve(mapExit(code, signal)))
+    running = child
+    child.on('exit', (code, signal) => { running = null; resolve(mapExit(code, signal)) })
     child.on('error', () => resolve(127))
   })
 }

@@ -33,6 +33,8 @@ close the slice issues, jot, and touch the registry.
 
 export default function finish (args) {
   if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); return }
+  if (args.includes('--wrap') && !argOf(args, '--wrap')) { console.error('rig finish: --wrap needs a message, e.g. --wrap "shipped 3.0". Nothing was run.'); process.exit(2) }
+  if (args.includes('--wrap') && args.includes('--no-desk')) { console.error('rig finish: --wrap and --no-desk contradict each other (wrap is a desk action). Nothing was run.'); process.exit(2) }
   const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
@@ -74,9 +76,15 @@ export default function finish (args) {
  */
 export function deskActions (root, cfg, plan, r, { wrap: wrapMessage = null } = {}) {
   const actions = []
-  const slug = cfg.slug || root.split('/').pop()
+  const slug = cfg.slug || slugFor(root.split('/').pop())
   const cmd = r.qa?.cmd || 'QA'
   const line = `${plan.title}: finished at ${r.short}; ${cmd} exit 0; ${plan.agents.length} slices`
+  // `rig finish` then `rig finish --wrap` is the normal sequence, and the log must not get the same
+  // line twice. What was jotted is remembered per sha in .rig/finish.json.
+  const donePath = join(root, '.rig', 'finish.json')
+  let done = {}
+  if (existsSync(donePath)) { try { done = JSON.parse(readFileSync(donePath, 'utf8')) } catch { done = {} } }
+  const already = done[r.sha]
 
   const issuesPath = join(root, '.rig', 'issues.json')
   let issues = null
@@ -92,10 +100,20 @@ export function deskActions (root, cfg, plan, r, { wrap: wrapMessage = null } = 
       actions.push({ what: `close ${a.id} issue #${entry.number}`, ...res })
     }
   }
-  const j = jot(`[${slug}] ${line}`)
-  actions.push({ what: `jot "[${slug}] ${line}"`, ...j })
-  const t = appsTouch(slug)
-  actions.push({ what: `apps touch ${slug}`, ...t })
+  if (already?.jotted) {
+    actions.push({ what: `jot "[${slug}] ${line}"`, ran: false, why: `already jotted on ${r.short} (${already.jotted})` })
+    actions.push({ what: `apps touch ${slug}`, ran: false, why: `already touched on ${r.short}` })
+  } else {
+    const j = jot(`[${slug}] ${line}`)
+    actions.push({ what: `jot "[${slug}] ${line}"`, ...j })
+    const t = appsTouch(slug)
+    actions.push({ what: `apps touch ${slug}`, ...t })
+    if (j.ran && j.ok) {
+      done[r.sha] = { jotted: new Date().toISOString(), slug }
+      mkdirSync(join(root, '.rig'), { recursive: true })
+      writeFileSync(donePath, JSON.stringify(done, null, 2) + '\n')
+    }
+  }
   if (wrapMessage) actions.push({ what: `wrap ${slug} "${wrapMessage}"`, ...wrap(slug, wrapMessage) })
   return { slug, line, actions, skipped: null }
 }
@@ -108,6 +126,7 @@ export function finishChecks (root, cfg, plan, base, opts = {}) {
   const add = (name, state, detail = '') => checks.push({ name, state, detail })
   const sha = git(['rev-parse', base], root)
   const short = git(['rev-parse', '--short', base], root)
+  const unmerged = new Set()
 
   // 1. Every slice's work is on base.
   for (const a of plan.agents) {
@@ -123,19 +142,8 @@ export function finishChecks (root, cfg, plan, base, opts = {}) {
     }
     const ahead = Number(tryGit(['rev-list', '--count', `${base}..${ref}`], root).out || 0)
     if (ahead === 0) { add(`${a.id} merged`, 'ok'); continue }
-    // Squash and rebase merges leave the branch's own commits "ahead" forever, so ask the question
-    // that matters: would merging this branch into base change anything? If the merged tree is base's
-    // own tree, every change is already there. (`git cherry` compares commit by commit and misses a
-    // squash of several commits.) Older git without merge-tree --write-tree falls back to cherry.
-    let applied = false
-    const mt = tryGit(['merge-tree', '--write-tree', base, ref], root)
-    if (mt.ok) {
-      applied = mt.out.split('\n')[0] === git(['rev-parse', `${base}^{tree}`], root)
-    } else if (!/conflict/i.test(mt.out + mt.err)) {
-      const cherry = tryGit(['cherry', base, ref], root)
-      const lines = cherry.ok ? cherry.out.split('\n').filter(Boolean) : []
-      applied = lines.length > 0 && lines.every(l => l.startsWith('-'))
-    }
+    const applied = branchApplied(root, base, ref)
+    if (!applied) unmerged.add(a.id)
     add(`${a.id} merged`, applied ? 'ok' : 'fail', applied ? 'squash or rebase merge (every change already on base)' : `${branch} has ${ahead} commit(s) not on ${base}`)
   }
 
@@ -143,7 +151,7 @@ export function finishChecks (root, cfg, plan, base, opts = {}) {
   // cross-review found. A slice that changed code needs `docs/review-<id>.md` on base, and it must
   // be newer than the slice's last code commit, or it reviewed something else.
   for (const a of plan.agents) {
-    const rv = reviewState(root, plan, a, base, cfg)
+    const rv = reviewState(root, plan, a, base, cfg, { unmerged: unmerged.has(a.id) })
     const state = rv.ok ? 'ok' : opts.noReview ? 'warn' : 'fail'
     add(`${a.id} reviewed`, state, rv.detail + (state === 'warn' ? ' (--no-review)' : ''))
   }
@@ -170,8 +178,11 @@ export function finishChecks (root, cfg, plan, base, opts = {}) {
 
   // 3c. The tree was clean right after the tests. A file a test writes is invisible in a suite's
   // own output and shows up as a dirty tree at the next commit, or in someone else's pre-commit check.
-  const dirtied = qa?.dirtied || []
-  if (qa) add('QA left the tree clean', dirtied.length ? 'fail' : 'ok', dirtied.length ? `${dirtied.length} file(s) written by the run: ${dirtied.join(', ')} — untrack it or have the test restore it` : '')
+  // Source-patching negative controls are the runs most likely to leave a patched file behind, so
+  // the negative run's leftovers count too, named by run.
+  const negRun = lastNegativeOn(root, sha)
+  const left = [...(qa?.dirtied || []).map(f => `${f} (test run)`), ...(negRun?.dirtied || []).map(f => `${f} (negative run)`)]
+  if (qa) add('QA left the tree clean', left.length ? 'fail' : 'ok', left.length ? `${left.length} file(s) written: ${left.join(', ')} — untrack it or have the test restore it` : '')
 
   // 4. Every slice left its reasoning on base.
   for (const a of plan.agents) {
@@ -197,6 +208,26 @@ export function finishChecks (root, cfg, plan, base, opts = {}) {
   return { checks, failed: checks.some(c => c.state === 'fail'), sha, short, qa, shots }
 }
 
+/** The registry slug for a directory name: the same rule as `rig init` (rg2's slugFor). */
+export function slugFor (name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app'
+}
+
+/**
+ * Would merging `ref` into `base` change anything? Squash and rebase merges leave the branch's own
+ * commits "ahead" forever, so this asks the question that matters: if the merged tree is base's
+ * own tree, every change is already there. (`git cherry` compares commit by commit and misses a
+ * squash of several commits.) Older git without merge-tree --write-tree falls back to cherry.
+ */
+export function branchApplied (root, base, ref) {
+  const mt = tryGit(['merge-tree', '--write-tree', base, ref], root)
+  if (mt.ok) return mt.out.split('\n')[0] === git(['rev-parse', `${base}^{tree}`], root)
+  if (/conflict/i.test(mt.out + mt.err)) return false
+  const cherry = tryGit(['cherry', base, ref], root)
+  const lines = cherry.ok ? cherry.out.split('\n').filter(Boolean) : []
+  return lines.length > 0 && lines.every(l => l.startsWith('-'))
+}
+
 /** cfg.negativeCommand, the plan's own, or a Checks section that speaks of negatives. */
 export function wantsNegative (cfg, plan) {
   return Boolean(cfg.negativeCommand || plan.negativeCommand || /negative/i.test(plan.checks || ''))
@@ -210,14 +241,19 @@ export function wantsNegative (cfg, plan) {
  * or any non-docs file on the slice's unmerged branch. Timestamps are compared with `%ct`, as the
  * plan asks; a review committed together with the code counts.
  */
-export function reviewState (root, plan, a, base, cfg = {}) {
+export function reviewState (root, plan, a, base, cfg = {}, { unmerged } = {}) {
   const reviewPath = `docs/review-${a.id}.md`
   const specs = a.owns.map(g => `:(glob)${g}`).concat([':(exclude,glob)docs/**'])
   const last = tryGit(['log', '-1', '--format=%ct %h', base, '--', ...specs], root)
   let codeAt = last.ok && last.out ? Number(last.out.split(' ')[0]) : 0
   let codeRef = last.ok && last.out ? last.out.split(' ')[1] : null
   const ref = `refs/heads/${(cfg.branchPrefix || 'rig/')}${a.id}`
-  if (tryGit(['show-ref', '--verify', '--quiet', ref], root).ok) {
+  // Only a branch holding work that is NOT on base can be "newer than the review". After a squash
+  // or rebase merge the three-dot diff still lists every file the slice changed, so that diff alone
+  // said "unreviewed" forever while the merged gate said "merged". The merged gate's answer is
+  // reused; called on its own, it is computed the same way.
+  const branchExists = tryGit(['show-ref', '--verify', '--quiet', ref], root).ok
+  if (branchExists && (unmerged ?? !branchApplied(root, base, ref))) {
     const changed = tryGit(['diff', '--name-only', `${base}...${ref}`], root)
     const code = changed.ok ? changed.out.split('\n').filter(f => f && !f.startsWith('docs/')) : []
     if (code.length) { codeAt = Infinity; codeRef = ref.replace('refs/heads/', '') }

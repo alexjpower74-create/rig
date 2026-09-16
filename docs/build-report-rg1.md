@@ -110,3 +110,35 @@ not own the file). **For the lead / rg4:**
   PATH, and the real tools were never touched by this slice.
 - The QA worktree for this repo is `../.rig-worktrees-rig/qa` from the main checkout's config; the
   per-repo default is rg2's.
+
+## Review findings acted on (docs/review-rg1.md, eight findings)
+
+Each fix has a test in `test/qa-finish.test.js` named "(review N)" or extended in place, and each
+was shown red once by reverting only that fix (files restored after).
+
+1. **Squash-merged slice never reviewed** — FIXED. `branchApplied()` is now a shared helper; the
+   merged gate records unmerged slices and `reviewState` only treats the branch diff as "newer
+   code" when the branch holds work not on base. Red: reverting to `if (branchExists)`.
+2. **Signals released the lock under a running command** — FIXED. `runShell` keeps the child;
+   the handler forwards the same signal, waits for the child's exit (SIGKILL after 5 s), then
+   releases and exits 128+n. Red: handler with no child → the orphan's marker file appeared.
+3. **Two simultaneous runs on a fresh repo** — FIXED. The lock moved beside the worktree,
+   `<worktreeDir>/<id>.lock`, taken with `wx` before any git; a `worktree add` that loses the race
+   is read as "taken while we looked" and the run moves on. Red: creating the tree before the lock
+   → both runs pinned `qa`. (Deviation from the brief's `<path>/.rig/qa.lock`, for the reason in the
+   review; nothing a clean does can reach the lock now, so the `-e` exclude went.)
+4. **Negative run's leftovers not gated** — FIXED. "QA left the tree clean" unions the test and
+   negative entries' `dirtied`, naming the run. Red: test entry only.
+5. **Every passing finish jots again** — FIXED. `.rig/finish.json` remembers `{ sha: { jotted,
+   slug } }`; a repeat says "already jotted on <sha>" and skips jot and apps touch; issue closing
+   was already idempotent. Red: jotting unconditionally → two jot lines.
+6. **`--wrap` swallowed** — FIXED. `--wrap` with no message and `--wrap` with `--no-desk` both
+   exit 2 with a sentence before anything runs. Red: removing the two checks.
+7. **Slug fallback** — FIXED. `slugFor` copied verbatim from rg2's `init.js` (`cfg.slug ||
+   slugFor(dirname)`); a repo directory "Depot Draw" jots under `[depot-draw]`. Red: raw dir name.
+8. **USAGE wrong about the exit** — FIXED: "rig qa exits with the first non-zero of the test run,
+   then the negative". Red: old wording.
+
+Also, from the lead's notes: `qaSlots(root, cfg)` exported from `src/worktrees.js`, returning
+`[{ id, path, lock: { live, pid } }]` for every `qa`/`qa-N` under the worktree base, for `down`.
+The `Negative controls: <cmd>` PLAN.md line and the `workflow.test.js` patch remain the lead's.
