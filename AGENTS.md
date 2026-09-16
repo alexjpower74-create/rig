@@ -16,3 +16,7 @@ CLAUDE.md is a symlink to this file, so Onyx (Claude Code) and Cobalt (Codex) re
 - Slice tabs are found by the plan's own ids, never a label pattern: give every project its own slice-id prefix. (2026-09-15)
 - Never read a test run's exit code through a pipe; rig qa runs under pipefail and records the exit. (2026-09-15)
 - Stop only processes whose working directory is inside your worktree; never pkill by name. (2026-09-15)
+- Review before merge: a slice with code changes needs docs/review-<id>.md on base before rig finish will pass it. (2026-09-16)
+- Re-run the negative controls after any formatter, on the new sha: a reformat un-anchors the check that was shown red on the old one. (2026-09-16)
+- A test never leaves a tracked file dirty: rig qa names any file the run modified, and rig finish fails on it. (2026-09-16)
+- QA worktrees are per project and per run: one shared directory meant one build graded another build's sha. (2026-09-16)

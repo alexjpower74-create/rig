@@ -4,29 +4,35 @@
 
 Orchestration for builds where several Claude Code sessions work the same repo at once.
 
-**Rig 2.0 builds the workflow in:** a plan that is a brief first, hard rules that reach every agent,
-a fresh-eyes review step, and a finish gate that will not call a build done until the tests have
-passed on the exact commit being called done. See [CHANGELOG.md](CHANGELOG.md) for what changed and
-why.
+**Rig 3.0 builds the workflow's desk in:** review before merge, a QA worktree per project and per
+run that never refuses, negative controls re-proved on the sha being called done, one GitHub issue
+per slice opened and closed by the rig, the app registry and the decision log written at the finish
+gate, and `rig roll` for one brief across many repos. See [CHANGELOG.md](CHANGELOG.md) for what
+changed and why.
 
 Three sessions in one checkout will quietly overwrite each other, review their own blind spots, and
 hand you a green test suite for a broken page. `rig` is the set of rules that stops each of those,
 made executable. Every one of them came from a build where the absence of it cost real time.
 
 ```
-rig init     scaffold a brief-first PLAN.md, the AGENTS.md rulebook, .rig/config.json  (--hook: pre-commit guard)
-rig up       a worktree + branch per slice, an agent launched in each
+rig init     scaffold a brief-first PLAN.md, the AGENTS.md rulebook, .rig/config.json, the registry file
+             (--hook: pre-commit guard; --slug, --name, --no-registry)
+rig up       a worktree + branch + GitHub issue per slice, an agent launched in each  (--no-issues)
 rig status   agent state, commits ahead, uncommitted work, anything edited outside its slice
 rig guard    refuse work that reaches outside its slice
-rig qa       rig qa <sha> --run "<tests>": pin a QA worktree to that commit, run, record the exit
+rig qa       rig qa <sha> --run "<tests>": grade from a clean worktree pinned to that commit, record
+             the exit  (--negative records the negative-control run; --fresh discards the old tree)
 rig review   rig review <id>: a read-only, fresh-eyes review brief for one slice's diff
-rig finish   the done gate: merged, clean, QA green on this commit; writes docs/FINISH.md
+rig finish   the done gate: reviewed, merged, clean, QA and negatives green on this sha; closes the
+             issues, jots, touches the registry, writes docs/FINISH.md  (--no-review, --no-desk, --wrap)
 rig rule     rig rule "<rule>": add a learned rule to the rulebook every agent reads
 rig brief    print an agent's briefing so you can hand it over deliberately
+rig roll     rig roll up <brief.md> | status | finish | down: one brief, many repos, one tab per list
 rig down     close this build's tabs, stop what its worktrees left running, remove them
+rig <cmd> --help   that command's usage; creates nothing
 ```
 
-The loop every build runs: **plan, build, prove, review, show, ship.**
+The loop every build runs: **plan, build, prove, review, show, finish (jot, issues, registry), ship.**
 
 ## The plan file is the contract
 
@@ -100,6 +106,17 @@ checkout, and you will not find out until someone tries to reproduce it.
 a bare `rig qa <sha>` used to be ignored and pin the current branch instead; `npm test | tail` used to
 report `tail`'s success (the command now runs under `pipefail`); and a run killed by a signal used to
 exit 0 (it now exits 128 + the signal). Every run is recorded with its sha, for `rig finish`.
+
+## The QA worktree is yours alone
+
+Rig 2.0 kept one QA directory per machine. On a night with two builds running, the second `rig qa`
+found it pinned to the first build's sha and refused, and the agent, needing a number, took one off
+the shared tree. A tool that refuses to grade gets routed around.
+
+`rig qa <sha>` now never refuses. The worktree is per project and per run, detached, pinned to exactly
+the sha you named, and touched by no other run. `--fresh` throws the old tree away before pinning.
+What it does refuse is to reset a tree holding a person's uncommitted work: a test's leftovers are
+named and reset, a hand's are not.
 
 ## `rig qa` is also your scratch tree
 
@@ -184,6 +201,28 @@ Only real input at real speed, hit-tested, finds the bug.
 On its first use against this project's own scoring tests, 6 of 14 checks came back VOID. They had
 been written by me, they looked reasonable, and they were watching nothing.
 
+## Formatters un-anchor negative controls
+
+A check shown red once is proof about the tree it was shown red on. A formatter rewrites the tree
+and the proof stays in the report, now about a sha that no longer exists. One build called a
+reformatted tree done on the strength of a red seen before the reformat.
+
+When the plan's **Checks** or `.rig/config.json` names a negative-control command, `rig finish`
+fails until that command has been recorded green on the same sha it is grading:
+
+```console
+rig qa 40c0d72 --negative --run "npm run demo"
+```
+
+Re-run it after any formatter. The rule is in the rulebook because the mistake was a natural one.
+
+## A test that writes a tracked file
+
+A test wrote a tracked fixture and left it modified. Every later run on that tree graded a sha that
+no longer matched its commit, and nothing said which file. `rig qa` now reports any tracked file
+the run dirtied, by name, and resets it before the next run; `rig finish` fails while the QA tree
+is dirty. A test that cannot leave the tree as it found it is a test that is lying about the sha.
+
 ## Fresh eyes before done
 
 Every real defect on a multi-agent build crossed the line between two people's work, and self-review
@@ -202,6 +241,14 @@ The brief is read-only, points at exactly that slice's diff and the plan's hard 
 where the slice meets another, checks that cannot fail, and paths nobody ran. `--launch` opens a
 fresh reviewer in its own tab instead. Ask early, while the diff is still cheap to change.
 
+## Review is a gate, not a command
+
+`rig review` writes the brief. The finding that matters is that nobody ran it: on a build where every
+defect crossed a slice boundary, the slices were merged on their authors' word. `rig finish` now
+fails while a slice that changed code has no `docs/review-<id>.md` on base. The review is read-only
+and the findings file is the reviewer's; the gate only checks that it exists. `--no-review` turns the
+gate off for one run, and `docs/FINISH.md` says so.
+
 ## Done means the finish gate passed
 
 ```console
@@ -212,17 +259,39 @@ Depot draw — finish gate on main @ 9153198
   ok   c2 merged
   ok   no uncommitted work
   ok   QA green on 9153198  — npm test
+  ok   negatives green on 9153198  — npm run demo
+  ok   c1 reviewed  — docs/review-c1.md
   ok   c1 report
   ok   a check was shown to go red
  warn  screenshots  — none under docs/ — show it before calling it done
 ```
 
-It fails while a slice is unmerged, a tree is dirty, or the tests have not run green on the exact
-commit being called done — a green run on the commit before does not count. It warns when no report
+It fails while a slice is unreviewed, unmerged, or dirty, while the tests have not run green on the
+exact commit being called done — a green run on the commit before does not count — and, when a
+negative-control command is named, while that command is not recorded green on the same sha. It warns when no report
 mentions a check made to go red, when there are no screenshots, and when the brief is incomplete. Then
 it writes `docs/FINISH.md` in the shape a person can check: what changed, the proof, the pictures,
 where it lives, the hard rules it had to keep, and what is still owed. Shipping — a deploy, a release,
 a post — stays the owner's call.
+
+## One issue per slice
+
+The workflow's rule is one GitHub issue per slice, so that work spanning a session or waiting on a
+person has a number. Opened by hand it was opened late or not at all. When `gh` and a remote exist,
+`rig up` opens one issue per slice, titled `<id> <title>`, records the number in the plan, and puts
+it in the slice's brief. `rig finish` closes them with the QA line, and only after every gate has
+passed: an issue is never closed on a build that is not done. `--no-issues` opens none.
+
+## jot and the registry
+
+The workflow keeps a registry file per app and a decision log, through two small commands on PATH:
+`jot "[<slug>] what happened"` appends to the log, and `apps` reads and writes the registry. The rig
+does not ship them and does not need them; when they are on PATH, it calls them.
+
+`rig init` creates the registry file with `apps new <slug> "<Name>"` when it is missing, and stores
+the slug in `.rig/config.json` (`--slug`, `--name`, `--no-registry`). `rig finish`, after a pass and
+never before, runs `jot "[<slug>] …"` and `apps touch <slug>` and prints the `wrap` line for you to
+run; `--wrap` runs it. `--no-desk` skips all of it.
 
 ## Rules learned go in the rulebook
 
@@ -321,6 +390,28 @@ listed under WAITING ON YOU whether or not the prompt text is still on screen, a
 `working` is never mistaken for blocked by a stale prompt in scrollback. The text scan is the fallback
 for `unknown`.
 
+## Roll: one brief, many repos
+
+A change wanted across dozens of repos, a linter, a licence line, a CI file, is not a slice build.
+Nobody owns files; every tab owns repos.
+
+```console
+$ rig roll up rollout.md
+roll linter-2026: 3 tab(s) in this workspace
+  tab 1  12 repo(s)   brief: ~/.rig/rolls/linter-2026/BRIEF-1.md
+  ...
+$ rig roll status
+  slug            tab  state          sha
+  first-repo      1    pushed         a1b2c3d
+  second-repo     1    in progress
+  third-repo      2    skipped        no package.json
+```
+
+The brief lists the repos per tab; `rig roll up` launches one tab per list in the workspace it runs
+in, with a brief per tab. `rig roll status` reads the state off each repo itself, untouched, in
+progress, committed, pushed or skipped, never off a notes file. `rig roll finish` refuses until every
+repo is accounted for, and `rig roll down` closes only this roll's tabs, by their ids.
+
 ## Several builds at once: a lead per project
 
 The pattern that ran fifteen builds overnight without a person at the desk:
@@ -371,3 +462,16 @@ Each one replaced a specific bad afternoon:
 - **Hard rules in every brief** — an agent cannot keep a rule it was never told.
 - **Stop what the worktree left running** — an orphaned dev server held a demo's port after its
   worktree was gone.
+- **Review before merge** — slices were merged on their author's word, and the author's tests share
+  the author's blind spots.
+- **A QA worktree per project and per run** — one shared directory refused the second build, and the
+  second build graded the shared tree instead.
+- **Negatives on the sha being called done** — a formatter rewrote the tree and the red in the report
+  was about a commit that no longer existed.
+- **A test that dirties a tracked file fails the gate** — every later number came off a tree that no
+  longer matched its sha, and nothing said which file.
+- **Issues opened and closed by the rig** — opened by hand, they were late or missing; closed by
+  hand, they were closed before the gate passed.
+- **The log and the registry at the finish gate** — written by whoever remembered, a finished build
+  was invisible to the next session.
+- **`--help` that creates nothing** — `rig qa --help` made a worktree on its way to reading the flag.
