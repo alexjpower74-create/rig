@@ -15,7 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'rig-roll-')))
 const home = join(tmp, 'home')
 const OLD = { GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z' }
-const git = (args, cwd, env = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...env } }).trim()
+const git = (args, cwd, env = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }).trim()
 
 const BRIEF = `# Lint sweep — one formatter across the fleet
 
@@ -161,7 +161,10 @@ await suite('rig roll', async s => {
     reports: { t1: join(rollDir, 't1', 'REPORT.md'), t2: join(rollDir, 't2', 'REPORT.md') }
   }
   writeFileSync(join(rollDir, 'roll.json'), JSON.stringify(record))
-  const stateOf = (slug) => { const st = rollStatus(rollDir); for (const t of Object.values(st.tabs)) for (const r of t.repos) if (r.slug === slug) return r; return null }
+  let fetchOff = false
+  const kilnHead = () => git(['rev-parse', 'HEAD'], paths.kiln).slice(0, 7) // amends move it; read it live
+  let ownerDates = { GIT_AUTHOR_DATE: OLD.GIT_AUTHOR_DATE }
+  const stateOf = (slug) => { const st = rollStatus(rollDir, { fetch: !fetchOff }); for (const t of Object.values(st.tabs)) for (const r of t.repos) if (r.slug === slug) return r; return null }
 
   await s.check('a clean repo with no commit since the roll started is untouched', {
     assert: async () => stateOf('orchard').state === 'untouched',
@@ -184,6 +187,18 @@ await suite('rig roll', async s => {
     // Move origin's main back one commit behind the rig's back: a stale tracking ref would still say pushed.
     breaks: async () => { const bare = join(tmp, 'remotes', 'beacon.git'); const old = git(['rev-parse', 'main~1'], bare); git(['update-ref', 'refs/heads/main', old], bare); return () => git(['update-ref', 'refs/heads/main', beaconSha], bare) }
   })
+  // Second-round A: the fetch must refresh the remote the repo has, whatever its name. With the
+  // remote called `github`, a rewind behind the rig's back must still turn `pushed` into `committed`.
+  await s.check('pushed is re-read from a remote not named origin (fetch names the repo’s remote)', {
+    assert: async () => {
+      git(['remote', 'rename', 'origin', 'github'], paths.beacon)
+      const bare = join(tmp, 'remotes', 'beacon.git'); const old = git(['rev-parse', 'main~1'], bare)
+      git(['update-ref', 'refs/heads/main', old], bare)
+      try { return stateOf('beacon').state === 'committed' } finally { git(['update-ref', 'refs/heads/main', beaconSha], bare); git(['remote', 'rename', 'github', 'origin'], paths.beacon); git(['fetch', '-q', 'origin'], paths.beacon) }
+    },
+    // Read without the fetch: the stale tracking ref still says pushed.
+    breaks: async () => { const f = join(rollDir, 'roll.json'); void f; fetchOff = true; return () => { fetchOff = false } }
+  })
   // Review finding 2: any commit since startedAt used to count as the roll's. Last week's sweep with
   // the same subject (dated before this roll) must not, and neither must the owner's unrelated commit
   // during the roll; and the sha reported is the tab's commit, not HEAD.
@@ -196,10 +211,11 @@ await suite('rig roll', async s => {
   })
   await s.check('an unrelated commit during the roll is not the roll’s, and the table names the tab’s sha, not HEAD', {
     assert: async () => {
+      const tab = kilnHead()
       const owner = commit(paths.kiln, 'notes.txt', 'owner: unrelated change')
       try {
         const r = stateOf('kiln')
-        if (r.state !== 'committed' || r.sha !== kilnSha.slice(0, 7)) throw new Error(JSON.stringify(r) + ' head=' + owner.slice(0, 7))
+        if (r.state !== 'committed' || r.sha !== tab) throw new Error(JSON.stringify(r) + ' head=' + owner.slice(0, 7))
         git(['reset', '-q', '--hard', 'HEAD~1'], paths.kiln)
         writeFileSync(join(paths.orchard, 'x.txt'), 'x'); git(['add', '-A'], paths.orchard); git(['commit', '-qm', 'owner: unrelated change'], paths.orchard)
         try { return stateOf('orchard').state === 'untouched' } finally { git(['reset', '-q', '--hard', 'HEAD~1'], paths.orchard) }
@@ -210,6 +226,17 @@ await suite('rig roll', async s => {
   await s.check('a repo with no remote and a commit is local only', {
     assert: async () => { commit(paths.lantern, 'biome.json', 'chore: adopt the shared formatter'); return stateOf('lantern').state === 'local only' },
     breaks: async () => { git(['remote', 'add', 'origin', join(tmp, 'remotes', 'beacon.git')], paths.lantern); return () => git(['remote', 'remove', 'origin'], paths.lantern) }
+  })
+  // Second-round C: a cherry-pick, rebase or `git am` on top keeps its old author date; the cutoff
+  // is the committer date, so the tab's commit underneath is still found.
+  await s.check('an owner commit on top with an old author date does not hide the tab’s commit', {
+    assert: async () => {
+      const tab = kilnHead()
+      writeFileSync(join(paths.kiln, 'pick.txt'), 'x'); git(['add', '-A'], paths.kiln); git(['commit', '-qm', 'owner: cherry-picked from 2020'], paths.kiln, ownerDates)
+      try { const r = stateOf('kiln'); if (r.state !== 'committed' || r.sha !== tab) throw new Error(JSON.stringify(r) + ' tab=' + tab); return true } finally { git(['reset', '-q', '--hard', 'HEAD~1'], paths.kiln) }
+    },
+    // A commit genuinely from before the roll (committer date old too) does stop the scan.
+    breaks: async () => { ownerDates = OLD; return () => { ownerDates = { GIT_AUTHOR_DATE: OLD.GIT_AUTHOR_DATE } } }
   })
   await s.check('a remote not named origin is still a remote: an unpushed commit is committed, not local only', {
     assert: async () => {
@@ -234,7 +261,35 @@ await suite('rig roll', async s => {
   // Review findings 4 and 5. The control is the loose parser that shipped in 28a3c1f, copied here:
   // any mention named a slug (and `-` before it let a longer slug match), and SKIPPED anywhere on a
   // line marked it skipped.
+  // Second-round B: a SKIPPED line over a real roll commit is a contradiction the gate names, never
+  // a pass. kiln has an unpushed roll commit; a SKIPPED line for it must not read as skipped.
+  await s.check('a SKIPPED line over a repo that has a roll commit is a contradiction, not skipped', {
+    assert: async () => {
+      const f = join(rollDir, 't1', 'REPORT.md'); const t = readFileSync(f, 'utf8')
+      writeFileSync(f, t + '- kiln: SKIPPED — changed my mind\n')
+      try {
+        const r = stateOf('kiln')
+        if (r.state !== 'contradiction' || r.sha !== kilnHead()) throw new Error(JSON.stringify(r))
+        const fc = finishChecks(rollDir, { fetch: false })
+        return fc.checks.some(c => c.name.startsWith('kiln') && !c.ok && /SKIPPED but/.test(c.detail))
+      } finally { writeFileSync(f, t) }
+    },
+    // Without the roll commit the same line is an honest SKIPPED.
+    breaks: async () => { git(['commit', '-q', '--amend', '--reset-author', '-m', 'chore: unrelated'], paths.kiln); return () => git(['commit', '-q', '--amend', '--reset-author', '-m', 'chore: adopt the shared formatter'], paths.kiln) }
+  })
+  // Second-round D: `- Beacon: SKIPPED` means beacon.
   const { reportLines, namedIn } = await import('../src/roll.js')
+  const legacyLines = (text) => { const out = new Map(); for (const line of (text || '').split('\n')) { const m = line.match(/^\s*[-*]\s*`?([A-Za-z0-9._-]+)`?\s*:\s*(done|SKIPPED)\b/i); if (m) out.set(m[1], { state: m[2].toUpperCase() === 'SKIPPED' ? 'skipped' : 'done' }) } return out }
+  let linesFn = reportLines
+  await s.check('a capitalised slug on a report line still names the lower-case slug', {
+    assert: async () => { const l = linesFn('- Beacon: SKIPPED — busy\n- Lantern: done abc1234\n'); return l.get('beacon')?.state === 'skipped' && l.get('lantern')?.state === 'done' },
+    breaks: async () => { linesFn = legacyLines; return () => { linesFn = reportLines } }
+  })
+  let capLine = '- Beacon: SKIPPED — busy\n'
+  await s.check('namedIn and skippedIn see the capitalised line too', {
+    assert: async () => namedIn(capLine, ['beacon']).has('beacon') && skippedIn(capLine).has('beacon'),
+    breaks: async () => { capLine = '- Beacon SKIPPED — busy\n'; return () => { capLine = '- Beacon: SKIPPED — busy\n' } }
+  })
   const legacyNamed = (text, slugs) => new Set(slugs.filter(s => new RegExp('(^|[\\s`*-])' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=[\\s`:*,.)]|$)', 'm').test(text || '')))
   const legacySkipped = (text) => { const out = new Set(); for (const line of (text || '').split('\n')) { const m = line.match(/^\s*[-*]?\s*`?([A-Za-z0-9._-]+)`?\s*:\s*SKIPPED\b/i) || (/\bSKIPPED\b/.test(line) && line.match(/^\s*[-*]\s*`?([A-Za-z0-9._-]+)`?/)); if (m) out.add(m[1]) } return out }
   let named = namedIn, skippedFn = skippedIn
@@ -343,6 +398,14 @@ await suite('rig roll', async s => {
       return run[1].includes(`--add-dir ${paths.lantern}`)
     },
     breaks: async () => { runUp = (pane, extra = []) => realRunUp(pane, [...extra, '--launch', 'codex --model x']); return () => { runUp = realRunUp } }
+  })
+  // Second-round E: the launch line is typed into a shell; a path with a space must be quoted.
+  const { addDirs } = await import('../src/commands/roll.js')
+  const legacyAddDirs = (cmd, repos) => /^\s*claude(\s|$)/.test(cmd) ? repos.slice(1).map(r => ` --add-dir ${r.path}`).join('') : ''
+  let add = addDirs
+  await s.check('--add-dir paths are shell-quoted, so a repo path with a space stays one argument', {
+    assert: async () => add('claude --effort low', [{ path: '/a/first' }, { path: '/a/mill house' }, { path: '/a/plain' }]) === " --add-dir '/a/mill house' --add-dir /a/plain",
+    breaks: async () => { add = legacyAddDirs; return () => { add = addDirs } }
   })
   // Review finding 3: a tab with one of the roll's ids already open belongs to someone else; a
   // second set of same-named tabs would let `down` on either roll close both.

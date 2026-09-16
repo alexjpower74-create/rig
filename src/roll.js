@@ -225,13 +225,15 @@ export function isDirty (repo) {
 
 /**
  * The newest commit on HEAD that belongs to this roll. When the brief has a commit subject, the
- * commit must carry it AND be dated on or after `startedAt`; without a subject, the date alone.
+ * commit must carry it AND be committed on or after `startedAt`; without a subject, the date alone.
  * The scan stops at the first commit older than the roll, so last week's sweep with the same
  * subject, or the owner's unrelated commit during the roll, is never reported as the tab's work.
+ * Committer date, not author date: a cherry-pick, rebase or `git am` on top keeps its old author
+ * date and would otherwise stop the scan before the tab's commit.
  */
 export function rollCommit (repo, startedAt, commitSubject) {
   const since = Math.floor(new Date(startedAt).getTime() / 1000)
-  const r = tryGit(['log', '-n', '500', '--format=%H%x09%at%x09%s'], repo)
+  const r = tryGit(['log', '-n', '500', '--format=%H%x09%ct%x09%s'], repo)
   if (!r.ok || !r.out) return null
   for (const line of r.out.split('\n')) {
     const [sha, at, ...rest] = line.split('\t')
@@ -255,7 +257,8 @@ export function reportLines (reportText) {
     const m = line.match(/^\s*[-*]\s*`?([A-Za-z0-9._-]+)`?\s*:\s*(done|SKIPPED)\b\s*(?:`?([0-9a-f]{7,40})`?)?\s*(.*)$/i)
     if (!m) continue
     const state = m[2].toUpperCase() === 'SKIPPED' ? 'skipped' : 'done'
-    out.set(m[1], { state, sha: m[3] ? m[3].slice(0, 7) : null, note: m[4].replace(/^[—–-]\s*/, '').trim() })
+    // Slugs are lower-case by construction; a tab that writes `Beacon:` still means beacon.
+    out.set(m[1].toLowerCase(), { state, sha: m[3] ? m[3].slice(0, 7) : null, note: m[4].replace(/^[—–-]\s*/, '').trim() })
   }
   return out
 }
@@ -268,26 +271,33 @@ export function skippedIn (reportText) {
 /** Slugs the report accounts for: a done or SKIPPED line of their own. */
 export function namedIn (reportText, slugs) {
   const lines = reportLines(reportText)
-  return new Set(slugs.filter(s => lines.has(s)))
+  return new Set(slugs.filter(s => lines.has(s.toLowerCase())))
 }
 
 /**
- * One repo's state: missing | skipped | in progress | committed | pushed | local only | untouched.
+ * One repo's state: missing | contradiction | skipped | in progress | committed | pushed | local only | untouched.
  * `fetch: true` refreshes origin first, so `pushed` is what the remote says, not what a stale
  * tracking ref remembers.
  */
 export function repoState (entry, { startedAt, commitSubject, skipped, fetch = true }) {
   const { slug, path } = entry
   if (!existsSync(path)) return { slug, path, state: 'missing', sha: null }
+  const c = rollCommit(path, startedAt, commitSubject)
+  const skip = skipped.has(slug.toLowerCase())
+  // The report and the repo are two witnesses; a repo ends the roll in exactly one state. A SKIPPED
+  // line over a real roll commit is a contradiction the gate names, not a pass on either account.
+  if (skip && c) return { slug, path, state: 'contradiction', sha: short(c.sha), subject: c.subject }
   // A repo the tab SKIPped was never edited by the roll, so its dirt is not the roll's: the brief
   // tells the tab to SKIP a dirty tree rather than touch it, and the gate has to accept that answer.
-  if (skipped.has(slug)) return { slug, path, state: 'skipped', sha: null }
+  if (skip) return { slug, path, state: 'skipped', sha: null }
   if (isDirty(path)) return { slug, path, state: 'in progress', sha: null }
-  const c = rollCommit(path, startedAt, commitSubject)
   if (c) {
+    const remote = remoteName(path)
+    if (!remote) return { slug, path, state: 'local only', sha: short(c.sha), subject: c.subject }
     const head = remoteHead(path)
-    if (!head) return { slug, path, state: 'local only', sha: short(c.sha), subject: c.subject }
-    if (fetch) tryGit(['fetch', '--quiet', 'origin'], path)
+    // Refresh the remote the repo actually pushes to; `origin` by name would fail silently on a
+    // remote called anything else and leave `pushed` to a stale tracking ref.
+    if (fetch) tryGit(['fetch', '--quiet', remote], path)
     const pushed = tryGit(['merge-base', '--is-ancestor', c.sha, head], path).ok
     return { slug, path, state: pushed ? 'pushed' : 'committed', sha: short(c.sha), subject: c.subject, remote: head }
   }
