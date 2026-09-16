@@ -64,8 +64,9 @@ is now the tool's, and each way the night's numbers lied is now refused.
   down` closes only this roll's tabs.
 
 ### Fixes
-- **Per-project worktree dir.** Every project's QA tree lived in one directory; now each project has
-  its own, and each run its own.
+- **Per-project worktree dir.** Every project's worktrees lived under one `../.rig-worktrees`; now
+  each project has `../.rig-worktrees/<repo dir name>`, and each QA run its own slot. A 2.0 config
+  holding the old literal reads as unset and becomes per-repo; any other path is honoured as is.
 - **Unborn HEAD.** `rig init --hook` in a fresh repo installed a guard that could not survive the
   first commit: it asked git for the current branch, and `git rev-parse --abbrev-ref HEAD` throws
   before a repo has one. Reproduced from the code, not seen on the night. The guard now reads the

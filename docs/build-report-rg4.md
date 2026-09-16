@@ -93,3 +93,5 @@ rg1's notes: the runner already picks up `test/qa-finish.test.js` (it globs `tes
 package.json edit needed. `test/workflow.test.js` untouched; the lead applies rg1's patch at merge.
 Verified after the fixes: `rig qa|roll|finish --help` print the new text, `npm test` exit 0
 (7 files), `check-no-personal-data` clean.
+Follow-up from the lead: USAGE.roll carries `[--no-fetch]` on status and finish (rg3 1f599ea); README and
+CHANGELOG say a 2.0 config's literal `../.rig-worktrees` reads as unset and becomes per-repo (rg2 fix 1). DONE.

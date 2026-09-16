@@ -40,8 +40,8 @@ const USAGE = {
   --wrap "<message>" runs \`wrap\` after a pass and only then`,
   rule:   `rig rule "<the rule, in one sentence>"`,
   roll:   `rig roll up <brief.md>   [--dir <rollsDir>] [--no-launch] [--dry-run] [--launch "<cmd>"]
-rig roll status [<rollDir>]   (newest roll by default; exit 1 while any repo is in progress)
-rig roll finish [<rollDir>]   every repo reported, clean and pushed; writes ROLL-FINISH.md; jots
+rig roll status [<rollDir>]   [--no-fetch]  newest roll by default; exit 1 while any repo is in progress
+rig roll finish [<rollDir>]   [--no-fetch]  every repo reported, clean and pushed; writes ROLL-FINISH.md; jots
 rig roll down   [<rollDir>]   [--force]  closes only this roll's tabs; makes and removes no worktrees`,
   down:   `rig down [--force] [--discard-reports]`
 }

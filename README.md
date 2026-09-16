@@ -121,6 +121,11 @@ was reset is printed by path. `--fresh` also removes ignored files (`git clean -
 refuse is to reset a tree that is not a detached QA worktree: a branch checkout sitting in a slot is
 left alone and the run takes the next one.
 
+Worktrees themselves are per project too: the default is `../.rig-worktrees/<repo dir name>`, written
+into `.rig/config.json` by `rig init`. A `.rig/config.json` written by rig 2.0 holds `../.rig-worktrees`;
+3.0 reads that as the per-repo default and `rig init` rewrites it. Set any other path to keep a shared
+directory on purpose.
+
 ## `rig qa` is also your scratch tree
 
 Its name says grading, which undersells it. It makes a detached worktree pinned to an exact commit
