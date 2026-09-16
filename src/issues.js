@@ -67,12 +67,14 @@ export function openSliceIssues (root, plan, cfg = {}) {
   if (cfg.issues === false) return { ran: false, why: 'issues off (--no-issues)', issues, lines }
 
   const avail = ghAvailable(root)
+  const said = new Set()
   // A plan-declared number is a fact we can record without gh; the url is filled in when gh is here.
   for (const agent of plan.agents) {
     if (issues[agent.id] || !agent.issue) continue
     const view = avail.ok ? json(['issue', 'view', String(agent.issue), '--json', 'number,url'], root) : null
     issues[agent.id] = { number: agent.issue, url: view?.url ?? null }
     lines.push(`  ${agent.id}  issue #${agent.issue} (from the plan)${view?.url ? '  ' + view.url : ''}`)
+    said.add(agent.id)
   }
   if (!avail.ok) {
     if (lines.length) saveIssues(root, issues)
@@ -81,6 +83,7 @@ export function openSliceIssues (root, plan, cfg = {}) {
   }
 
   for (const agent of plan.agents) {
+    if (said.has(agent.id)) continue
     if (issues[agent.id]) { lines.push(`  ${agent.id}  issue #${issues[agent.id].number} (recorded)${issues[agent.id].url ? '  ' + issues[agent.id].url : ''}`); continue }
     const open = findOpenIssue(root, agent.id)
     if (open) {
