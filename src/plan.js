@@ -107,20 +107,22 @@ export function parsePlan (text) {
 }
 
 /**
- * The plan's negative-control command: a line under Checks that starts "Negative controls:" (or
- * "Negative-control command for this repo:", the wording plans already use). `rig finish` refuses
+ * The plan's negative-control command: a line under Checks that starts exactly "Negative controls:"
+ * or "Negative-control command [for this repo]:". Any other sentence beginning "Negative controls …:"
+ * is prose (the CLAUDE.md rule "Negative controls are re-run after any formatter, on the new sha: …"
+ * is copied into plans) and once became the shell command `rig finish` ran. `rig finish` refuses
  * until that command is recorded green on the sha being finished (`cfg.negativeCommand` wins when
- * set). When the value holds a backticked span, the span is the command and the rest is prose
- * ("`npm run demo` must still print one VOID"); otherwise the whole value is. `null` when unnamed.
+ * set). A `<placeholder>` value is `null` even when it holds a backticked example; otherwise the
+ * backticked span, when there is one, is the command and the rest is prose. `null` when unnamed.
  */
 export function negativeCommand (checksBody) {
   for (const raw of (checksBody || '').split('\n')) {
-    const m = raw.replace(/^\s*[-*]\s+/, '').match(/^negative[- ]controls?[^:`]*:\s*(.+?)\s*$/i)
-    if (m) {
-      const span = m[1].match(/`([^`]+)`/)
-      const cmd = (span ? span[1] : m[1]).trim()
-      if (cmd && !/^<.*>$/.test(cmd)) return cmd
-    }
+    const m = raw.replace(/^\s*[-*]\s+/, '').match(/^negative(?: controls?|-control command(?: for this repo)?):\s*(.+?)\s*$/i)
+    if (!m) continue
+    if (/^<.*>$/.test(m[1])) continue
+    const span = m[1].match(/`([^`]+)`/)
+    const cmd = (span ? span[1] : m[1]).trim()
+    if (cmd) return cmd
   }
   return null
 }
@@ -141,9 +143,20 @@ export function parseSections (lines) {
   return out.map(s => ({ heading: s.heading, body: s.body.join('\n').trim() }))
 }
 
-/** Bullet lines of a section body, without their markers. */
+/**
+ * Bullet items of a section body, without their markers. An indented line under a bullet is the
+ * same bullet wrapped, and is joined to it with a space: rules in PLAN.md are wrapped at 100
+ * columns, and every brief and FINISH.md used to carry only the first physical line ("Never run"
+ * with nothing after it).
+ */
 export function bullets (body) {
-  return (body || '').split('\n').map(l => l.match(/^\s*[-*]\s+(.+)$/)?.[1]?.trim()).filter(Boolean)
+  const out = []
+  for (const l of (body || '').split('\n')) {
+    const item = l.match(/^\s*[-*]\s+(.+)$/)
+    if (item) { out.push(item[1].trim()); continue }
+    if (out.length && /^\s+\S/.test(l)) out[out.length - 1] += ' ' + l.trim()
+  }
+  return out
 }
 
 /**

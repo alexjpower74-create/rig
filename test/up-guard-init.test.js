@@ -517,6 +517,59 @@ await suite('rig 3.0: up, guard, init', async s0 => {
   })
 
   // -------------------------------------------------------------------------------------------
+  // Second-round review findings (docs/review-rg2.md), one check each.
+
+  // A. A prose bullet beginning "Negative controls …:" above the real line is not the command.
+  //    Red when: the real line is removed — then the prose tail is the only candidate, and null wins.
+  let checksBody = '- Negative controls are re-run after any formatter, on the new sha: a reformat un-anchors the check\n- Negative controls: npm run demo'
+  await s.check('review A: the "Negative controls are re-run after any formatter…:" rule above the real line is prose, not the command', {
+    assert: async () => negativeCommand(checksBody) === 'npm run demo',
+    breaks: async () => { checksBody = checksBody.split('\n')[0]; return () => { checksBody += '\n- Negative controls: npm run demo' } }
+  })
+
+  // B. A backticked example inside a <placeholder> stays a placeholder. Red when: the angle brackets go.
+  let placeholder = 'Negative controls: <e.g. `npm run demo`>'
+  await s.check('review B: "Negative controls: <e.g. `npm run demo`>" is a placeholder and yields null', {
+    assert: async () => negativeCommand(placeholder) === null,
+    breaks: async () => { placeholder = 'Negative controls: e.g. `npm run demo`'; return () => { placeholder = 'Negative controls: <e.g. `npm run demo`>' } }
+  })
+
+  // C. Detached HEAD inside a slice worktree: the directory names the slice, so the hook's bare
+  //    `rig guard --staged` still enforces. Red when: the staged file is inside the slice.
+  git(['checkout', '-q', '--detach'], c1wt)
+  let detWtStray = 'README.md'
+  await s.check('review C: detached HEAD inside <worktreeDir>/c1, `rig guard --staged` with no --agent still refuses a stray file', {
+    assert: async () => {
+      git(['reset', '-q'], c1wt)
+      writeFileSync(join(c1wt, 'README.md'), '# edited outside the slice, detached\n')
+      mkdirSync(join(c1wt, 'app'), { recursive: true }); writeFileSync(join(c1wt, 'app', 'x.js'), '2\n')
+      git(['add', detWtStray], c1wt)
+      const r = rig(['guard', '--staged'], c1wt)
+      git(['reset', '-q'], c1wt)
+      if (headState(c1wt) !== 'detached') throw new Error('worktree is not detached')
+      if (/detached HEAD, no slice named/.test(r.stdout)) throw new Error('slice not inferred from the directory: ' + r.stdout)
+      return r.status === 1 && /REFUSED/.test(r.stderr) && r.stderr.includes(detWtStray)
+    },
+    breaks: async () => { detWtStray = 'app/x.js'; return () => { detWtStray = 'README.md' } }
+  })
+  git(['checkout', '-q', 'rig/c1'], c1wt)
+
+  // D (from rg4's review). Wrapped rules reach the brief whole. Red when: the continuation is not indented
+  //    (then it is a paragraph, not the bullet, and the rule ends at the line break).
+  const { bullets } = await import('../src/plan.js')
+  let indent = '  '
+  await s.check('review D: a "must not happen" rule wrapped onto an indented line reaches the brief whole', {
+    assert: async () => {
+      const text = PLAN().replace('- Never announce a winner twice.', `- Never run\n${indent}wrap or sync unless --wrap was passed.`)
+      const plan = parsePlan(text)
+      if (bullets('- a\n  b\n- c').join('|') !== 'a b|c') throw new Error(JSON.stringify(bullets('- a\n  b\n- c')))
+      const brief = briefFor(plan, plan.agents[0], { branch: 'rig/c1', path: '/x', planPath: 'PLAN.md', reportPath: 'docs/build-report-c1.md' })
+      return plan.mustNotRules[0] === 'Never run wrap or sync unless --wrap was passed.' && brief.includes('- Never run wrap or sync unless --wrap was passed.')
+    },
+    breaks: async () => { indent = ''; return () => { indent = '  ' } }
+  })
+
+  // -------------------------------------------------------------------------------------------
   // Tabs stay in the current workspace. herdr is the stub; HERDR_PANE_ID names workspace w7.
   process.env.HERDR_ENV = '1'; process.env.HERDR_PANE_ID = 'w7:p0'
   const herdrCalls = () => (existsSync(logs.herdr) ? readFileSync(logs.herdr, 'utf8') : '').split('\n').filter(Boolean)
