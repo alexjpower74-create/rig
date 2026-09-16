@@ -185,7 +185,8 @@ test('--help prints usage and creates nothing; --run with no command runs nothin
 test('a signal reaches the command running in the worktree; the lock is released only after it is gone (review 2)', async () => {
   const repo = repoAt('signal')
   const marker = join(repo, '.worktrees', 'qa', 'marker')
-  const bg = rigBg('qa', repo, ['HEAD', '--run', 'sleep 2; touch marker'])
+  // A program the command started, followed by anything: bash alone dying would leave `sh` running.
+  const bg = rigBg('qa', repo, ['HEAD', '--run', "sh -c 'sleep 2; touch marker'; true"])
   const lock = qaLockPath(join(repo, '.worktrees', 'qa'))
   for (let i = 0; i < 100 && !existsSync(lock); i++) await sleep(50)
   await sleep(300) // the shell is running by now
@@ -195,6 +196,27 @@ test('a signal reaches the command running in the worktree; the lock is released
   assert.ok(!existsSync(lock))
   await sleep(2500)
   assert.ok(!existsSync(marker), 'the orphaned command must not keep writing into a tree the lock says is free')
+})
+
+const twoAtOnce = repo => Promise.all([0, 1].map(() => new Promise(resolve => {
+  const c = spawn(process.execPath, ['--input-type=module', '-e',
+    `import('${join(RIG, 'src', 'commands', 'qa.js')}').then(m => m.default(process.argv.slice(1)))`, '--', 'HEAD', '--run', 'sleep 1'],
+  { cwd: repo, encoding: 'utf8' })
+  let out = ''
+  c.stdout.on('data', d => { out += d }); c.stderr.on('data', d => { out += d })
+  c.on('exit', code => resolve({ code, out: plain(out) }))
+})))
+
+test('two runs that both see the same stale lock land on qa and qa-2, and the winner’s lock is released (second review 2)', async () => {
+  const repo = repoAt('stale-race')
+  rig('qa', repo, ['HEAD', '--run', 'true'])
+  writeFileSync(qaLockPath(join(repo, '.worktrees', 'qa')), '999999\n')
+  const outs = await twoAtOnce(repo)
+  assert.deepEqual(outs.map(o => o.code), [0, 0], outs.map(o => o.out).join('\n----\n'))
+  const slots = outs.map(o => o.out.match(/QA worktree (qa(?:-\d+)?) pinned/)?.[1]).sort()
+  assert.deepEqual(slots, ['qa', 'qa-2'], outs.map(o => o.out).join('\n----\n'))
+  assert.equal(outs.filter(o => /removed a stale lock/.test(o.out)).length, 1, 'exactly one run took the stale lock over')
+  assert.ok(!existsSync(qaLockPath(join(repo, '.worktrees', 'qa'))), 'the winner released its own lock')
 })
 
 test('two runs started in the same instant on a repo with no qa worktree take different slots (review 3)', async () => {

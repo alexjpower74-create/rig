@@ -130,14 +130,22 @@ function holdLock (wt) {
       const child = running
       if (!child || child.exitCode !== null || child.signalCode !== null) { wt.release(); process.exit(code) }
       child.once('exit', () => { wt.release(); process.exit(code) })
-      child.kill(sig)
-      setTimeout(() => { try { child.kill('SIGKILL') } catch {} }, 5000).unref()
+      // The whole process group, not just the bash wrapper: bash does not pass SIGTERM on to a
+      // foreground child, so signalling bash alone left `npx playwright test` running in a tree the
+      // lock had just called free.
+      signalGroup(child, sig)
+      setTimeout(() => signalGroup(child, 'SIGKILL'), 5000).unref()
     })
   }
 }
 
 /** The command currently running in the QA worktree, so a signal can reach it. */
 let running = null
+
+/** Signal the child's process group (it is spawned as a group leader); fall back to the pid. */
+function signalGroup (child, sig) {
+  try { process.kill(-child.pid, sig) } catch { try { child.kill(sig) } catch {} }
+}
 
 const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative'])
 
@@ -186,7 +194,8 @@ export function runShell (cmd, { cwd, env, shell, mapExit = exitCodeFor } = {}) 
     ? [bash, bash.endsWith('bash') ? ['-o', 'pipefail', '-c', cmd] : ['-c', cmd]]
     : ['/bin/sh', ['-c', cmd]]
   return new Promise(resolve => {
-    const child = spawn(file, argv, { cwd, env, stdio: 'inherit' })
+    // Its own process group, so a signal can reach everything the command started, not just bash.
+    const child = spawn(file, argv, { cwd, env, stdio: 'inherit', detached: process.platform !== 'win32' })
     running = child
     child.on('exit', (code, signal) => { running = null; resolve(mapExit(code, signal)) })
     child.on('error', () => resolve(127))

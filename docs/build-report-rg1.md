@@ -142,3 +142,23 @@ was shown red once by reverting only that fix (files restored after).
 Also, from the lead's notes: `qaSlots(root, cfg)` exported from `src/worktrees.js`, returning
 `[{ id, path, lock: { live, pid } }]` for every `qa`/`qa-N` under the worktree base, for `down`.
 The `Negative controls: <cmd>` PLAN.md line and the `workflow.test.js` patch remain the lead's.
+
+## Second-pass review findings acted on
+
+1. **A forwarded signal reached only the bash wrapper** — FIXED. `runShell` spawns the command
+   as its own process group (`detached: true`) and the handler signals the group
+   (`process.kill(-pid, sig)`, SIGKILL to the group after 5 s). The test's command is now
+   `sh -c 'sleep 2; touch marker'; true`, a program the command started followed by another
+   command, and it goes red when only bash is signalled: the orphan writes the marker.
+2. **Two runs seeing the same stale lock both took the slot** — FIXED. `takeOverStaleLock`
+   claims an exclusive takeover file named by the dead pid (`<id>.lock.takeover-<pid>`, `wx`),
+   re-reads the lock to confirm the same dead pid is still there, and only then removes it; the
+   loser reads "taken while we looked" and moves to the next slot. A takeover file left by a
+   crashed winner is itself taken over when its pid is dead. Test: a dead-pid lock in place, two
+   runs at once → `qa` and `qa-2`, exactly one "removed a stale lock", the winner's lock released.
+   Red by reverting to read-then-remove: 1 of 3 runs (the window is milliseconds); the fixed code
+   was green 3 of 3.
+
+Notes for the lead: the pid-reuse case after a reboot is in my `readQaLock`; `qaSlots` already
+returns the lock path, so `down` can print it. Writing `pid starttime` is a small follow-up if
+wanted. The `%ct` cross-machine clock note and the untracked `docs/FINISH.md` are not rg1's files.
