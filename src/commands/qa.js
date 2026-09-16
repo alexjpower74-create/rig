@@ -1,47 +1,128 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { mainRoot, loadConfig, currentBranch } from '../config.js'
-import { ensureDetachedWorktree } from '../worktrees.js'
+import { acquireQaWorktree, porcelainLines } from '../worktrees.js'
+import { loadPlan } from '../plan.js'
 import { git } from '../sh.js'
 import { recordQa } from '../qalog.js'
 
 // Never grade the shared tree. Agents are mid-edit in theirs by definition, so a number taken
 // there measures a half-finished checkout. QA gets its own worktree, detached at an exact commit,
 // on its own port, so every number you report can be traced to a sha.
+//
+// And `rig qa` never refuses. A QA worktree holds nobody's work, so it is reset and cleaned before
+// every pin, and each run takes a worktree no other run is using. What the clean touched, and what
+// the tests left behind, is printed by path and recorded: a tree that is not clean right after
+// `npm test` is a defect, and `rig finish` will say so.
+
+export const USAGE = `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--port <n>] [--fresh]
+
+  <ref>              the commit to pin (a sha, a branch, a tag); defaults to the current branch of
+                     the MAIN checkout. Give the sha: "rig qa" alone grades main, not your slice.
+  --run "<cmd>"      the test command (default: devCommand in .rig/config.json); its exit status is
+                     recorded as kind "test" and becomes rig qa's own exit status
+  --negative "<cmd>" the negative-control command (default: negativeCommand in the config or the
+                     plan's "Negative controls:" line); recorded as kind "negative" on the same sha
+  --port <n>         PORT for the command (default: qaPort, +1 per extra QA worktree in use)
+  --fresh            clean ignored files too (git clean -fdx): node_modules is reinstalled
+  --help, -h         this text
+
+The worktree is <worktreeDir>/qa when free, else qa-2, qa-3…; a run holds it with .rig/qa.lock.
+Tracked files the clean reset and files the run dirtied are printed by path and recorded in
+.rig/qa-history.jsonl, which \`rig finish\` reads.
+`
 
 export default async function qa (args) {
+  if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); return }
+  for (const flag of ['--run', '--negative']) {
+    if (args.includes(flag) && !argOf(args, flag)) {
+      console.error(`rig qa: ${flag} needs a command, e.g. ${flag} "npm test". Nothing was run.`)
+      process.exit(2)
+    }
+  }
   const root = mainRoot()
   const cfg = loadConfig(root)
   const ref = resolveRef(args, currentBranch(root))
-  const port = Number(argOf(args, '--port') || cfg.qaPort)
+  const fresh = args.includes('--fresh')
 
-  const wt = ensureDetachedWorktree(root, cfg, 'qa', ref)
+  const wt = acquireQaWorktree(root, cfg, ref, { fresh })
+  const port = Number(argOf(args, '--port') || (Number(cfg.qaPort) + wt.index))
+  holdLock(wt)
+  const full = git(['rev-parse', 'HEAD'], wt.path)
   const sha = git(['rev-parse', '--short', 'HEAD'], wt.path)
   const subject = git(['log', '-1', '--pretty=%s'], wt.path)
 
-  console.log(`QA worktree pinned to ${ref} @ ${sha}`)
+  for (const n of wt.notes) console.log(`note: ${n}`)
+  console.log(`QA worktree ${wt.id} pinned to ${ref} @ ${sha}`)
   console.log(`  ${subject}`)
   console.log(`  ${wt.path}`)
   console.log(`  port ${port}`)
+  if (wt.reset.length) console.log(`  reset ${wt.reset.length} tracked file${wt.reset.length === 1 ? '' : 's'}: ${wt.reset.join(', ')} (a test wrote it)`)
+  if (wt.removed.length) console.log(`  removed ${wt.removed.length} untracked path${wt.removed.length === 1 ? '' : 's'}: ${wt.removed.join(', ')}${fresh ? ' (--fresh: ignored files too)' : ''}`)
   console.log(`\nEvery number you report from here belongs to ${sha}. Say the sha when you report it.`)
 
-  if (args.includes('--run') && !argOf(args, '--run')) {
-    console.error('rig qa: --run needs a command, e.g. --run "npm test". Nothing was run.')
-    process.exit(2)
-  }
   const cmd = argOf(args, '--run') || cfg.devCommand
-  if (!cmd) {
+  const negative = argOf(args, '--negative') || cfg.negativeCommand || planNegative(root, cfg)
+  if (!cmd && !negative) {
     console.log('\nNo dev command configured. Set "devCommand" in .rig/config.json or pass --run "<cmd>".')
     return
   }
-  console.log(`\n$ ${cmd}   (PORT=${port})\n`)
-  const code = await runShell(cmd, { cwd: wt.path, env: { ...process.env, PORT: String(port), RIG_QA_SHA: sha } })
-  recordQa(root, { ref, sha: git(['rev-parse', 'HEAD'], wt.path), short: sha, cmd, exit: code })
-  console.log(`\nrig qa: exit ${code} at ${sha}${code === 0 ? '' : '  (NOT green)'}  — recorded in .rig/qa-history.jsonl`)
-  process.exit(code)
+
+  const env = { ...process.env, PORT: String(port), RIG_QA_SHA: sha }
+  let exit = 0
+  const seen = new Set()
+  const runs = [['test', cmd], ['negative', negative]].filter(([, c]) => c)
+  for (const [kind, c] of runs) {
+    console.log(`\n$ ${c}   (PORT=${port}${kind === 'negative' ? ', negative control' : ''})\n`)
+    const code = await runShell(c, { cwd: wt.path, env })
+    const left = dirtiedBy(wt.path)
+    const dirtied = left.tracked.filter(p => !seen.has(p))
+    const untracked = left.untracked.filter(p => !seen.has(p))
+    ;[...dirtied, ...untracked].forEach(p => seen.add(p))
+    recordQa(root, { kind, ref, sha: full, short: sha, cmd: c, exit: code, dirtied, untracked, worktree: wt.id })
+    console.log(`\nrig qa: ${kind} exit ${code} at ${sha}${code === 0 ? '' : '  (NOT green)'}  — recorded in .rig/qa-history.jsonl`)
+    if (dirtied.length || untracked.length) console.log(dirtyMessage(dirtied, untracked))
+    if (exit === 0) exit = code
+  }
+  process.exit(exit)
 }
 
-const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run'])
+/**
+ * What a run left behind, by path: `tracked` files it modified or deleted and `untracked` files
+ * it created. The lock and the run's own `.rig/` are not the tests' doing.
+ */
+export function dirtiedBy (path) {
+  const lines = porcelainLines(path).filter(l => !l.slice(3).startsWith('.rig/'))
+  const pathOf = l => { const p = l.slice(3); return p.includes(' -> ') ? p.split(' -> ')[1] : p }
+  return {
+    tracked: lines.filter(l => !l.startsWith('??')).map(pathOf),
+    untracked: lines.filter(l => l.startsWith('??')).map(pathOf)
+  }
+}
+
+export function dirtyMessage (tracked, untracked = []) {
+  const n = (k, w) => `${k.length} ${w}${k.length === 1 ? '' : 's'}`
+  const parts = []
+  if (tracked.length) parts.push(`dirtied ${n(tracked, 'tracked file')}: ${tracked.join(', ')}`)
+  if (untracked.length) parts.push(`left ${n(untracked, 'untracked file')}: ${untracked.join(', ')}`)
+  return `the tests ${parts.join(' and ')} — untrack it (git rm --cached) or have the test restore it; check-no-personal-data and \`rig finish\` see a dirty tree`
+}
+
+/** The plan's negative-control command, if rg2's parser found one; null without a plan. */
+function planNegative (root, cfg) {
+  try { return loadPlan(join(root, cfg.plan)).negativeCommand || null } catch { return null }
+}
+
+/** Release the run lock however this process ends: normal exit, ctrl-c, or a kill. */
+function holdLock (wt) {
+  process.on('exit', wt.release)
+  for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+    process.on(sig, () => { wt.release(); process.exit(code) })
+  }
+}
+
+const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative'])
 
 /**
  * The commit to pin. `--ref` and `--branch` win; otherwise the first bare argument; otherwise the
