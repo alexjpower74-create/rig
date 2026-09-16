@@ -123,3 +123,37 @@ the repos, never a memory of what an agent said.
 - `status` under tmux shows window presence only (no agent state), same as `rig status`.
 - Nothing outside my Owns list was touched. No review was requested yet (`rig review rg3` opens a tab;
   the plan's round-robin has rg4 reviewing rg3, which the lead schedules).
+
+## Review findings acted on (docs/review-rg3.md, fixed in 1f599ea)
+
+Graded: `rig qa 1f599ea --run "npm test && node test/roll.test.js"` → `rig roll: 27 passed, 0 failed,
+0 void, 0 unproven`, `rig qa: exit 0 at 1f599ea`. Scanner clean.
+
+1. **SKIPPED repo read as `in progress` — DONE.** `repoState` now returns `skipped` before the dirty
+   check. Red: a dirty-and-SKIPPED orchard with the SKIPPED line removed from the report → `in progress`.
+   Untracked files still count as dirt for a non-skipped repo (a tab's scratch file is exactly what
+   `finish` should see); the brief tells the tab to SKIP a tree it did not make dirty.
+2. **Any commit since start counted as the roll's — DONE, plan wording changed.** With a brief subject
+   the commit must carry it AND be dated ≥ `startedAt`; the scan stops at the first older commit.
+   Without a subject, date alone. Two checks: last week's sweep (same subject, dated 2020) →
+   `untouched`, red by moving `startedAt` back to 2019; an owner commit on top of the tab's → the tab's
+   sha in the table, and an owner-only commit → `untouched`, red by dropping the subject from roll.json.
+   The old "found by subject alone" check was removed: it encoded the defect.
+3. **Second roll with the same ids — DONE.** `up` refuses before writing anything when
+   `listWindows(session, ids)` is non-empty, naming the tabs. Red: the open tab relabelled `c1`.
+   `templates/ROLL.md` now says ids are workspace-wide labels and shows `lint1`/`lint2`, not `t1`.
+4. **"names every repo" satisfied by any mention — DONE.** `reportLines` parses only
+   `- <slug>: done [sha] …` / `- <slug>: SKIPPED …`; `namedIn` and `skippedIn` use it. Red: the loose
+   parser from 28a3c1f swapped in as the control (headings, `not started yet`, and `home-care-visits`
+   naming `visits` all pass under it).
+5. **`skippedIn` reads SKIPPED anywhere on the line — DONE.** Same fix and control as 4: `done … SKIPPED
+   the lint step` is done; `- Note: nothing was SKIPPED` names nothing.
+6. **Only the first repo trusted / project root — DONE.** Every repo after the first is `preTrust`ed and
+   appended as `--add-dir <path>` when the launch command starts with `claude`; another launcher (codex)
+   gets none, since the flag is Claude Code's. Red: `--launch "codex --model x"`. Not tried against a live
+   Claude Code, same as the review.
+7. **Remote not named `origin` read as no remote — DONE.** `remoteName` prefers `origin`, else the first
+   remote; `remoteHead` uses it. Red: the remote removed (→ `local only`).
+8. **UTC date in the roll name — DONE.** Local date, as `rig qa`'s history. No test (cosmetic).
+9. **`--no-fetch` undocumented — DONE.** In `USAGE` for `status` and `finish`; rg4's help text should carry
+   it: `rig roll status|finish [<rollDir>] [--no-fetch]`.
