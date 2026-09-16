@@ -1,60 +1,55 @@
-# Review — rg2, second round
+# Review — rg2 · Plan, up, guard, init (final)
 
-Reviewed the fix commits on main, `f52c760` (code and tests) and `6724471` (report), against the six
-findings of the first-round review and the "Review findings acted on" section of
-`docs/build-report-rg2.md`. Read only. The suite was run in a detached scratch worktree at main:
-`test/up-guard-init.test.js` → 23 passed, 0 failed, 0 void, 0 unproven, so every `breaks` control was
-seen red by the harness in that run.
+Confirmation pass on `60291fd` (merged into main at `31e42ce`), which acted on the second-round
+findings. Read only. Verified in a detached scratch worktree at main, never the shared tree:
 
-## The six findings
-
-1. **2.0 literal `../.rig-worktrees` reads as unset** — fixed (`src/config.js:80`). `rig init` re-saves the
-   resolved path (`src/commands/init.js:16-18`). Test `review 1` goes red when the config holds any other
-   explicit value, and would go red without the fix (the literal would be honoured). Confirmed.
-2. **PLAN.md wording and trailing prose** — fixed (`src/plan.js:117-122`); this repo's PLAN.md now also
-   uses the plain `Negative controls: npm run demo` form. Test `review 2` reads the live PLAN.md and goes
-   red when the backticked span is removed from the prose form. Confirmed, with two new edges below.
-3. **Detached HEAD vs unborn** — fixed (`headState`, `src/config.js:108-114`; `src/commands/guard.js:19-39`).
-   Test `review 3` stages a file outside c1 on a detached checkout and expects REFUSED; red when the file
-   is inside c1, and red without the fix (exit 0 "unborn"). Confirmed, with one gap below.
-4. **Issue reuse paging** — fixed (`src/issues.js:46`: open only, limit 200). The stub now pages like gh
-   and the test proves the stub pages before using it. Red when the open title stops matching; red
-   without the fix (open issue falls off the page of 30, c1 created twice). Confirmed.
-5. **`Issue:` inside Task** — fixed (`src/plan.js:91`). Red when the line is dropped (`issue` null); red
-   without the fix (task truncated). Confirmed. `Report:` inside Task still truncates, as in 2.0; not
-   in this finding, noted only.
-6. **Registry "once" control** — fixed. The control deletes the file between runs so `apps new`
-   legitimately runs twice; the stub is untouched and logs every call before deciding, so an
-   `ensureRegistry` that ignored `existsSync` would also be counted. Confirmed.
+- `test/up-guard-init.test.js`: 27 passed, 0 failed, 0 void, 0 unproven (every `breaks` control seen red).
+- `npm test`: 10 files green.
+- With the `src/plan.js` and `src/commands/guard.js` hunks of `60291fd` reverted in that worktree, the
+  same suite reports review A, B, C and D FAIL and the other 23 pass. Each new check fails without its
+  fix, not only under its own control.
 
 ## Second-round findings
 
-### A. The widened wording match turns a prose bullet into a command (src/plan.js:117)
-`/^negative[- ]controls?[^:`]*:\s*(.+?)\s*$/` now matches any Checks line that starts "Negative
-control(s) … :" and takes the tail after the first colon; the first match wins. Verified:
-`- Negative controls are re-run after any formatter, on the new sha: a reformat un-anchors the check`
-placed above the real line yields `a reformat un-anchors the check`, and `rig finish` would run that
-as the shell command. That sentence is the CLAUDE.md rule leads copy into plans. Check: accept only the
-two wordings named in the comment (`controls?:` and `-control command( for this repo)?:`), or when the
-value has no backticked span require it to look like a command (no sentence punctuation); add the
-prose bullet as a red case.
+### A. Prose bullet taken as the command — CONFIRMED FIXED
+`negativeCommand` (`src/plan.js:120`) now matches only `Negative controls:` and
+`Negative-control command [for this repo]:`. Probed: the CLAUDE.md sentence placed above the real line
+yields `npm run demo`; alone it yields `null`; this repo's live PLAN.md yields `npm run demo`. Test
+`review A` goes red when the real line is removed, and red with the fix reverted.
 
-### B. A backticked span inside a placeholder wins over the placeholder test (src/plan.js:120-122)
-The span is taken before `<...>` is checked, so `Negative controls: <e.g. \`npm run demo\`>` yields
-`npm run demo` (verified). The shipped template lost its backticks for exactly this reason, but a lead
-who writes their own placeholder, or an older plan made from the 2.0 template that still carries the
-backticked example, gets a command they never chose. Check: test `^<.*>$` on the raw value first, then
-take the span; add the backticked placeholder as a red case (expects `null`).
+### B. Backticked span inside a placeholder — CONFIRMED FIXED
+The raw value is tested for `<...>` before the span is taken (`src/plan.js:122`). Probed:
+`Negative controls: <e.g. \`npm run demo\`>` yields `null`. Test `review B` goes red when the angle
+brackets are dropped, and red with the fix reverted.
 
-### C. Detached HEAD inside a slice worktree still passes the hook unenforced (src/commands/guard.js:33-39)
-The slice is inferred from the branch only. A `git commit --amend` while resolving a rebase conflict,
-or an agent that checked out a sha in its worktree, runs the pre-commit hook on a detached HEAD in a
-directory that already names the slice (`<worktreeDir>/<id>`), and the guard prints "detached HEAD, no
-slice named" and exits 0. The first-round fix made `--agent` work there, but the hook never passes
-`--agent`. Check: infer the id from `process.cwd()` under `worktreePath(root, cfg, id)` before falling
-back to the branch; test by detaching inside a slice worktree, staging a stray file and running
-`rig guard --staged` with no `--agent`, expecting REFUSED (red when the file is inside the slice).
+### C. Detached HEAD inside a slice worktree unenforced — CONFIRMED FIXED
+`sliceFromCwd` (`src/commands/guard.js:92-102`) names the slice from the directory under
+`<worktreeDir>/<id>` before the branch is consulted; the plan is loaded in a try so a repo with no plan
+still gets the unborn and main early exits. Test `review C` detaches inside c1's worktree, stages a
+stray file and runs `rig guard --staged` with no `--agent`, expecting REFUSED; red when the staged
+file is inside c1, and red with the fix reverted.
 
-## For the lead
-- A and B are parser edges in rg2's own file; C touches guard.js, also rg2's. No other slice's files
-  are involved.
+### D. Wrapped rules reach the brief whole (rg4's finding, fixed in the same commit) — CONFIRMED FIXED
+`bullets` joins indented continuation lines. Test `review D` goes red when the continuation is not
+indented, and red with the fix reverted. Noted here because the commit carried it; it is rg4's line
+to close.
+
+No findings remain open for rg2.
+
+## History
+
+**Round one** (on `5bff511`, fixed in `f52c760`): six findings, all confirmed fixed in round two.
+1. The 2.0 literal `../.rig-worktrees` in a config kept repos sharing one worktree directory; it now
+   reads as unset and `rig init` re-saves the per-repo path.
+2. This repo's own negative-control wording did not parse, and trailing prose after a backticked
+   command broke it; both wordings parse and the span is taken.
+3. A detached HEAD was reported as unborn and `--agent` ignored there; `headState` tells them apart.
+4. Issue reuse asked gh for all states and paged out past 30 closed matches; open only, limit 200.
+5. An `Issue:` line inside a Task block truncated the task; the block now continues.
+6. The registry "once" control altered the stub; it now removes the file between runs.
+
+**Round two** (on `f52c760`, fixed in `60291fd`): three findings, confirmed above.
+A. The widened parser regex turned a prose "Negative controls …:" bullet into the shell command.
+B. A backticked span inside a `<placeholder>` won over the placeholder test.
+C. The hook on a detached HEAD inside a slice worktree exited 0 because the slice was inferred from
+   the branch only.
