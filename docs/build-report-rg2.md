@@ -128,3 +128,25 @@ Review: `docs/review-rg2.md` (the lead, 2026-09-16). All six fixed in `f52c760`;
 6. **Registry control broke the stub** — DONE. The control now removes the registry file between the
    two `rig init` runs, so `apps new` legitimately runs twice and the "never when it exists" half goes
    red on its own terms. Stub untouched; the `void original` leftover is gone.
+
+### Second round (docs/review-rg2.md "Second-round findings", plus rg4's bullets finding)
+
+Fixed in `60291fd` on `rig/rg2` (main merged in first). Four new checks, all red once (27 checks, 0 void).
+Graded with the installed rig 3.0: `rig qa 60291fd --run "npm test"` → `test exit 0 at 60291fd` and
+`negative exit 0 at 60291fd` (the one VOID in that transcript is the demo suite's own, by design).
+
+- **A. Prose bullet became the command** — DONE. `negativeCommand` matches only `Negative controls:` and
+  `Negative-control command [for this repo]:` at line start. The CLAUDE.md rule "Negative controls are
+  re-run after any formatter, on the new sha: …" placed above the real line now yields `npm run demo`.
+  Red by: removing the real line (null).
+- **B. Backticked span inside a placeholder** — DONE. `^<.*>$` is tested on the raw value before the span is
+  taken; `Negative controls: <e.g. \`npm run demo\`>` is `null`. Red by: dropping the angle brackets.
+- **C. Detached HEAD inside a slice worktree passed the hook** — DONE. `sliceFromCwd(root, cfg, cwd)` in
+  guard.js: the slice whose `worktreePath` contains cwd (realpath, boundary-safe) is used before the branch
+  and before the "no slice" exits, so bare `rig guard --staged` on a detached HEAD in `<worktreeDir>/c1`
+  REFUSES a stray README.md. Red by: staging `app/x.js` instead. The plan is loaded lazily there; no plan
+  means no inference, and the unborn path still never reads it.
+- **D. `bullets()` cut wrapped rules at the line break** (rg4's review) — DONE. An indented line under a
+  bullet is joined to it with a space, so `mustNotRules` and every brief carry "Never run wrap or sync
+  unless --wrap was passed." whole. Red by: un-indenting the continuation (then it is a paragraph, not the
+  rule). `test/workflow.test.js` still 12/12.
