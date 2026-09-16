@@ -20,11 +20,11 @@ rig init     scaffold a brief-first PLAN.md, the AGENTS.md rulebook, .rig/config
 rig up       a worktree + branch + GitHub issue per slice, an agent launched in each  (--no-issues)
 rig status   agent state, commits ahead, uncommitted work, anything edited outside its slice
 rig guard    refuse work that reaches outside its slice
-rig qa       rig qa <sha> --run "<tests>": grade from a clean worktree pinned to that commit, record
-             the exit  (--negative records the negative-control run; --fresh discards the old tree)
+rig qa       rig qa <sha> --run "<tests>" --negative "<cmd>": grade from a clean worktree pinned to that
+             commit, one per run (qa, qa-2…); record both exits  (--fresh: git clean -x first)
 rig review   rig review <id>: a read-only, fresh-eyes review brief for one slice's diff
 rig finish   the done gate: reviewed, merged, clean, QA and negatives green on this sha; closes the
-             issues, jots, touches the registry, writes docs/FINISH.md  (--no-review, --no-desk, --wrap)
+             issues, jots, touches the registry, writes docs/FINISH.md  (--no-review, --no-desk, --wrap "<msg>")
 rig rule     rig rule "<rule>": add a learned rule to the rulebook every agent reads
 rig brief    print an agent's briefing so you can hand it over deliberately
 rig roll     rig roll up <brief.md> | status | finish | down: one brief, many repos, one tab per list
@@ -113,10 +113,13 @@ Rig 2.0 kept one QA directory per machine. On a night with two builds running, t
 found it pinned to the first build's sha and refused, and the agent, needing a number, took one off
 the shared tree. A tool that refuses to grade gets routed around.
 
-`rig qa <sha>` now never refuses. The worktree is per project and per run, detached, pinned to exactly
-the sha you named, and touched by no other run. `--fresh` throws the old tree away before pinning.
-What it does refuse is to reset a tree holding a person's uncommitted work: a test's leftovers are
-named and reset, a hand's are not.
+`rig qa <sha>` now never refuses. The worktree is per project and per run: the first run takes `qa`,
+a second running at the same time takes `qa-2`, and so on, each on its own port. A slot is in use
+while its `.rig/qa.lock` holds a live pid. Before the pin the tree is reset and cleaned, and what
+was reset is printed by path. `--fresh` also removes ignored files (`git clean -x`, so
+`node_modules` reinstalls): the line to read before passing it on a Playwright suite. What it does
+refuse is to reset a tree that is not a detached QA worktree: a branch checkout sitting in a slot is
+left alone and the run takes the next one.
 
 ## `rig qa` is also your scratch tree
 
@@ -211,8 +214,12 @@ When the plan's **Checks** or `.rig/config.json` names a negative-control comman
 fails until that command has been recorded green on the same sha it is grading:
 
 ```console
-rig qa 40c0d72 --negative --run "npm run demo"
+rig qa 40c0d72 --run "npm test" --negative "npm run demo"
 ```
+
+Both commands run in the same pinned tree and each exit is recorded with its kind. The plan's
+`Negative controls: <cmd>` line under **Checks**, or `negativeCommand` in the config, supplies the
+command when `--negative` is not given.
 
 Re-run it after any formatter. The rule is in the rulebook because the mistake was a natural one.
 
@@ -278,8 +285,10 @@ a post — stays the owner's call.
 
 The workflow's rule is one GitHub issue per slice, so that work spanning a session or waiting on a
 person has a number. Opened by hand it was opened late or not at all. When `gh` and a remote exist,
-`rig up` opens one issue per slice, titled `<id> <title>`, records the number in the plan, and puts
-it in the slice's brief. `rig finish` closes them with the QA line, and only after every gate has
+`rig up` opens one issue per slice, titled `<id> <title>`, records the number in `.rig/issues.json`,
+and puts it in the slice's brief. A slice whose plan entry already carries `Issue: N` keeps that
+number, and an open issue whose title starts with the slice id is reused, so a second `rig up`
+creates nothing. `rig finish` closes them with the QA line, and only after every gate has
 passed: an issue is never closed on a build that is not done. `--no-issues` opens none.
 
 ## jot and the registry
@@ -291,7 +300,7 @@ does not ship them and does not need them; when they are on PATH, it calls them.
 `rig init` creates the registry file with `apps new <slug> "<Name>"` when it is missing, and stores
 the slug in `.rig/config.json` (`--slug`, `--name`, `--no-registry`). `rig finish`, after a pass and
 never before, runs `jot "[<slug>] …"` and `apps touch <slug>` and prints the `wrap` line for you to
-run; `--wrap` runs it. `--no-desk` skips all of it.
+run; `--wrap "<message>"` runs it with that message. `--no-desk` skips all of it.
 
 ## Rules learned go in the rulebook
 
@@ -396,20 +405,20 @@ A change wanted across dozens of repos, a linter, a licence line, a CI file, is 
 Nobody owns files; every tab owns repos.
 
 ```console
-$ rig roll up rollout.md
-roll linter-2026: 3 tab(s) in this workspace
-  tab 1  12 repo(s)   brief: ~/.rig/rolls/linter-2026/BRIEF-1.md
-  ...
-$ rig roll status
-  slug            tab  state          sha
-  first-repo      1    pushed         a1b2c3d
-  second-repo     1    in progress
-  third-repo      2    skipped        no package.json
+rig roll up rollout.md            # one tab per list, each reading ~/.rig/rolls/rollout-<date>/<tab>/BRIEF.md
+rig roll status                   # per tab and per repo: untouched, in progress, committed <sha>, pushed, skipped
+rig roll finish                   # every repo reported, clean and pushed; writes ROLL-FINISH.md; jots
+rig roll down                     # closes only this roll's tabs
 ```
 
-The brief lists the repos per tab; `rig roll up` launches one tab per list in the workspace it runs
-in, with a brief per tab. `rig roll status` reads the state off each repo itself, untouched, in
-progress, committed, pushed or skipped, never off a notes file. `rig roll finish` refuses until every
+The brief follows `templates/ROLL.md`: what it's for, what must not happen, the procedure per repo,
+the commit subject `status` recognises roll commits by, and `## Lists`, one `### <tab id>` heading
+per tab with its repos. Slugs resolve through a `## Repos` override, then the registry file's `code:`
+field, then `~/Projects/<slug>`, and a slug that resolves nowhere stops the roll before a folder is
+made. Rolls live under `~/.rig/rolls/<brief>-<date>/`, outside every repo (`--dir` overrides), with a
+copy of the brief and a `BRIEF.md` per tab. `rig roll up` launches one tab per list in the workspace
+it runs in. `rig roll status` reads the state off each repo itself, untouched, in
+progress, committed, pushed or skipped, never off a notes file (`--no-fetch` skips the remote check). `rig roll finish` refuses until every
 repo is accounted for, and `rig roll down` closes only this roll's tabs, by their ids.
 
 ## Several builds at once: a lead per project

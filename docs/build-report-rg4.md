@@ -65,3 +65,31 @@ Branch `rig/rg4`. Commits: `7ddeccc` (code), `44b8ba5` (docs), plus this report.
   real output at merge if it differs in shape.
 - `docs/FINISH.md` is the lead's, written by `rig finish` on the final sha.
 - Nothing pushed, no release, no tap update: the owner's call after `rig finish`.
+
+## Review findings acted on (docs/review-rg4.md, seven findings; all DONE)
+Read rg1, rg2 and rg3's build reports and their `qa.js`, `finish.js`, `roll.js`, `issues.js`,
+`guard.js`. Every fix is in my own paths: `bin/rig.js`, `README.md`, `CHANGELOG.md`, `test/run.js`.
+1. **`--negative` takes a command.** USAGE.qa, the README example and the CHANGELOG now read
+   `rig qa <sha> --run "<tests>" --negative "<cmd>"`, both in the same pinned tree, each recorded
+   with its kind; README says the plan's `Negative controls:` line or config supplies it otherwise.
+2. **`--wrap "<message>"`.** USAGE.finish copied from rg1's own `USAGE` string (`--base`,
+   `--no-review`, `--no-desk`, `--no-write`, `--wrap "<message>"`); README and CHANGELOG say
+   `wrap` runs only with `--wrap "<message>"`. COMMANDS.qa and COMMANDS.finish are rg1's text.
+3. **USAGE.roll** is now rg3's four lines verbatim: `up` with `--dir --no-launch --dry-run
+   --launch`, `[<rollDir>]` as the positional, `--force` on down; README mentions `--no-fetch`.
+4. **`--fresh` is `git clean -x`.** Help, README and CHANGELOG say ignored files go and
+   `node_modules` reinstalls, the worktree itself stays. README also now describes the `qa`, `qa-2`
+   slots and the lock.
+5. **Issues go to `.rig/issues.json`.** README and CHANGELOG say so, plus: a plan `Issue: N` is
+   honoured and an open issue with the id prefix is reused, so a second `rig up` creates nothing.
+6. **Roll transcript replaced** by the four commands with rg3's real layout
+   (`~/.rig/rolls/<brief>-<date>/<tab>/BRIEF.md`), the brief shape from `templates/ROLL.md` and the
+   slug resolution order.
+7. **Unborn HEAD cause** rewritten to rg2's: `git rev-parse --abbrev-ref HEAD` throws before the
+   first commit; reproduced from the code, not seen on the night; the guard now reads the branch as
+   none. `--staged` on main: exits 0 without the sweep.
+Minor: `test/run.js` prints `r.error.message` when the spawn itself fails.
+rg1's notes: the runner already picks up `test/qa-finish.test.js` (it globs `test/*.test.js`), no
+package.json edit needed. `test/workflow.test.js` untouched; the lead applies rg1's patch at merge.
+Verified after the fixes: `rig qa|roll|finish --help` print the new text, `npm test` exit 0
+(7 files), `check-no-personal-data` clean.

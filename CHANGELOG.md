@@ -20,16 +20,17 @@ is now the tool's, and each way the night's numbers lied is now refused.
 - **What went wrong:** `rig qa` used one worktree directory for every project on the machine, so a
   second build found it pinned to another build's sha, refused, and its numbers came off the shared
   tree instead.
-- **Now:** the QA worktree is per project and per run, detached, and pinned to exactly the sha you
-  named. `rig qa <sha>` always grades; it never asks you to clean up first. `--fresh` throws the
-  old tree away before pinning.
+- **Now:** the QA worktree is per project and per run (`qa`, then `qa-2`, `qa-3`… while a
+  `.rig/qa.lock` holds a live pid), detached, reset and cleaned before the pin, and pinned to
+  exactly the sha you named. `rig qa <sha>` always grades; it never asks you to clean up first.
+  `--fresh` also removes ignored files (`git clean -x`), so `node_modules` reinstalls.
 
 ### Negatives after formatting
 - **What went wrong:** a build's checks were shown red, then a formatter rewrote the tree, and the
   report called the new sha done on the strength of a red seen on the old one.
 - **Now:** when the plan or `.rig/config.json` names a negative-control command, `rig finish` fails
-  until that command is recorded green on the same sha it is grading. `rig qa <sha> --negative
-  --run "<cmd>"` records it.
+  until that command is recorded green on the same sha it is grading. `rig qa <sha> --run "<tests>"
+  --negative "<cmd>"` runs both in the same pinned tree and records each with its kind.
 
 ### A clean tree after npm test
 - **What went wrong:** a test wrote a tracked fixture and left it modified. The next `rig qa` on the
@@ -40,8 +41,9 @@ is now the tool's, and each way the night's numbers lied is now refused.
 ### Issues opened and closed by the rig
 - **What went wrong:** one GitHub issue per slice was the rule, and the lead opened and closed them
   by hand, late, or not at all.
-- **Now:** `rig up` opens one issue per slice ("<id> <title>") when `gh` and a remote exist, records
-  the number in the plan, and puts it in the slice's brief. `rig finish` closes them with the QA
+- **Now:** `rig up` opens one issue per slice ("<id> <title>") when `gh`, its login and `origin`
+  exist, records the number in `.rig/issues.json`, and puts it in the slice's brief. A plan entry
+  that already says `Issue: N` is honoured, and an open issue with that title prefix is reused. `rig finish` closes them with the QA
   line, and only after every gate passed. `--no-issues` opens none.
 
 ### Registry and log
@@ -49,7 +51,8 @@ is now the tool's, and each way the night's numbers lied is now refused.
   remembered, so a finished build could be invisible to the next session.
 - **Now:** `rig init` creates the registry file with `apps new <slug> "<Name>"` when `apps` is on
   PATH and stores the slug in `.rig/config.json`. `rig finish`, after a pass, runs
-  `jot "[<slug>] …"` and `apps touch <slug>` and prints the `wrap` line; `--wrap` runs it.
+  `jot "[<slug>] …"` and `apps touch <slug>` and prints the `wrap` line; `wrap` runs only with
+  `--wrap "<message>"`.
   Both are optional tools: without them on PATH the rig says so and moves on. `--no-desk` skips them.
 
 ### rig roll
@@ -63,11 +66,13 @@ is now the tool's, and each way the night's numbers lied is now refused.
 ### Fixes
 - **Per-project worktree dir.** Every project's QA tree lived in one directory; now each project has
   its own, and each run its own.
-- **Unborn HEAD.** `rig init --hook` in a fresh repo installed a guard that failed the first commit,
-  because there was no base to diff against. The guard now treats an unborn HEAD as empty and lets
-  the first commit through.
+- **Unborn HEAD.** `rig init --hook` in a fresh repo installed a guard that could not survive the
+  first commit: it asked git for the current branch, and `git rev-parse --abbrev-ref HEAD` throws
+  before a repo has one. Reproduced from the code, not seen on the night. The guard now reads the
+  branch as "none" on an unborn or detached HEAD and says "first commit on an unborn branch: nothing
+  to enforce yet".
 - **`--staged` on main.** The hook refused a commit on the base branch itself, where no slice
-  applies. It now checks only slice branches.
+  applies, and swept every worktree to do it. On a non-slice branch it now exits 0 without the sweep.
 - **`--help` that creates nothing.** `rig qa --help` created a worktree, because the flag was read
   inside the command module after it had started work. Help is answered in the entry point before
   any command module is imported, for every command.

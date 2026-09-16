@@ -11,10 +11,10 @@ const COMMANDS = {
   up:     'create a worktree + branch per slice, open one GitHub issue per slice, and launch an agent in each (--dry-run, --no-launch, --no-issues, --base <ref>, --launch "<cmd>", --keep-branches)',
   status: 'per-slice: agent state, commits ahead, uncommitted files, and anything edited outside its slice',
   guard:  'refuse work that reaches outside its slice (--staged for hook use, --agent <id>, --base <ref>)',
-  qa:     'grade from a clean QA worktree pinned to an exact commit, per project and per run: rig qa <sha> (--run "<cmd>", --negative, --fresh, --port; exits with the command’s status)',
+  qa:     'grade from a clean QA worktree pinned to an exact commit: rig qa <sha> (--run "<cmd>", --negative "<cmd>", --port, --fresh; qa, qa-2… per run; exits with the command’s status)',
   brief:  'print an agent’s briefing so you can hand it over deliberately',
   review: 'write a fresh-eyes review brief for a slice’s diff: rig review <id> (--by <slice>, --launch for a new reviewer tab)',
-  finish: 'the done gate: reviewed, merged, clean, QA and negatives green on this sha; closes the slice issues, jots, touches the registry, writes docs/FINISH.md',
+  finish: 'the done gate: reviewed, merged, QA + negatives green on this sha, tree clean; closes issues, jots, touches the registry on a pass (--no-review, --no-desk, --wrap "<msg>"); writes docs/FINISH.md',
   rule:   'add a learned rule to the project rulebook: rig rule "<rule>"',
   roll:   'a cross-repo crew from one brief: rig roll up <brief.md> | status | finish | down (tabs in this workspace, one list of repos each)',
   down:   'close this build’s slice tabs, stop processes inside its worktrees, remove the worktrees; refuses over uncommitted work unless --force'
@@ -30,15 +30,19 @@ const USAGE = {
   status: `rig status [--base <ref>]`,
   guard:  `rig guard [--staged] [--agent <id>] [--base <ref>]
   --staged checks the index (pre-commit hook); --agent names the slice when it cannot be inferred`,
-  qa:     `rig qa [<sha>] [--run "<cmd>"] [--negative] [--fresh] [--port <n>] [--ref <ref>] [--branch <name>]
-  --negative records the run as the negative-control command; --fresh discards a QA worktree before pinning`,
+  qa:     `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--port <n>] [--fresh]
+  --negative "<cmd>" runs the negative-control command in the same pinned tree and records it; --fresh also
+  removes ignored files before the pin (git clean -x: node_modules reinstalls). One worktree per run: qa, qa-2…`,
   brief:  `rig brief <id>`,
   review: `rig review <id> [--by <slice>] [--base <ref>] [--launch] [--launch-cmd "<cmd>"]`,
-  finish: `rig finish [--base <ref>] [--no-write] [--no-review] [--no-desk] [--wrap]
-  --no-review skips the review gate; --no-desk skips jot and the registry; --wrap runs \`wrap\` after a pass`,
+  finish: `rig finish [--base <ref>] [--no-review] [--no-desk] [--no-write] [--wrap "<message>"]
+  --no-review turns the review gate into a warning; --no-desk skips issues, jot and the registry;
+  --wrap "<message>" runs \`wrap\` after a pass and only then`,
   rule:   `rig rule "<the rule, in one sentence>"`,
-  roll:   `rig roll up <brief.md> [--dir <rolls dir>] [--dry-run]
-rig roll status [<name>] | rig roll finish [<name>] | rig roll down [<name>] [--force]`,
+  roll:   `rig roll up <brief.md>   [--dir <rollsDir>] [--no-launch] [--dry-run] [--launch "<cmd>"]
+rig roll status [<rollDir>]   (newest roll by default; exit 1 while any repo is in progress)
+rig roll finish [<rollDir>]   every repo reported, clean and pushed; writes ROLL-FINISH.md; jots
+rig roll down   [<rollDir>]   [--force]  closes only this roll's tabs; makes and removes no worktrees`,
   down:   `rig down [--force] [--discard-reports]`
 }
 

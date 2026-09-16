@@ -18,6 +18,7 @@ for (const f of files) {
   const r = spawnSync(process.execPath, [join(here, f)], { stdio: 'inherit' })
   const code = r.status ?? 128 + (r.signal ? 1 : 0)
   if (code !== 0) {
+    if (r.error) console.error(`test/run.js: could not run ${f}: ${r.error.message}`)
     console.error(`\ntest/run.js: ${f} exited ${code}${r.signal ? ` (${r.signal})` : ''} — stopping here`)
     process.exit(code)
   }
