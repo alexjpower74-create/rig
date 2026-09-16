@@ -22,8 +22,8 @@ export default async function down (args) {
   const live = slots.filter(s => s.lock && s.lock.live)
   if (live.length) {
     console.error('\x1b[31mrefusing to tear down\x1b[0m — a QA run is still using:')
-    for (const s of live) console.error(`  ${s.id}: pid ${s.lock.pid}  ${s.path}`)
-    console.error('\nWait for it to finish (or stop that `rig qa`), then re-run.')
+    for (const s of live) console.error(`  ${s.id}: pid ${s.lock.pid}  ${s.path}  (lock: ${s.lock.path || s.path + '.lock'})`)
+    console.error('\nWait for it to finish (or stop that `rig qa`), then re-run. After a reboot a stale lock can name a reused pid: delete the lock file named above.')
     process.exit(1)
   }
   const qaIds = slots.map(s => s.id)
