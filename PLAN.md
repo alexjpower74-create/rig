@@ -58,8 +58,9 @@ rg1→rg2→rg3→rg4→rg1), then the lead merges in order rg2, rg1, rg3, rg4.
 - `npm test` (rg4 makes it run every `test/*.test.js` through `test/run.js`; existing tests stay).
 - Every new check uses `harness/check.js` `s.check` with a `breaks` control, or `node:test` with a paired
   known-bad case, and the build report says which check was seen red and how.
-- Negative-control command for this repo: `npm run demo` must still print exactly one VOID and one FAIL
-  from `examples/demo.test.js`; that is the repo's own "negatives went red" line for `rig finish`.
+- Negative controls: npm run demo
+  (`npm run demo` must still print exactly one VOID and one FAIL from `examples/demo.test.js`; that is
+  the repo's own "negatives went red" line for `rig finish`.)
 - `tools/check-no-personal-data --self-test && tools/check-no-personal-data` clean.
 - Screenshots are not needed (CLI); `docs/FINISH.md` carries the console transcript of `rig finish` on
   the final sha instead.
