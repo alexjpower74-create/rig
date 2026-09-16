@@ -1,5 +1,5 @@
-import { join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { join, resolve, sep } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
 import { mainRoot, loadConfig, headState } from '../config.js'
 import { loadPlan, matchesAny } from '../plan.js'
 import { worktreePath, touchedFiles, stagedFiles, deletedFiles } from '../worktrees.js'
@@ -18,8 +18,12 @@ export default function guard (args) {
   const named = argOf(args, '--agent')
   const head = headState(process.cwd())
   const branch = head === 'unborn' || head === 'detached' ? null : head
+  // The directory names the slice before the branch does: `<worktreeDir>/<id>` is where `rig up`
+  // put it, and it stays that way through a detached HEAD (a rebase conflict's --amend, a sha the
+  // agent checked out), where the branch says nothing and the hook passes no --agent.
+  const fromDir = head === 'unborn' ? null : sliceFromCwd(root, cfg, process.cwd())
   const inferred = branch && branch.startsWith(cfg.branchPrefix) ? branch.slice(cfg.branchPrefix.length) : null
-  const id = named || inferred
+  const id = named || fromDir || inferred
 
   // `--staged` is the pre-commit hook: it always means "this checkout's index", and only a slice has
   // an index to enforce. Both early exits happen before the plan is read, so a repo that has a hook
@@ -82,6 +86,19 @@ export default function guard (args) {
     }
   }
   if (bad) process.exit(1)
+}
+
+/** The slice whose worktree directory contains `cwd`, or null. Needs the plan; none yet means null. */
+export function sliceFromCwd (root, cfg, cwd) {
+  let plan
+  try { plan = loadPlan(join(root, cfg.plan)) } catch { return null }
+  const real = p => { try { return realpathSync(p) } catch { return resolve(p) } }
+  const here = real(cwd)
+  for (const agent of plan.agents) {
+    const wt = real(worktreePath(root, cfg, agent.id))
+    if (here === wt || here.startsWith(wt + sep)) return agent.id
+  }
+  return null
 }
 
 function argOf (args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
