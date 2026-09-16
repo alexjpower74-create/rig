@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
-import { mainRoot, loadConfig, currentBranch } from '../config.js'
+import { mainRoot, loadConfig, currentBranchOrNull } from '../config.js'
 import { loadPlan, matchesAny } from '../plan.js'
 import { worktreePath, touchedFiles, stagedFiles, deletedFiles } from '../worktrees.js'
 import { isOwnReport, allReportPaths } from '../reports.js'
@@ -11,15 +11,32 @@ import { isOwnReport, allReportPaths } from '../reports.js'
 export default function guard (args) {
   const root = mainRoot()
   const cfg = loadConfig(root)
-  const plan = loadPlan(join(root, cfg.plan))
   const staged = args.includes('--staged')
   const base = argOf(args, '--base') || 'main'
 
   // Which agent am I? Either named, or inferred from the branch we are standing on.
   const named = argOf(args, '--agent')
-  const branch = currentBranch(process.cwd())
-  const inferred = branch.startsWith(cfg.branchPrefix) ? branch.slice(cfg.branchPrefix.length) : null
+  const branch = currentBranchOrNull(process.cwd())
+  const inferred = branch && branch.startsWith(cfg.branchPrefix) ? branch.slice(cfg.branchPrefix.length) : null
   const id = named || inferred
+
+  // `--staged` is the pre-commit hook: it always means "this checkout's index", and only a slice has
+  // an index to enforce. Both early exits happen before the plan is read, so a repo that has a hook
+  // but no plan yet can still make its first commit.
+  if (staged && !branch) {
+    // A fresh repo: HEAD is unborn, so there is no branch to infer a slice from and nothing on a base
+    // to compare against. `currentBranch()` used to throw here and the throw read as a refusal.
+    console.log('first commit on an unborn branch: nothing to enforce yet')
+    return
+  }
+  if (staged && !id) {
+    // The lead committing on main (a review file, a merge). The bare `rig guard` sweep of every
+    // worktree is for a person asking; a hook running it refused the lead's own commit because
+    // another slice's checkout had untracked node_modules in it.
+    console.log(`not a slice branch (${branch}); guard enforces slices only`)
+    return
+  }
+  const plan = loadPlan(join(root, cfg.plan))
 
   const check = (agent, files, where, cwd) => {
     // An agent's own report is exempt: it is deliberately tracked, deliberately outside every

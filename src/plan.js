@@ -67,7 +67,7 @@ export function parsePlan (text) {
     const head = (!scoped || inAgents) && line.match(/^###\s+(\S+)\s*(?:[—–-]\s*(.*))?$/)
     if (head) {
       push()
-      cur = { id: head[1], title: (head[2] || '').trim(), owns: [], task: [], report: null }
+      cur = { id: head[1], title: (head[2] || '').trim(), owns: [], task: [], report: null, issue: null }
       mode = null
       continue
     }
@@ -83,6 +83,10 @@ export function parsePlan (text) {
     // file its own brief told it to write.
     const rep = line.match(/^report:\s*(.+)$/i)
     if (rep) { cur.report = rep[1].trim().replace(/^`|`$/g, ''); mode = null; continue }
+    // A slice may name an existing GitHub issue (`Issue: 42` or `Issue: #42`); `rig up` then records
+    // that number instead of opening a new one. Kept out of the task text like Report:.
+    const iss = line.match(/^issue:\s*#?(\d+)\s*$/i)
+    if (iss) { cur.issue = Number(iss[1]); mode = null; continue }
 
     if (mode === 'owns') {
       const item = line.match(/^\s*[-*]\s+(.+)$/)
@@ -96,7 +100,24 @@ export function parsePlan (text) {
 
   for (const a of agents) a.task = a.task.join('\n').trim()
   const sections = parseSections(lines)
-  return { title, agents, sections, ...briefFields(sections) }
+  const fields = briefFields(sections)
+  return { title, agents, sections, ...fields, negativeCommand: negativeCommand(fields.checks) }
+}
+
+/**
+ * The plan's negative-control command: a `Negative controls: <cmd>` line under Checks. `rig finish`
+ * refuses until that command is recorded green on the sha being finished (`cfg.negativeCommand`
+ * wins when set). Backticks around the command are stripped; `null` when the plan names none.
+ */
+export function negativeCommand (checksBody) {
+  for (const raw of (checksBody || '').split('\n')) {
+    const m = raw.replace(/^\s*[-*]\s+/, '').match(/^negative controls?:\s*(.+?)\s*$/i)
+    if (m) {
+      const cmd = m[1].replace(/^`|`$/g, '').trim()
+      if (cmd && !/^<.*>$/.test(cmd)) return cmd
+    }
+  }
+  return null
 }
 
 /**
