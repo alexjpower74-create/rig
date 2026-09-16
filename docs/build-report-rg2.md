@@ -98,3 +98,33 @@ by `openSliceIssues` (fixed in `41acb13`).
 
 `plan.negativeCommand` is `null` or the command string (backticks stripped). `.rig/issues.json` shape is
 `{ "<id>": { number, url } }`, `url` may be `null`. Config has `slug` (string or `null`).
+
+## Review findings acted on
+
+Review: `docs/review-rg2.md` (the lead, 2026-09-16). All six fixed in `f52c760`; one check each in
+`test/up-guard-init.test.js`, all shown red once (23 checks, 0 void). Graded:
+`rig qa f52c760 --run "npm test && node test/up-guard-init.test.js"` → `rig qa: exit 0 at f52c760`.
+
+1. **Per-project default never reached a 2.0-initialised repo** — DONE. The literal `../.rig-worktrees`
+   in a config now reads as unset in `loadConfig` (any other explicit value is honoured); `rig init`
+   writes the resolved path back. Red by: a config holding a different explicit value. For rg4's README:
+   "a `.rig/config.json` written by rig 2.0 holds `../.rig-worktrees`; 3.0 reads that as the per-repo
+   default and `rig init` rewrites it. Set any other path to keep a shared directory on purpose."
+2. **Root PLAN.md's line did not parse; trailing prose broke the command** — DONE. `negativeCommand`
+   accepts `Negative controls:` and `Negative-control command …:` wording, and takes the backticked span
+   when there is one. The check reads this repo's own PLAN.md Checks section and gets `npm run demo`.
+   Red by: removing the backticks from the prose form. The template placeholder lost its backticked
+   example so it still parses as empty. No PLAN.md change needed.
+3. **Detached HEAD reported as unborn; `--agent` ignored** — DONE. `headState` in config.js
+   (`git rev-parse --verify -q HEAD` fails only when unborn). On a detached HEAD, `--staged --agent c1`
+   enforces; without `--agent` it says "detached HEAD, no slice named" and exits 0. Red by: staging an
+   in-slice file instead.
+4. **Issue reuse paged out** — DONE. `gh issue list --state open --limit 200`. The stub now models gh
+   (newest first, `--state` honoured, default 30) and the test first confirms the stub pages: 31 closed
+   `c1 …` issues hide the open one under `--state all`. With the fix the open issue is reused and no
+   `c1` created. Red by: the open issue's title no longer starting with `c1 `.
+5. **`Issue:` inside Task truncated the task** — DONE. Inside a Task block the line is taken out of the
+   text and the block continues. Red by: dropping the line (issue must read null).
+6. **Registry control broke the stub** — DONE. The control now removes the registry file between the
+   two `rig init` runs, so `apps new` legitimately runs twice and the "never when it exists" half goes
+   red on its own terms. Stub untouched; the `void original` leftover is gone.
