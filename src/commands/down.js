@@ -2,7 +2,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName } from '../config.js'
 import { loadPlan } from '../plan.js'
-import { worktreePath, worktreeBase, dirtyFiles } from '../worktrees.js'
+import { worktreePath, worktreeBase, dirtyFiles, qaSlots } from '../worktrees.js'
 import { tryGit, git } from '../sh.js'
 import { terminal } from '../terminal.js'
 import { processesIn, stopProcesses, insideDir } from '../procs.js'
@@ -16,7 +16,18 @@ export default async function down (args) {
   const plan = loadPlan(join(root, cfg.plan))
   const force = args.includes('--force')
   const sliceIds = plan.agents.map(a => a.id)
-  const ids = [...sliceIds, 'qa']
+  // 3.0: QA worktrees are per run (qa, qa-2, ...). Remove every slot, but never one whose lock holds a
+  // live `rig qa`: tearing it down mid-run would record a dead exit as a real result.
+  const slots = qaSlots(root, cfg)
+  const live = slots.filter(s => s.lock && s.lock.live)
+  if (live.length) {
+    console.error('\x1b[31mrefusing to tear down\x1b[0m — a QA run is still using:')
+    for (const s of live) console.error(`  ${s.id}: pid ${s.lock.pid}  ${s.path}`)
+    console.error('\nWait for it to finish (or stop that `rig qa`), then re-run.')
+    process.exit(1)
+  }
+  const qaIds = slots.map(s => s.id)
+  const ids = [...sliceIds, ...qaIds]
 
   // Run from inside a worktree it is about to remove, `rig down` would stop its own shell and the
   // agent that called it, then fail to remove the (busy) directory, leaving it half torn down.
@@ -36,7 +47,7 @@ export default async function down (args) {
     const path = worktreePath(root, cfg, id)
     if (!existsSync(path)) continue
     const dirty = dirtyFiles(path)
-    if (dirty.length && id !== 'qa') blocked.push({ id, path, dirty })
+    if (dirty.length && !qaIds.includes(id)) blocked.push({ id, path, dirty })
 
     // An agent's report lives in .rig/, which is gitignored by design — so it is never "dirty",
     // never committed, and teardown would take the only copy of its reasoning with it. The work

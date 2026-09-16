@@ -146,6 +146,9 @@ await suite('rig 2.0, workflow', async s => {
   })
 
   git(['merge', '-q', '--ff-only', 'rig/c1'], repo)
+  // 3.0: review before merge is a gate; c1 changed app/, so its review has to be on base.
+  writeFileSync(join(repo, 'docs', 'review-c1.md'), '# Review c1\nno findings\n')
+  git(['add', '-A'], repo); git(['commit', '-qm', 'review c1'], repo)
   const head = git(['rev-parse', 'HEAD'], repo)
   const writeLog = entries => { rmSync(qaLogPath(repo), { force: true }); for (const e of entries) recordQa(repo, e) }
 
