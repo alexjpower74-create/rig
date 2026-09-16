@@ -1,81 +1,53 @@
-# Review — rg1 · QA hygiene and the finish gate (second pass)
+# Review — rg1 · QA hygiene and the finish gate (final)
 
-Second review, after the author acted on the first eight findings in `9d3ebca` and the lead merged
-`rig/rg1` into `main` (`f0f003c`, then `28828ac`). Reviewed the rg1-owned files as they stand on
-`main` at `28828ac`, with `git show 9d3ebca` as the diff of record. Read only; nothing was edited.
-Finding 1 was reproduced in a temp repo against this tree; finding 2 is by reading.
+Confirmation pass on `e9719c8`, merged into `main` at `31e42ce`. Each second-round finding was checked
+three ways: the fix read in `git show e9719c8`, its test run green on `main`
+(`node --test test/qa-finish.test.js`: 19 pass, 0 fail), and the fix reverted in a scratch detached
+worktree at `31e42ce` to see the same test go red. Read only; nothing was edited.
 
-Of the first-pass findings, 1 (squash-merged slice never reviewed), 3 (two first runs, one slot),
-4 (negative run's leftovers not gated), 5 (double jot), 6 (`--wrap` swallowed), 7 (slug rule) and
-8 (usage text) are fixed, and each has the paired known-bad case the plan asks for. Finding 2 is
-fixed for the shape its test uses and not for the shape a real test command has; see below.
+## Verdicts
 
-## Findings
+### 1. Forwarded signal stopped only the bash wrapper — CONFIRMED FIXED
+`src/commands/qa.js`: `runShell` now spawns the command with `detached: true` (its own process
+group) and `holdLock` signals the group with `process.kill(-child.pid, sig)`, falling back to the
+pid; the SIGKILL backstop after 5 s does the same.
+- Test reshaped as asked: `--run "sh -c 'sleep 2; touch marker'; true"`, a program the command
+  started followed by another command, so bash's exec-optimisation cannot hide the orphan.
+- Green on `main`. With the group signal reverted to `child.kill(sig)` the test fails on
+  "the orphaned command must not keep writing into a tree the lock says is free".
+- My original reproduction (`sh -c 'sleep 4; touch marker'; echo tail`, SIGTERM, second run) now
+  leaves no orphan and no marker.
 
-### 1. A forwarded signal reaches the bash wrapper, not the test process tree; the lock is freed under a still-running suite
-`src/commands/qa.js:126-137` (`holdLock`) sends the signal to `child`, which is the
-`bash -o pipefail -c "<cmd>"` wrapper from `runShell` (line 189). `child.kill(sig)` signals that
-one pid. Bash does not forward SIGTERM/SIGHUP to a foreground child, so anything the command
-itself spawned keeps running in the worktree while bash dies, the `exit` event fires, and the lock
-is released.
+### 2. Two runs could both remove the same stale lock — CONFIRMED FIXED
+`src/worktrees.js` `takeOverStaleLock`: the right to remove a dead-pid lock is claimed through an
+exclusive takeover file (`<id>.lock.takeover-<pid>`, `wx`); the winner re-reads the lock, removes it
+only if it still names the same dead pid, and deletes the claim; the loser is told the slot "was
+taken while we looked" and moves on. A takeover file left by a crashed winner is itself taken over
+when its pid is dead.
+- New test starts two runs against a dead-pid lock and asserts `qa` and `qa-2`, exactly one
+  "removed a stale lock", and the winner's lock released afterwards.
+- Green on `main` five runs in a row. With the takeover reverted to a bare `rmSync`, it failed
+  three of five runs. It is a timing guard rather than a deterministic one, which is inherent to
+  the defect; the suite as a whole still cannot go green with the bug present on a normal run, and
+  the odds are good enough to catch a regression across the crew's runs. Acceptable.
 
-The test at `test/qa-finish.test.js:185-198` passes for a different reason than it claims: its
-command is `sleep 2; touch marker`, so `touch` is bash's *next* command, not a child of the running
-one. Killing bash cancels `touch`. It says nothing about a child that outlives bash.
+## Notes for the lead (unchanged, below the bar)
+- `rig down` now names the lock file and says a rebooted machine can leave a reused pid in it; good.
+- Committer-time skew across two machines can make a genuinely newer review read as "older"; the
+  gate follows the plan's `%ct` rule, so this is a thing to know, not a defect.
+- `docs/FINISH.md` at the root is still untracked and exempt from "no uncommitted work" by design.
 
-Reproduced on this tree with the shape a real run has (a long-running program followed by anything):
-```
-rig qa HEAD --run "sh -c 'sleep 4; touch marker'; echo tail"
-kill -TERM <rig qa pid>        → exit 143, lock gone
-ps                             → sh -c 'sleep 4; touch marker' reparented to pid 4198, still running
-rig qa HEAD --run true         → "QA worktree qa pinned"   (took the slot at once)
-4 s later                      → .worktrees/qa/marker exists: the orphan wrote into the freed tree
-```
-`npm test | tail -20`, `npx playwright test; …`, and `npm test && npm run demo` all have this shape.
-(Bash exec-optimises a *single* trailing command, which is why `--run "npm test"` alone happens to
-work: bash replaces itself with npm and the signal lands on npm.)
+## History
 
-Check: give the child its own process group (`spawn(..., { detached: true })`) and signal the group
-(`process.kill(-child.pid, sig)`), or stop by working directory with `processesIn(wt.path)` /
-`stopProcesses` from `src/procs.js`, which is the rule the plan states and what `rig down` already
-does. Then change the test's command to `sh -c 'sleep 2; touch marker'; true` so the marker check
-can actually fail: as written it goes green with the orphan.
+**Round one** (at `c9790d1`): eight findings — a squash-merged slice could never pass `reviewed`
+while its branch existed; SIGTERM released the lock while the test command still ran; two first
+runs on a fresh repo shared one slot or one crashed on `worktree add`; a negative run's leftovers
+were not gated; every passing `rig finish` jotted and touched the registry again; `--wrap` was
+swallowed with no message or with `--no-desk`; the slug fallback disagreed with rg2's `slugFor`;
+usage misstated `rig qa`'s exit. All eight acted on in `9d3ebca`, each with a paired known-bad
+test.
 
-### 2. Two runs that both see the same stale lock can both take the slot
-`src/worktrees.js:196-207`. Stale-lock removal is read-then-`rmSync`, and only the `wx` write after
-it is atomic. Interleaving: A reads `qa.lock` (dead pid) → B reads it (dead pid) → A removes it and
-writes its own with `wx` → B removes **A's** lock → B writes its own with `wx`. Both print
-"removed a stale lock in qa" and "QA worktree qa pinned"; two suites run in one tree; the lock now
-names B, so A's `release()` (line 209, it checks the pid) leaves B's lock in place and A's run is
-never marked free. The window is a few milliseconds, but the trigger is exactly the crew case after a
-crashed run: two peers type `rig qa` after the same failure, and the race test at
-`test/qa-finish.test.js:200-213` does not start from a stale lock.
-
-Check: never `rmSync` a lock you did not write. Take over a stale lock atomically instead: write
-`<id>.lock.<pid>` then `renameSync` it over `<id>.lock` only after re-reading and confirming the
-same dead pid is still there, or claim with `link()`/`open(O_EXCL)` on a takeover file named by the
-stale pid so only one taker wins. Add a test that starts two runs with a dead-pid lock in place and
-asserts they land on `qa` and `qa-2`.
-
-## Notes for the lead (not rg1's files, or below the bar)
-
-- **`rig down` refuses on a reused pid.** `readQaLock` (worktrees.js:165-171) calls a lock live when
-  any process has that pid. After a reboot a lock left by a crashed run can name a pid now held by an
-  unrelated program, and `down.js:23-27` then says "a QA run is still using qa: pid N … stop that
-  `rig qa`". Nothing in the rig will clear it; the person has to delete `.worktrees/qa.lock` by hand,
-  and the message does not say so. Low: write the lock as `pid starttime` or print the lock path in
-  the refusal.
-- **`%ct` across two machines.** The reviewed gate compares committer times (finish.js:262-265), as
-  the plan asks. Reviews on this workflow are committed on the Mac and code on the PC, or the other
-  way round; a clock two minutes behind makes a review "older than the last code commit" it was
-  written after. Not a defect against the contract; worth knowing when the gate says "review again"
-  for a review that is plainly newer. `git log -1 --format=%ct` on both commits shows it.
-- The `docs/FINISH.md` at the root is untracked; finish.js:161 exempts it from "no uncommitted work"
-  by design, but `check-no-personal-data` and the lead's commit of the final transcript will see it.
-
-## What I could not fault
-The reviewed gate after a squash merge and after a later code commit on the branch, the lock beside
-the worktree taken with `wx` before any git, the union of test and negative leftovers named by run,
-one jot per sha with `.rig/finish.json`, `--wrap` misuse exiting 2, the slug rule matching rg2's
-`slugFor`, `qaSlots` ordering and `down`'s use of it, and the usage text. Every one of these has a
-test that goes red without its fix, and I read each pair.
+**Round two** (at `28828ac`): the SIGTERM fix signalled bash alone, so a real command's children
+kept writing into a worktree whose lock had been freed (reproduced); and two runs that read the
+same dead-pid lock could both remove it, the second deleting the first's fresh lock. Both acted on
+in `e9719c8` and confirmed above.
