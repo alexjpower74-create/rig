@@ -21,7 +21,14 @@ export function readQa (root) {
   return readFileSync(p, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
 }
 
-/** The newest QA run on exactly this commit (full sha), or null. */
-export function lastQaOn (root, sha) {
-  return readQa(root).filter(e => e.sha === sha).pop() || null
+/**
+ * The newest run of this `kind` on exactly this commit (full sha), or null. Entries written before
+ * kinds existed are test runs. A green run on any other sha does not count: formatting moves the
+ * strings a source-patching control anchors on, the sha changes, and so must the record.
+ */
+export function lastQaOn (root, sha, kind = 'test') {
+  return readQa(root).filter(e => e.sha === sha && (e.kind || 'test') === kind).pop() || null
 }
+
+/** The newest negative-control run on this commit, or null. */
+export const lastNegativeOn = (root, sha) => lastQaOn(root, sha, 'negative')
