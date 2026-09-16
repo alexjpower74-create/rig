@@ -4,6 +4,7 @@ import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan, missingBrief } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
 import { briefFor } from '../brief.js'
+import { openSliceIssues } from '../issues.js'
 import { reportPath } from '../reports.js'
 import { terminal } from '../terminal.js'
 import { git } from '../sh.js'
@@ -38,13 +39,6 @@ export default function up (args) {
       continue
     }
     const wt = ensureWorktree(root, cfg, agent.id, base, { keepBranches: args.includes('--keep-branches') })
-    const report = reportPath(agent)
-    mkdirSync(join(wt.path, '.rig'), { recursive: true })
-    mkdirSync(join(wt.path, 'docs'), { recursive: true })
-    const brief = briefFor(plan, agent, {
-      branch: wt.branch, path: wt.path, planPath: cfg.plan, reportPath: report
-    })
-    writeFileSync(join(wt.path, '.rig', 'BRIEF.md'), brief)
     made.push({ agent, wt })
 
     const note = wt.moved ? `  (leftover branch moved up ${wt.staleBehind} commit(s) to ${base}; all its work was already merged)` : ''
@@ -59,6 +53,22 @@ export default function up (args) {
   }
 
   if (dry) { console.log('\ndry run — nothing created'); return }
+
+  // One GitHub issue per slice, before the briefs are written so each brief can name its own.
+  // Recorded in .rig/issues.json; `rig finish` closes them. Absent gh is said once, not fatal.
+  const issueCfg = { ...cfg, issues: args.includes('--no-issues') ? false : cfg.issues }
+  const opened = openSliceIssues(root, plan, issueCfg)
+  if (opened.lines.length) { console.log(''); for (const l of opened.lines) console.log(l) }
+
+  for (const m of made) {
+    mkdirSync(join(m.wt.path, '.rig'), { recursive: true })
+    mkdirSync(join(m.wt.path, 'docs'), { recursive: true })
+    const brief = briefFor(plan, m.agent, {
+      branch: m.wt.branch, path: m.wt.path, planPath: cfg.plan, reportPath: reportPath(m.agent),
+      issue: opened.issues[m.agent.id] || null
+    })
+    writeFileSync(join(m.wt.path, '.rig', 'BRIEF.md'), brief)
+  }
 
   if (warnings.length) {
     console.log('\n' + YEL('check before the agents start:'))

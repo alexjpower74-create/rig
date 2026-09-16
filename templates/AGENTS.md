@@ -13,6 +13,8 @@
 - **Tests that cannot lie.** Every new check is shown to go red once. A bug that reached a person gets
   a test that fails without the fix. Real input and hit-tests for anything a browser shows.
 - **Fresh eyes before done.** Medium and big jobs get a review by someone who didn't write the code.
+- **Review before merge:** no slice merges without a review file on base (`docs/review-<id>.md`).
+- **After `npm test`, the tree is clean:** a test that writes a tracked file untracks it or restores it.
 - **Stop only what you started.** Never kill a process by name or free a port you don't own.
 - **Keep this file short:** commands, gotchas with a why, hard rules.
 

@@ -24,6 +24,7 @@ A plan is a brief first and a slice list second.
 
 ## Checks
 <how "done" is proved: which suites, which must be shown to go red once, which screens get screenshots>
+Negative controls: <the one command whose run proves the checks can go red, e.g. npm run demo; rig finish wants it green on the final sha>
 
 ## Rules
 
@@ -38,6 +39,8 @@ A plan is a brief first and a slice list second.
 - A check that cannot fail measured nothing. Before you call something green, say what would
   make it red — and prove it by making it red once.
 - Stop only what you started: never kill a server by name or free a port you don't own.
+- Review: each slice is reviewed by another before merge (`rig review <id> --by <other>`). No slice
+  merges without its review file on base.
 
 ## Agents
 
@@ -46,6 +49,7 @@ Owns:
 - src/<area>/**
 
 Report: docs/build-report-c1.md
+Issue: <optional: an existing GitHub issue number; leave the line out and `rig up` opens one>
 
 Task:
 <what this agent is building, in enough detail that it does not have to guess>

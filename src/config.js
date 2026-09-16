@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { git, tryGit } from './sh.js'
 
 export const DEFAULTS = {
@@ -10,7 +10,11 @@ export const DEFAULTS = {
   qaPort: 5199,
   launch: 'claude --model claude-fable-5-1 --effort low',
   terminal: 'auto', // auto | herdr | tmux
-  devCommand: null
+  devCommand: null,
+  // The app registry slug (`~/.claude/apps/<slug>.md`); `rig init` fills it in, `rig finish` jots under it.
+  slug: null,
+  // Open one GitHub issue per slice at `rig up` (when gh and a remote exist); `--no-issues` skips.
+  issues: true
 }
 
 export function repoRoot (cwd = process.cwd()) {
@@ -46,11 +50,35 @@ export function configPath (root) { return join(root, '.rig', 'config.json') }
 
 export function loadConfig (root) {
   const p = configPath(root)
-  if (existsSync(p)) return { ...DEFAULTS, ...JSON.parse(readFileSync(p, 'utf8')) }
+  if (existsSync(p)) return withWorktreeDir(root, JSON.parse(readFileSync(p, 'utf8')))
   // Called from inside a linked worktree, which has no .rig/ of its own.
   const shared = configPath(mainRoot(root))
-  if (shared !== p && existsSync(shared)) return { ...DEFAULTS, ...JSON.parse(readFileSync(shared, 'utf8')) }
-  return { ...DEFAULTS }
+  if (shared !== p && existsSync(shared)) return withWorktreeDir(root, JSON.parse(readFileSync(shared, 'utf8')))
+  return withWorktreeDir(root, {})
+}
+
+/**
+ * Where a repo's worktrees go when its config does not say: `../.rig-worktrees/<repo dir name>`.
+ *
+ * The 2.0 default was `../.rig-worktrees`, one directory shared by every repo under the same parent.
+ * Two rigs in sibling repos then wrote their `qa` (and `c1`, `c2`…) worktrees to the same path: on
+ * 2026-09-15 `rig qa` in this repo collided with another project's QA worktree and refused. A
+ * per-repo subdirectory keeps them apart while still leaving the checkouts outside the repo, where
+ * `npm test`, formatters and `git status` never see them. An explicit `worktreeDir` is honoured as is.
+ */
+export function defaultWorktreeDir (root) {
+  let main = root
+  try { main = mainRoot(root) } catch { /* not a git repo: name the directory itself */ }
+  return `${DEFAULTS.worktreeDir}/${basename(main)}`
+}
+
+function withWorktreeDir (root, fileCfg) {
+  const cfg = { ...DEFAULTS, ...fileCfg }
+  // 2.0's `rig init` saved all of DEFAULTS, so every repo it initialised carries the literal shared
+  // value. That is the value that collided; it reads as "unset" and gets the per-repo default. Any
+  // other explicit value is the person's choice. `rig init` writes the resolved path back.
+  if (!fileCfg.worktreeDir || fileCfg.worktreeDir === DEFAULTS.worktreeDir) cfg.worktreeDir = defaultWorktreeDir(root)
+  return cfg
 }
 
 export function saveConfig (root, cfg) {
@@ -63,3 +91,23 @@ export function sessionName (root) {
 }
 
 export function currentBranch (cwd) { return git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd) }
+
+/**
+ * The branch this checkout is on, or `null` when there is none to name: HEAD is unborn (a fresh
+ * repo before its first commit) or detached without a branch. `currentBranch` throws in the first
+ * case, which is how the pre-commit guard refused the very first commit of every repo it was
+ * installed in — the hook ran, git had no HEAD to resolve, and the error read as a refusal.
+ */
+export function currentBranchOrNull (cwd) {
+  const r = tryGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)
+  if (!r.ok || !r.out || r.out === 'HEAD') return null
+  return r.out
+}
+
+/** 'unborn' (no commit yet), 'detached' (a commit but no branch), or the branch name. */
+export function headState (cwd) {
+  const branch = currentBranchOrNull(cwd)
+  if (branch) return branch
+  // `--verify HEAD` fails only when HEAD points at nothing: a fresh repo. A detached HEAD resolves.
+  return tryGit(['rev-parse', '--verify', '-q', 'HEAD'], cwd).ok ? 'detached' : 'unborn'
+}

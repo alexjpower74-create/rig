@@ -8,7 +8,7 @@ export function briefFor (plan, agent, ctx) {
 Project: **${plan.title}**
 Your branch: \`${ctx.branch}\`   Your worktree: \`${ctx.path}\`
 The contract is \`${ctx.planPath}\` at the repo root. Read it before you touch anything.
-
+${ctx.issue ? `Your issue: #${ctx.issue.number}${ctx.issue.url ? ' ' + ctx.issue.url : ''} — the lead closes it at \`rig finish\`; put what is waiting on a person there.\n` : ''}
 ${section("What it's for", plan.purpose)}${section('Who uses it, on what', plan.users)}${section('What done looks like', plan.done)}${mustNot.length ? `## What must not happen — hard rules, from the plan
 ${mustNot.map(r => '- ' + r).join('\n')}
 
