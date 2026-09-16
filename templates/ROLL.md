@@ -28,10 +28,12 @@ report per tab. `rig roll up <this file>` opens one tab per list in the workspac
 (`~/.claude/apps/<slug>.md`, its `code:` field) and then `~/Projects/<slug>`.>
 
 ## Lists
+<one `### <tab id>` per tab. Ids are the tab labels and must be unique across the workspace:
+prefix them with the roll's name (`lint1`, `lint2`), never bare `t1`/`c1`, which the next crew will also use.>
 
-### t1
+### lint1
 <slug-a, slug-b, slug-c — one line of comma-separated slugs, or one slug per bullet>
 
-### t2
+### lint2
 - <slug-d>
 - <slug-e>

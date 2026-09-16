@@ -93,7 +93,7 @@ case "$1 $2" in
   "--version ") echo "herdr stub" ;;
   "tab create") echo '{"result":{"root_pane":{"pane_id":"w7:p9"}}}' ;;
   "tab list") echo "{\\"result\\":{\\"tabs\\":\${HERDR_TABS:-[]}}}" ;;
-  "pane list") echo '{"result":{"panes":[]}}' ;;
+  "pane list") echo "{\\"result\\":{\\"panes\\":\${HERDR_PANES:-[]}}}" ;;
   "pane wait-output") exit 1 ;;
   *) echo '{"result":{}}' ;;
 esac
@@ -184,20 +184,71 @@ await suite('rig roll', async s => {
     // Move origin's main back one commit behind the rig's back: a stale tracking ref would still say pushed.
     breaks: async () => { const bare = join(tmp, 'remotes', 'beacon.git'); const old = git(['rev-parse', 'main~1'], bare); git(['update-ref', 'refs/heads/main', old], bare); return () => git(['update-ref', 'refs/heads/main', beaconSha], bare) }
   })
-  // Re-date the kiln commit to before the roll: only its subject can identify it now.
-  git(['commit', '-q', '--amend', '--reset-author', '-m', 'chore: adopt the shared formatter'], paths.kiln, OLD)
-  await s.check('a commit dated before the roll but carrying the commit subject is found by the subject alone', {
-    assert: async () => stateOf('kiln').state === 'committed',
-    breaks: async () => { git(['commit', '-q', '--amend', '--reset-author', '-m', 'chore: unrelated'], paths.kiln, OLD); return () => git(['commit', '-q', '--amend', '--reset-author', '-m', 'chore: adopt the shared formatter'], paths.kiln, OLD) }
+  // Review finding 2: any commit since startedAt used to count as the roll's. Last week's sweep with
+  // the same subject (dated before this roll) must not, and neither must the owner's unrelated commit
+  // during the roll; and the sha reported is the tab's commit, not HEAD.
+  await s.check('a commit with the roll subject but dated before the roll is not the roll’s (a re-run finds nothing)', {
+    assert: async () => {
+      git(['commit', '-q', '--amend', '--reset-author', '-m', 'chore: adopt the shared formatter'], paths.kiln, OLD)
+      try { return stateOf('kiln').state === 'untouched' } finally { git(['commit', '-q', '--amend', '--reset-author', '-m', 'chore: adopt the shared formatter'], paths.kiln) }
+    },
+    breaks: async () => { const f = join(rollDir, 'roll.json'); const t = readFileSync(f, 'utf8'); writeFileSync(f, JSON.stringify({ ...record, startedAt: '2019-01-01T00:00:00.000Z' })); return () => writeFileSync(f, t) }
+  })
+  await s.check('an unrelated commit during the roll is not the roll’s, and the table names the tab’s sha, not HEAD', {
+    assert: async () => {
+      const owner = commit(paths.kiln, 'notes.txt', 'owner: unrelated change')
+      try {
+        const r = stateOf('kiln')
+        if (r.state !== 'committed' || r.sha !== kilnSha.slice(0, 7)) throw new Error(JSON.stringify(r) + ' head=' + owner.slice(0, 7))
+        git(['reset', '-q', '--hard', 'HEAD~1'], paths.kiln)
+        writeFileSync(join(paths.orchard, 'x.txt'), 'x'); git(['add', '-A'], paths.orchard); git(['commit', '-qm', 'owner: unrelated change'], paths.orchard)
+        try { return stateOf('orchard').state === 'untouched' } finally { git(['reset', '-q', '--hard', 'HEAD~1'], paths.orchard) }
+      } finally { if (git(['log', '-1', '--format=%s'], paths.kiln) === 'owner: unrelated change') git(['reset', '-q', '--hard', 'HEAD~1'], paths.kiln) }
+    },
+    breaks: async () => { const f = join(rollDir, 'roll.json'); const t = readFileSync(f, 'utf8'); writeFileSync(f, JSON.stringify({ ...record, commitSubject: null })); return () => writeFileSync(f, t) }
   })
   await s.check('a repo with no remote and a commit is local only', {
     assert: async () => { commit(paths.lantern, 'biome.json', 'chore: adopt the shared formatter'); return stateOf('lantern').state === 'local only' },
     breaks: async () => { git(['remote', 'add', 'origin', join(tmp, 'remotes', 'beacon.git')], paths.lantern); return () => git(['remote', 'remove', 'origin'], paths.lantern) }
   })
+  await s.check('a remote not named origin is still a remote: an unpushed commit is committed, not local only', {
+    assert: async () => {
+      git(['remote', 'rename', 'origin', 'github'], paths.kiln)
+      try { return stateOf('kiln').state === 'committed' } finally { git(['remote', 'rename', 'github', 'origin'], paths.kiln) }
+    },
+    breaks: async () => { const { remoteName } = await import('../src/roll.js'); void remoteName; git(['remote', 'remove', 'origin'], paths.kiln); return () => { git(['remote', 'add', 'origin', join(tmp, 'remotes', 'kiln.git')], paths.kiln); git(['fetch', '-q', 'origin'], paths.kiln) } }
+  })
   writeFileSync(join(rollDir, 't1', 'REPORT.md'), '# t1\n- orchard: SKIPPED — no test suite, nothing to record\n')
   await s.check('a slug the tab’s report marks SKIPPED is skipped', {
     assert: async () => stateOf('orchard').state === 'skipped' && skippedIn('- `beacon`: SKIPPED — busy').has('beacon'),
     breaks: async () => { const f = join(rollDir, 't1', 'REPORT.md'); const t = readFileSync(f, 'utf8'); writeFileSync(f, '# t1\n- orchard: done later\n'); return () => writeFileSync(f, t) }
+  })
+
+  await s.check('a repo the tab SKIPped for a dirty tree is skipped, not in progress (the brief’s own rule)', {
+    assert: async () => {
+      writeFileSync(join(paths.orchard, 'wip.txt'), 'someone else’s work')
+      try { return stateOf('orchard').state === 'skipped' } finally { rmSync(join(paths.orchard, 'wip.txt')) }
+    },
+    breaks: async () => { const f = join(rollDir, 't1', 'REPORT.md'); const t = readFileSync(f, 'utf8'); writeFileSync(f, '# t1\n'); return () => writeFileSync(f, t) }
+  })
+  // Review findings 4 and 5. The control is the loose parser that shipped in 28a3c1f, copied here:
+  // any mention named a slug (and `-` before it let a longer slug match), and SKIPPED anywhere on a
+  // line marked it skipped.
+  const { reportLines, namedIn } = await import('../src/roll.js')
+  const legacyNamed = (text, slugs) => new Set(slugs.filter(s => new RegExp('(^|[\\s`*-])' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=[\\s`:*,.)]|$)', 'm').test(text || '')))
+  const legacySkipped = (text) => { const out = new Set(); for (const line of (text || '').split('\n')) { const m = line.match(/^\s*[-*]?\s*`?([A-Za-z0-9._-]+)`?\s*:\s*SKIPPED\b/i) || (/\bSKIPPED\b/.test(line) && line.match(/^\s*[-*]\s*`?([A-Za-z0-9._-]+)`?/)); if (m) out.add(m[1]) } return out }
+  let named = namedIn, skippedFn = skippedIn
+  await s.check('report lines are read strictly: `- <slug>: done|SKIPPED` only; prose, headings and longer slugs do not count', {
+    assert: async () => {
+      const text = '# t2 — beacon and lantern pending\n- home-care-visits: done abc1234 — formatted\n- beacon: not started yet\n- orchard: done def5678 — SKIPPED the lint step, tests were red\n- Note: nothing was SKIPPED\n- `kiln`: SKIPPED — dirty tree\n'
+      const got = named(text, ['visits', 'care-visits', 'home-care-visits', 'beacon', 'lantern', 'orchard', 'Note', 'kiln'])
+      if ([...got].sort().join(',') !== 'home-care-visits,kiln,orchard') throw new Error('named: ' + [...got])
+      const lines = reportLines(text)
+      if (lines.get('orchard').state !== 'done' || lines.get('orchard').sha !== 'def5678') throw new Error('orchard: ' + JSON.stringify(lines.get('orchard')))
+      const sk = skippedFn(text)
+      return sk.has('kiln') && !sk.has('orchard') && !sk.has('Note') && sk.size === 1
+    },
+    breaks: async () => { named = legacyNamed; skippedFn = legacySkipped; return () => { named = namedIn; skippedFn = skippedIn } }
   })
 
   // ---------------------------------------------------------------------------------------------
@@ -250,14 +301,15 @@ await suite('rig roll', async s => {
   writeFileSync(briefFile, BRIEF)
   const rollsBase = join(tmp, 'rolls-launch')
   const log = join(tmp, 'herdr.log')
-  const realRunUp = (pane, extra = [], clean = true) => {
+  const realRunUp = (pane, extra = [], clean = true, envExtra = {}) => {
     rmSync(log, { force: true }); if (clean) rmSync(rollsBase, { recursive: true, force: true })
-    const script = `import('${join(here, '..', 'src', 'commands', 'roll.js')}').then(m => m.default(${JSON.stringify(['up', briefFile, '--dir', rollsBase, ...extra])}))`
+    const script = `import('${join(here, '..', 'src', 'commands', 'roll.js')}').then(m => m.default(${JSON.stringify(['up', briefFile, '--dir', rollsBase, ...extra])})).catch(e => { console.error(e.message); process.exit(1) })`
     return execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       encoding: 'utf8', cwd: tmp,
-      env: { ...process.env, HOME: home, PATH: stubDir + ':' + process.env.PATH, HERDR_ENV: '1', HERDR_PANE_ID: pane, HERDR_LOG: log, HERDR_TABS: '' }
+      env: { ...process.env, HOME: home, PATH: stubDir + ':' + process.env.PATH, HERDR_ENV: '1', HERDR_PANE_ID: pane, HERDR_LOG: log, HERDR_TABS: '', ...envExtra }
     })
   }
+  const runUpWith = (envExtra) => realRunUp('w7:p1', [], true, envExtra)
   let runUp = realRunUp
   const creates = () => (existsSync(log) ? readFileSync(log, 'utf8') : '').split('\n').filter(l => l.startsWith('tab create'))
   let pane = 'w7:p1'
@@ -279,6 +331,31 @@ await suite('rig roll', async s => {
       return /2 tab\(s\), 5 repo\(s\)/.test(out)
     },
     breaks: async () => { pane = 'w9:p1'; return () => { pane = 'w7:p1' } }
+  })
+  // Review finding 6: the tab is launched in the first repo; the rest of its list must be added as
+  // working directories or every write there raises a permission prompt.
+  await s.check('the launch adds every other repo in the list with --add-dir, in list order', {
+    assert: async () => {
+      runUp('w7:p1')
+      const run = readFileSync(log, 'utf8').split('\n').filter(l => l.startsWith('pane run'))
+      if (!run[0].includes(`--add-dir ${paths.millpond} --add-dir ${paths.kiln} "Read`)) throw new Error('t1 launch: ' + run[0])
+      if (run[0].includes(`--add-dir ${paths.orchard}`)) throw new Error('the cwd repo was added twice')
+      return run[1].includes(`--add-dir ${paths.lantern}`)
+    },
+    breaks: async () => { runUp = (pane, extra = []) => realRunUp(pane, [...extra, '--launch', 'codex --model x']); return () => { runUp = realRunUp } }
+  })
+  // Review finding 3: a tab with one of the roll's ids already open belongs to someone else; a
+  // second set of same-named tabs would let `down` on either roll close both.
+  let openTabs = JSON.stringify([{ tab_id: 'w7:t5', label: 't1' }])
+  await s.check('rig roll up refuses when a tab with one of its ids is already open, and creates nothing', {
+    assert: async () => {
+      let err = ''
+      try { runUpWith({ HERDR_TABS: openTabs, HERDR_PANES: JSON.stringify([{ pane_id: 'w7:p5', tab_id: 'w7:t5' }]) }) } catch (e) { err = e.stderr + e.stdout }
+      const noCreates = !(existsSync(log) && readFileSync(log, 'utf8').includes('tab create'))
+      if (!/already open .* t1/.test(err)) throw new Error('did not refuse: ' + err.slice(-300))
+      return noCreates && !existsSync(rollsBase)
+    },
+    breaks: async () => { openTabs = JSON.stringify([{ tab_id: 'w7:t5', label: 'c1' }]); return () => { openTabs = JSON.stringify([{ tab_id: 'w7:t5', label: 't1' }]) } }
   })
   await s.check('each tab’s brief carries its resolved repos, the procedure, the hard rules, the report path and the commit discipline', {
     assert: async () => {

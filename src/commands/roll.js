@@ -16,6 +16,7 @@ import { mainRoot, loadConfig, DEFAULTS } from '../config.js'
 import { terminal } from '../terminal.js'
 import { blockedPanes } from '../blocked.js'
 import { tryRun } from '../sh.js'
+import { preTrust } from '../trust.js'
 import { parseRoll, resolveRepos, rollName, reportPathFor, tabBrief, rollStatus } from '../roll.js'
 
 const RED = s => `\x1b[31m${s}\x1b[0m`
@@ -26,11 +27,12 @@ const DIM = s => `\x1b[2m${s}\x1b[0m`
 export const USAGE = `rig roll — a cross-repo crew from one brief (tabs in this workspace, one list of repos each)
 
   rig roll up <brief.md>   [--dir <rollsDir>] [--no-launch] [--dry-run] [--launch "<cmd>"]
-  rig roll status [<rollDir>]   (newest roll by default; exit 1 while any repo is in progress)
-  rig roll finish [<rollDir>]   every repo reported, clean and pushed; writes ROLL-FINISH.md; jots
+  rig roll status [<rollDir>]   [--no-fetch]  newest roll by default; exit 1 while any repo is in progress
+  rig roll finish [<rollDir>]   [--no-fetch]  every repo reported, clean and pushed; writes ROLL-FINISH.md; jots
   rig roll down   [<rollDir>]   [--force]  closes only this roll's tabs; makes and removes no worktrees
 
-The brief: templates/ROLL.md. Rolls live under ~/.rig/rolls/<brief>-<date>/, outside every repo.`
+The brief: templates/ROLL.md. Rolls live under ~/.rig/rolls/<brief>-<date>/, outside every repo.
+Tab ids must be unique across the workspace: a tab with the same label already open refuses the launch.`
 
 export default async function roll (args) {
   if (args.includes('-h') || args.includes('--help')) { console.log(USAGE); return }
@@ -79,6 +81,17 @@ export function up (args, cfg) {
   if (!roll.commitSubject) console.log(YEL('the brief has no `## Commit subject`: ') + 'status will find roll commits by date alone.\n')
   if (!roll.procedure.length) console.log(YEL('the brief has no `## Procedure per repo` steps: ') + 'each tab will have to ask.\n')
 
+  // A tab with one of these labels already open belongs to another roll or crew in this
+  // workspace; a second set of same-named tabs would make `down` on either close both. Refused
+  // before a folder is made, so the brief can be fixed and re-run.
+  if (!noLaunch) {
+    const term = terminal(cfg)
+    if (term.available()) {
+      const open = term.listWindows(sessionFor(name), ids)
+      if (open.length) throw new Error(`tab(s) already open in this workspace with these ids: ${open.join(', ')}. Give this roll's lists their own ids (they are the tab labels), or \`rig roll down\` the roll that owns them.`)
+    }
+  }
+
   const reports = {}
   for (const id of ids) {
     const reportPath = reportPathFor(roll, rollDir, id, home())
@@ -114,10 +127,13 @@ function launchTabs (cfg, name, ids, tabs, rollDir, launchCmd) {
     if (term.name === 'herdr') console.log('(run `rig roll up` from inside a herdr pane, or set "terminal": "tmux" in .rig/config.json)')
     return
   }
-  const cmdFor = id => `${launchCmd} "Read ${join(rollDir, id, 'BRIEF.md')} and follow it."`
+  const cmdFor = id => `${launchCmd}${addDirs(launchCmd, tabs[id])} "Read ${join(rollDir, id, 'BRIEF.md')} and follow it."`
   let first = true
   for (const id of ids) {
     const cwd = tabs[id][0].path
+    // The driver pre-trusts the cwd; the rest of the list would each raise the trust prompt (and
+    // every write outside the project root a permission prompt) the first time the tab got there.
+    for (const r of tabs[id].slice(1)) preTrust(r.path)
     if (first && !term.sessionExists(session)) term.newSession(session, id, cwd, cmdFor(id))
     else term.newWindow(session, id, cwd, cmdFor(id))
     first = false
@@ -126,6 +142,12 @@ function launchTabs (cfg, name, ids, tabs, rollDir, launchCmd) {
   console.log(`attach with:  ${term.attachHint(session)}`)
   console.log('\nDo not type into an agent pane — keystrokes interrupt the turn. Read one with:')
   console.log(`  ${term.readHint(session, ids)}`)
+}
+
+/** Claude Code takes extra working directories with --add-dir; another launcher gets none. */
+export function addDirs (launchCmd, repos) {
+  if (!/^\s*claude(\s|$)/.test(launchCmd)) return ''
+  return repos.slice(1).map(r => ` --add-dir ${r.path}`).join('')
 }
 
 function uniqueName (base, name) {

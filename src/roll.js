@@ -121,7 +121,9 @@ export function resolveRepos (roll, { home, registryDir, projectsDir } = {}) {
 
 export function rollName (briefPath, date = new Date()) {
   const base = basename(briefPath).replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'roll'
-  return `${base}-${date.toISOString().slice(0, 10)}`
+  // Local date, as `rig qa`'s history uses: the dir is what the lead types into `status` and `finish`.
+  const d = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return `${base}-${d}`
 }
 
 export function reportPathFor (roll, rollDir, tab, home) {
@@ -197,13 +199,23 @@ A usage pause lands mid-roll with no warning; the report is what survives it.
 
 const short = sha => sha.slice(0, 7)
 
-/** The remote's default branch as `origin/<name>`, or null when the repo has no origin. */
+/** The remote a roll pushes to: `origin` when there is one, else the first remote, else null. A
+ *  remote named anything else used to read as "no remote", and an unpushed commit passed as local only. */
+export function remoteName (repo) {
+  const r = tryGit(['remote'], repo)
+  if (!r.ok || !r.out.trim()) return null
+  const names = r.out.split('\n').map(x => x.trim()).filter(Boolean)
+  return names.includes('origin') ? 'origin' : names[0]
+}
+
+/** The remote's default branch as `<remote>/<name>`, or null when the repo has no remote. */
 export function remoteHead (repo) {
-  if (!tryGit(['remote', 'get-url', 'origin'], repo).ok) return null
-  const sym = tryGit(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], repo)
+  const remote = remoteName(repo)
+  if (!remote) return null
+  const sym = tryGit(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`], repo)
   if (sym.ok && sym.out) return sym.out
-  for (const b of ['origin/main', 'origin/master']) if (tryGit(['rev-parse', '--verify', '-q', b], repo).ok) return b
-  return 'origin/main'
+  for (const b of [`${remote}/main`, `${remote}/master`]) if (tryGit(['rev-parse', '--verify', '-q', b], repo).ok) return b
+  return `${remote}/main`
 }
 
 export function isDirty (repo) {
@@ -211,43 +223,65 @@ export function isDirty (repo) {
   return r.ok && r.out.trim().length > 0
 }
 
-/** The newest commit on HEAD that belongs to this roll: author date ≥ startedAt, or the subject
- *  carries the brief's commit subject (an agent that back-dated nothing but wrote the line). */
+/**
+ * The newest commit on HEAD that belongs to this roll. When the brief has a commit subject, the
+ * commit must carry it AND be dated on or after `startedAt`; without a subject, the date alone.
+ * The scan stops at the first commit older than the roll, so last week's sweep with the same
+ * subject, or the owner's unrelated commit during the roll, is never reported as the tab's work.
+ */
 export function rollCommit (repo, startedAt, commitSubject) {
   const since = Math.floor(new Date(startedAt).getTime() / 1000)
-  const r = tryGit(['log', '-n', '200', '--format=%H%x09%at%x09%s'], repo)
+  const r = tryGit(['log', '-n', '500', '--format=%H%x09%at%x09%s'], repo)
   if (!r.ok || !r.out) return null
   for (const line of r.out.split('\n')) {
     const [sha, at, ...rest] = line.split('\t')
+    if (Number(at) < since) return null
     const subject = rest.join('\t')
-    if (Number(at) >= since || (commitSubject && subject.includes(commitSubject))) return { sha, subject }
+    if (!commitSubject || subject.includes(commitSubject)) return { sha, subject }
   }
   return null
 }
 
-/** Slugs a report marks SKIPPED: a line naming the slug and the word SKIPPED. */
-export function skippedIn (reportText) {
-  const out = new Set()
+/**
+ * The report lines the brief asks for, and nothing looser:
+ *   - <slug>: done <sha> — <what changed>
+ *   - <slug>: SKIPPED — <reason>
+ * A slug mentioned in prose, a heading, or a longer hyphenated slug is not "named"; a done line
+ * with the word SKIPPED later in it is done. Returns Map slug -> { state: 'done' | 'skipped', sha, note }.
+ */
+export function reportLines (reportText) {
+  const out = new Map()
   for (const line of (reportText || '').split('\n')) {
-    const m = line.match(/^\s*[-*]?\s*`?([A-Za-z0-9._-]+)`?\s*:\s*SKIPPED\b/i) || (/\bSKIPPED\b/.test(line) && line.match(/^\s*[-*]\s*`?([A-Za-z0-9._-]+)`?/))
-    if (m) out.add(m[1])
+    const m = line.match(/^\s*[-*]\s*`?([A-Za-z0-9._-]+)`?\s*:\s*(done|SKIPPED)\b\s*(?:`?([0-9a-f]{7,40})`?)?\s*(.*)$/i)
+    if (!m) continue
+    const state = m[2].toUpperCase() === 'SKIPPED' ? 'skipped' : 'done'
+    out.set(m[1], { state, sha: m[3] ? m[3].slice(0, 7) : null, note: m[4].replace(/^[—–-]\s*/, '').trim() })
   }
   return out
 }
 
-/** Slugs a report mentions at all (done or skipped). */
+/** Slugs a report marks SKIPPED (`- <slug>: SKIPPED — <reason>` only). */
+export function skippedIn (reportText) {
+  return new Set([...reportLines(reportText)].filter(([, v]) => v.state === 'skipped').map(([k]) => k))
+}
+
+/** Slugs the report accounts for: a done or SKIPPED line of their own. */
 export function namedIn (reportText, slugs) {
-  return new Set(slugs.filter(s => new RegExp('(^|[\\s`*-])' + s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?=[\\s`:*,.)]|$)', 'm').test(reportText || '')))
+  const lines = reportLines(reportText)
+  return new Set(slugs.filter(s => lines.has(s)))
 }
 
 /**
- * One repo's state: missing | in progress | committed | pushed | local only | skipped | untouched.
+ * One repo's state: missing | skipped | in progress | committed | pushed | local only | untouched.
  * `fetch: true` refreshes origin first, so `pushed` is what the remote says, not what a stale
  * tracking ref remembers.
  */
 export function repoState (entry, { startedAt, commitSubject, skipped, fetch = true }) {
   const { slug, path } = entry
   if (!existsSync(path)) return { slug, path, state: 'missing', sha: null }
+  // A repo the tab SKIPped was never edited by the roll, so its dirt is not the roll's: the brief
+  // tells the tab to SKIP a dirty tree rather than touch it, and the gate has to accept that answer.
+  if (skipped.has(slug)) return { slug, path, state: 'skipped', sha: null }
   if (isDirty(path)) return { slug, path, state: 'in progress', sha: null }
   const c = rollCommit(path, startedAt, commitSubject)
   if (c) {
@@ -257,7 +291,6 @@ export function repoState (entry, { startedAt, commitSubject, skipped, fetch = t
     const pushed = tryGit(['merge-base', '--is-ancestor', c.sha, head], path).ok
     return { slug, path, state: pushed ? 'pushed' : 'committed', sha: short(c.sha), subject: c.subject, remote: head }
   }
-  if (skipped.has(slug)) return { slug, path, state: 'skipped', sha: null }
   return { slug, path, state: 'untouched', sha: null }
 }
 
