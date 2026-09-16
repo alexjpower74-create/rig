@@ -16,7 +16,11 @@ import { preTrust } from './trust.js'
 const json = (args) => {
   const r = tryRun('herdr', args)
   if (!r.ok) return null
-  try { return JSON.parse(r.out).result } catch { return null }
+  try {
+    return JSON.parse(r.out).result
+  } catch {
+    return null
+  }
 }
 
 export const inHerdr = () => process.env.HERDR_ENV === '1' && !!process.env.HERDR_PANE_ID
@@ -26,13 +30,19 @@ export const hasHerdr = () => inHerdr() && tryRun('herdr', ['--version']).ok
 export const homePane = () => process.env.HERDR_PANE_ID
 export const homeWorkspace = () => homePane().split(':')[0]
 
-export function workspaces () { return json(['workspace', 'list'])?.workspaces ?? [] }
-export function panes (wid = homeWorkspace()) { return json(['pane', 'list', '--workspace', wid])?.panes ?? [] }
+export function workspaces() {
+  return json(['workspace', 'list'])?.workspaces ?? []
+}
+export function panes(wid = homeWorkspace()) {
+  return json(['pane', 'list', '--workspace', wid])?.panes ?? []
+}
 
 /** Tabs in our workspace. Each slice gets its own TAB (Alexander's rule, 2026-09-12: one agent per
  *  page so he can watch each one; panes split inside the lead's tab crammed four agents together). */
-export function tabs (wid = homeWorkspace()) { return json(['tab', 'list', '--workspace', wid])?.tabs ?? [] }
-const homeTab = () => panes().find(p => p.pane_id === homePane())?.tab_id
+export function tabs(wid = homeWorkspace()) {
+  return json(['tab', 'list', '--workspace', wid])?.tabs ?? []
+}
+const homeTab = () => panes().find((p) => p.pane_id === homePane())?.tab_id
 
 /**
  * The slice tabs of THIS build: tabs whose label is exactly one of the plan's slice ids, never the
@@ -46,24 +56,29 @@ const homeTab = () => panes().find(p => p.pane_id === homePane())?.tab_id
  * knew nothing about which plan the tabs belonged to. The plan is the contract, so the plan says
  * which tabs are ours.
  */
-export function selectSliceTabs (allTabs, ids, homeTabId) {
+export function selectSliceTabs(allTabs, ids, homeTabId) {
   const want = new Set(ids ?? [])
-  return allTabs.filter(t => t.label && t.tab_id !== homeTabId && want.has(t.label))
+  return allTabs.filter((t) => t.label && t.tab_id !== homeTabId && want.has(t.label))
 }
 const sliceTabs = (ids) => selectSliceTabs(tabs(), ids, homeTab())
 /** The root pane of a tab (the agent lives there). */
-const tabPane = (tabId) => panes().find(p => p.tab_id === tabId)?.pane_id
+const tabPane = (tabId) => panes().find((p) => p.tab_id === tabId)?.pane_id
 /** Slice panes: one per slice tab, carrying the tab's label. */
-const slicePanes = (ids) => sliceTabs(ids).map(t => {
-  const pane = panes().find(p => p.tab_id === t.tab_id)
-  return pane ? { ...pane, label: t.label, agent_status: t.agent_status ?? pane.agent_status } : null
-}).filter(Boolean)
+const slicePanes = (ids) =>
+  sliceTabs(ids)
+    .map((t) => {
+      const pane = panes().find((p) => p.tab_id === t.tab_id)
+      return pane ? { ...pane, label: t.label, agent_status: t.agent_status ?? pane.agent_status } : null
+    })
+    .filter(Boolean)
 
 // The "session" name is kept for the shared driver shape; under herdr it is always our own
 // workspace, so it exists as soon as we are inside one.
-export function sessionExists () { return inHerdr() }
+export function sessionExists() {
+  return inHerdr()
+}
 
-function launch (paneId, command) {
+function launch(paneId, command) {
   // The pane is a fresh zsh at its prompt; the command is typed there, so the user's shell
   // functions and PATH apply — the same as a person launching it by hand.
   tryRun('herdr', ['pane', 'run', paneId, command])
@@ -75,64 +90,77 @@ function launch (paneId, command) {
 }
 
 /** A new tab in our workspace, labelled with the slice id, not focused (the lead keeps its tab). */
-function newTab (cwd, label) {
+function newTab(cwd, label) {
   const r = json(['tab', 'create', '--workspace', homeWorkspace(), '--cwd', cwd, '--label', label, '--no-focus'])
   const id = r?.root_pane?.pane_id ?? (r?.tab?.tab_id && tabPane(r.tab.tab_id))
   if (!id) throw new Error('herdr: could not create a tab for ' + label)
   return id
 }
 
-export function newSession (name, windowName, cwd, command) {
+export function newSession(_name, windowName, cwd, command) {
   preTrust(cwd)
   return launch(newTab(cwd, windowName), command)
 }
 
-export function newWindow (name, windowName, cwd, command) {
+export function newWindow(_name, windowName, cwd, command) {
   preTrust(cwd)
   return launch(newTab(cwd, windowName), command)
 }
 
 /** Labels of this build's slice tabs that exist right now. `ids` are the plan's slice ids. */
-export function listWindows (name, ids) { return slicePanes(ids).map(p => p.label) }
+export function listWindows(_name, ids) {
+  return slicePanes(ids).map((p) => p.label)
+}
 
 /** This build's slice panes, with the herdr-detected agent state attached. */
-export function sessionPanes (name, ids) {
-  return slicePanes(ids).map(p => ({
-    session: name, name: p.label, index: p.pane_id, pane: p.pane_id,
-    agent: p.agent ?? null, agentStatus: p.agent_status ?? 'unknown'
+export function sessionPanes(name, ids) {
+  return slicePanes(ids).map((p) => ({
+    session: name,
+    name: p.label,
+    index: p.pane_id,
+    pane: p.pane_id,
+    agent: p.agent ?? null,
+    agentStatus: p.agent_status ?? 'unknown',
   }))
 }
 
-export function readPane (paneId, lines = 40) {
+export function readPane(paneId, lines = 40) {
   const r = tryRun('herdr', ['pane', 'read', paneId, '--lines', String(lines), '--source', 'recent', '--format', 'text'])
   return r.ok ? r.out : ''
 }
 
-export function capture (name, windowName, lines = 40) {
-  const p = sessionPanes(name, [windowName]).find(x => x.name === windowName)
+export function capture(name, windowName, lines = 40) {
+  const p = sessionPanes(name, [windowName]).find((x) => x.name === windowName)
   return p ? readPane(p.pane, lines) : ''
 }
 
 /** Close only this build's slice tabs (labels equal to the plan's ids); the workspace is the person's. */
-export function killSession (name, ids) {
+export function killSession(_name, ids) {
   const closed = []
   for (const t of sliceTabs(ids)) if (tryRun('herdr', ['tab', 'close', t.tab_id]).ok) closed.push(t.label)
   return closed
 }
 
 /** Panes across every workspace, for the blocked scan. */
-export function allPanes () {
-  return workspaces().flatMap(ws =>
-    panes(ws.workspace_id).map(p => ({
-      session: ws.label, name: p.label ?? p.pane_id, index: p.pane_id, pane: p.pane_id,
-      agent: p.agent ?? null, agentStatus: p.agent_status ?? 'unknown'
-    })))
+export function allPanes() {
+  return workspaces().flatMap((ws) =>
+    panes(ws.workspace_id).map((p) => ({
+      session: ws.label,
+      name: p.label ?? p.pane_id,
+      index: p.pane_id,
+      pane: p.pane_id,
+      agent: p.agent ?? null,
+      agentStatus: p.agent_status ?? 'unknown',
+    })),
+  )
 }
 
-export function attachHint () {
+export function attachHint() {
   return `already on screen — one tab per slice in this workspace (${homeWorkspace()})`
 }
-export function readHint (name, sliceIds) {
-  const ids = sessionPanes(name, sliceIds).map(p => `${p.name}=${p.pane}`).join(' ')
+export function readHint(name, sliceIds) {
+  const ids = sessionPanes(name, sliceIds)
+    .map((p) => `${p.name}=${p.pane}`)
+    .join(' ')
   return `herdr pane read <pane-id> --lines 40${ids ? '   (' + ids + ')' : ''}`
 }

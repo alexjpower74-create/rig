@@ -15,10 +15,13 @@ const tmuxDriver = {
   newWindow: tmux.newWindow,
   listWindows: tmux.listWindows,
   capture: tmux.capture,
-  killSession: (name) => { tmux.killSession(name); return null },
+  killSession: (name) => {
+    tmux.killSession(name)
+    return null
+  },
   slicePanes: () => [], // tmux has no agent-state signal; `status` falls back to window presence
   attachHint: (name) => `tmux attach -t ${name}`,
-  readHint: (name) => `tmux capture-pane -p -t ${name}:<id>`
+  readHint: (name) => `tmux capture-pane -p -t ${name}:<id>`,
 }
 
 const herdrDriver = {
@@ -32,10 +35,10 @@ const herdrDriver = {
   killSession: herdr.killSession,
   slicePanes: herdr.sessionPanes,
   attachHint: herdr.attachHint,
-  readHint: herdr.readHint
+  readHint: herdr.readHint,
 }
 
-export function terminal (cfg = {}) {
+export function terminal(cfg = {}) {
   const want = cfg.terminal || 'auto'
   if (want === 'tmux') return tmuxDriver
   if (want === 'herdr') return herdrDriver

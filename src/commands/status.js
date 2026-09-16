@@ -7,35 +7,38 @@ import { tryGit } from '../sh.js'
 import { terminal } from '../terminal.js'
 import { blockedPanes } from '../blocked.js'
 
-const RED = s => `\x1b[31m${s}\x1b[0m`
-const GRN = s => `\x1b[32m${s}\x1b[0m`
-const DIM = s => `\x1b[2m${s}\x1b[0m`
-const YEL = s => `\x1b[33m${s}\x1b[0m`
+const RED = (s) => `\x1b[31m${s}\x1b[0m`
+const GRN = (s) => `\x1b[32m${s}\x1b[0m`
+const DIM = (s) => `\x1b[2m${s}\x1b[0m`
+const YEL = (s) => `\x1b[33m${s}\x1b[0m`
 
-export default function status (args) {
+export default function status(args) {
   const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const base = argOf(args, '--base') || currentBranch(root)
   const session = sessionName(root)
   const term = terminal(cfg)
-  const ids = plan.agents.map(a => a.id)
+  const ids = plan.agents.map((a) => a.id)
   const up = term.available() && term.sessionExists(session)
   const live = up ? new Set(term.listWindows(session, ids)) : new Set()
   // herdr knows whether each agent is working, idle, done or blocked; show it next to the slice.
-  const states = new Map(up ? term.slicePanes(session, ids).map(p => [p.name, p.agentStatus]) : [])
+  const states = new Map(up ? term.slicePanes(session, ids).map((p) => [p.name, p.agentStatus]) : [])
 
   console.log(`${plan.title}  ${DIM('base ' + base)}\n`)
 
   let violations = 0
   for (const agent of plan.agents) {
     const path = worktreePath(root, cfg, agent.id)
-    if (!existsSync(path)) { console.log(`${agent.id}  ${DIM('no worktree — run `rig up`')}`); continue }
+    if (!existsSync(path)) {
+      console.log(`${agent.id}  ${DIM('no worktree — run `rig up`')}`)
+      continue
+    }
 
     const ahead = tryGit(['rev-list', '--count', `${base}..HEAD`], path)
     const dirty = dirtyFiles(path)
     const touched = touchedFiles(path, base)
-    const stray = touched.filter(f => !matchesAny(f, agent.owns) && !f.startsWith('.rig/'))
+    const stray = touched.filter((f) => !matchesAny(f, agent.owns) && !f.startsWith('.rig/'))
     violations += stray.length
 
     const pane = live.has(agent.id) ? GRN('●') : DIM('○')
@@ -78,4 +81,7 @@ export default function status (args) {
   }
 }
 
-function argOf (args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
+function argOf(args, name) {
+  const i = args.indexOf(name)
+  return i >= 0 ? args[i + 1] : null
+}

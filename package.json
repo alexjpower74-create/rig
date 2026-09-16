@@ -24,6 +24,11 @@
   "scripts": {
     "test": "node test/run.js",
     "demo": "node examples/demo.test.js || true",
-    "demo:watch": "node examples/demo-visible.js"
+    "demo:watch": "node examples/demo-visible.js",
+    "dev": "echo 'Rig is a CLI, not a server: run ./bin/rig.js (or `rig` once linked). Start with `rig init`, then `rig up`. See README.md'",
+    "check": "biome ci . && npm test && check-no-personal-data --quiet ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.13"
   }
 }

@@ -14,10 +14,10 @@ export const DEFAULTS = {
   // The app registry slug (`~/.claude/apps/<slug>.md`); `rig init` fills it in, `rig finish` jots under it.
   slug: null,
   // Open one GitHub issue per slice at `rig up` (when gh and a remote exist); `--no-issues` skips.
-  issues: true
+  issues: true,
 }
 
-export function repoRoot (cwd = process.cwd()) {
+export function repoRoot(cwd = process.cwd()) {
   const r = tryGit(['rev-parse', '--show-toplevel'], cwd)
   if (!r.ok) throw new Error('Not inside a git repository. The rig slices a repo; there has to be one.')
   return r.out
@@ -37,7 +37,7 @@ export function repoRoot (cwd = process.cwd()) {
  *
  * `--git-common-dir` is the main repo's `.git` from anywhere inside it, linked worktrees included.
  */
-export function mainRoot (cwd = process.cwd()) {
+export function mainRoot(cwd = process.cwd()) {
   const r = tryGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd)
   if (!r.ok) return repoRoot(cwd)
   const common = r.out
@@ -46,9 +46,11 @@ export function mainRoot (cwd = process.cwd()) {
   return common.endsWith('/.git') || common.endsWith('\\.git') ? dirname(common) : repoRoot(cwd)
 }
 
-export function configPath (root) { return join(root, '.rig', 'config.json') }
+export function configPath(root) {
+  return join(root, '.rig', 'config.json')
+}
 
-export function loadConfig (root) {
+export function loadConfig(root) {
   const p = configPath(root)
   if (existsSync(p)) return withWorktreeDir(root, JSON.parse(readFileSync(p, 'utf8')))
   // Called from inside a linked worktree, which has no .rig/ of its own.
@@ -66,13 +68,17 @@ export function loadConfig (root) {
  * per-repo subdirectory keeps them apart while still leaving the checkouts outside the repo, where
  * `npm test`, formatters and `git status` never see them. An explicit `worktreeDir` is honoured as is.
  */
-export function defaultWorktreeDir (root) {
+export function defaultWorktreeDir(root) {
   let main = root
-  try { main = mainRoot(root) } catch { /* not a git repo: name the directory itself */ }
+  try {
+    main = mainRoot(root)
+  } catch {
+    /* not a git repo: name the directory itself */
+  }
   return `${DEFAULTS.worktreeDir}/${basename(main)}`
 }
 
-function withWorktreeDir (root, fileCfg) {
+function withWorktreeDir(root, fileCfg) {
   const cfg = { ...DEFAULTS, ...fileCfg }
   // 2.0's `rig init` saved all of DEFAULTS, so every repo it initialised carries the literal shared
   // value. That is the value that collided; it reads as "unset" and gets the per-repo default. Any
@@ -81,16 +87,26 @@ function withWorktreeDir (root, fileCfg) {
   return cfg
 }
 
-export function saveConfig (root, cfg) {
+export function saveConfig(root, cfg) {
   mkdirSync(join(root, '.rig'), { recursive: true })
   writeFileSync(configPath(root), JSON.stringify(cfg, null, 2) + '\n')
 }
 
-export function sessionName (root) {
-  return 'rig-' + root.split('/').pop().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+export function sessionName(root) {
+  return (
+    'rig-' +
+    root
+      .split('/')
+      .pop()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+  )
 }
 
-export function currentBranch (cwd) { return git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd) }
+export function currentBranch(cwd) {
+  return git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)
+}
 
 /**
  * The branch this checkout is on, or `null` when there is none to name: HEAD is unborn (a fresh
@@ -98,14 +114,14 @@ export function currentBranch (cwd) { return git(['rev-parse', '--abbrev-ref', '
  * case, which is how the pre-commit guard refused the very first commit of every repo it was
  * installed in — the hook ran, git had no HEAD to resolve, and the error read as a refusal.
  */
-export function currentBranchOrNull (cwd) {
+export function currentBranchOrNull(cwd) {
   const r = tryGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)
   if (!r.ok || !r.out || r.out === 'HEAD') return null
   return r.out
 }
 
 /** 'unborn' (no commit yet), 'detached' (a commit but no branch), or the branch name. */
-export function headState (cwd) {
+export function headState(cwd) {
   const branch = currentBranchOrNull(cwd)
   if (branch) return branch
   // `--verify HEAD` fails only when HEAD points at nothing: a fresh repo. A detached HEAD resolves.

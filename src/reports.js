@@ -13,9 +13,8 @@
  * while the plan's own task text named another, and `rig guard` — enforcing the derived one —
  * refused the agent for writing the file the contract asked for.
  */
-export const reportPath = agent =>
-  (typeof agent === 'string' ? null : agent?.report) ||
-  `docs/build-report-${typeof agent === 'string' ? agent : agent?.id}.md`
+export const reportPath = (agent) =>
+  (typeof agent === 'string' ? null : agent?.report) || `docs/build-report-${typeof agent === 'string' ? agent : agent?.id}.md`
 
 /**
  * True if this path is the given agent's own report.
@@ -32,4 +31,4 @@ export const reportPath = agent =>
 export const isOwnReport = (path, agent) => path === reportPath(agent)
 
 /** Every report path this plan declares — used to recognise one being deleted. */
-export const allReportPaths = plan => plan.agents.map(reportPath)
+export const allReportPaths = (plan) => plan.agents.map(reportPath)

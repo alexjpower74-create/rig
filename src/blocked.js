@@ -12,31 +12,34 @@ import * as herdr from './herdr.js'
 
 /** Signatures of a session waiting on a human, rather than working. */
 const PROMPT_MARKERS = [
-  /^\s*❯?\s*1\.\s+/m,                    // a numbered choice list
+  /^\s*❯?\s*1\.\s+/m, // a numbered choice list
   /\besc to cancel\b/i,
   /\bdo you want to\b/i,
   /\ballow\b.*\?\s*$/im,
-  /\by\/n\b/i
+  /\by\/n\b/i,
 ]
 
 /** Lines that mean it is still going, and override a stale prompt further up the scrollback. */
 const BUSY_MARKERS = [
   /\besc to interrupt\b/i,
-  /\(\s*\d+s\s*·/,                        // the running-token counter
-  /^\s*⏺\s*$/m
+  /\(\s*\d+s\s*·/, // the running-token counter
+  /^\s*⏺\s*$/m,
 ]
 
-export function panes () {
+export function panes() {
   if (herdr.inHerdr()) return herdr.allPanes()
   const r = tryRun('tmux', ['list-panes', '-a', '-F', '#{session_name}\t#{window_index}\t#{window_name}\t#{pane_id}'])
   if (!r.ok) return []
-  return r.out.split('\n').filter(Boolean).map(line => {
-    const [session, index, name, pane] = line.split('\t')
-    return { session, index, name, pane }
-  })
+  return r.out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [session, index, name, pane] = line.split('\t')
+      return { session, index, name, pane }
+    })
 }
 
-export function readPane (pane, lines = 40) {
+export function readPane(pane, lines = 40) {
   if (herdr.inHerdr()) return herdr.readPane(pane, lines)
   const r = tryRun('tmux', ['capture-pane', '-p', '-t', pane, '-S', `-${lines}`])
   return r.ok ? r.out : ''
@@ -46,7 +49,7 @@ export function readPane (pane, lines = 40) {
  * Is this pane waiting on a person? Looks only at the tail, because a prompt answered ten minutes
  * ago is still sitting in the scrollback and would otherwise read as a live block forever.
  */
-export function inspect (pane, agentStatus = null) {
+export function inspect(pane, agentStatus = null) {
   // herdr watches the agent itself and says `blocked` when it recognises an approval or question
   // UI. That is a better signal than scraping, so it wins outright; `working` is trusted too.
   // Anything else falls through to the text scan, because `unknown` proves nothing either way.
@@ -56,22 +59,30 @@ export function inspect (pane, agentStatus = null) {
   if (!text.trim()) return { blocked: false }
   const tail = text.split('\n').slice(-14).join('\n')
 
-  if (BUSY_MARKERS.some(re => re.test(tail))) return { blocked: false, text }
-  if (!PROMPT_MARKERS.some(re => re.test(tail))) return { blocked: false, text }
+  if (BUSY_MARKERS.some((re) => re.test(tail))) return { blocked: false, text }
+  if (!PROMPT_MARKERS.some((re) => re.test(tail))) return { blocked: false, text }
 
   return { blocked: true, ...question(text), text }
 }
 
 /** Pull the question itself out, so the report says what is being asked rather than "stuck". */
-function question (text) {
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-  const qIndex = lines.findLastIndex(l => /\?\s*$/.test(l))
+function question(text) {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const qIndex = lines.findLastIndex((l) => /\?\s*$/.test(l))
   const question = qIndex >= 0 ? lines[qIndex] : '(waiting on a prompt)'
-  const options = lines.slice(qIndex + 1).filter(l => /^\s*❯?\s*\d\.\s+/.test(l)).slice(0, 4)
+  const options = lines
+    .slice(qIndex + 1)
+    .filter((l) => /^\s*❯?\s*\d\.\s+/.test(l))
+    .slice(0, 4)
   return { question, options }
 }
 
 /** Every pane in every session that is currently waiting on a human. */
-export function blockedPanes () {
-  return panes().map(p => ({ ...p, ...inspect(p.pane, p.agentStatus ?? null) })).filter(p => p.blocked)
+export function blockedPanes() {
+  return panes()
+    .map((p) => ({ ...p, ...inspect(p.pane, p.agentStatus ?? null) }))
+    .filter((p) => p.blocked)
 }

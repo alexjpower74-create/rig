@@ -17,6 +17,7 @@ jobs:
       # google-chrome; the per-platform finder in harness/ locates it.
       - run: google-chrome --version
       - run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - run: npx biome ci .
       - run: npm test
 
   hygiene:

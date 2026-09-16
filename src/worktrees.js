@@ -2,21 +2,23 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSyn
 import { join, resolve, relative, isAbsolute } from 'node:path'
 import { git, tryGit, gitRaw } from './sh.js'
 
-export function worktreeBase (root, cfg) {
+export function worktreeBase(root, cfg) {
   return resolve(root, cfg.worktreeDir)
 }
 
-export function worktreePath (root, cfg, id) {
+export function worktreePath(root, cfg, id) {
   return join(worktreeBase(root, cfg), id)
 }
 
-export function listWorktrees (root) {
+export function listWorktrees(root) {
   const out = git(['worktree', 'list', '--porcelain'], root)
   const trees = []
   let cur = null
   for (const line of out.split('\n')) {
-    if (line.startsWith('worktree ')) { cur = { path: line.slice(9), branch: null, detached: false }; trees.push(cur) }
-    else if (line.startsWith('branch ')) cur.branch = line.slice(7).replace('refs/heads/', '')
+    if (line.startsWith('worktree ')) {
+      cur = { path: line.slice(9), branch: null, detached: false }
+      trees.push(cur)
+    } else if (line.startsWith('branch ')) cur.branch = line.slice(7).replace('refs/heads/', '')
     else if (line === 'detached') cur.detached = true
   }
   return trees
@@ -35,15 +37,16 @@ export function listWorktrees (root) {
  * `base` is left exactly as it is and reported, because that is someone's unmerged work.
  * `opts.keepBranches` turns the move off.
  */
-export function ensureWorktree (root, cfg, id, base, opts = {}) {
+export function ensureWorktree(root, cfg, id, base, opts = {}) {
   const path = worktreePath(root, cfg, id)
   const branch = cfg.branchPrefix + id
   mkdirSync(worktreeBase(root, cfg), { recursive: true })
 
-  const existing = listWorktrees(root).find(w => w.path === path)
+  const existing = listWorktrees(root).find((w) => w.path === path)
   if (existing) return { path, branch: existing.branch, created: false, ...divergence(root, existing.branch, base) }
 
-  if (existsSync(path)) throw new Error(`${path} exists but is not a registered worktree. Move it aside; the rig will not delete it for you.`)
+  if (existsSync(path))
+    throw new Error(`${path} exists but is not a registered worktree. Move it aside; the rig will not delete it for you.`)
 
   const branchExists = tryGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], root).ok
   if (!branchExists) {
@@ -54,9 +57,14 @@ export function ensureWorktree (root, cfg, id, base, opts = {}) {
   const d = divergence(root, branch, base)
   let moved = false
   if (shouldMoveLeftover(d, opts)) {
-    try { git(['branch', '-f', branch, base], root) } catch (e) { // every commit on it is already in base
-      throw new Error(`could not move leftover ${branch} up to ${base}: ${String(e.message).split('\n')[0]}. ` +
-        'If that branch is checked out in another checkout, switch that checkout off it, or re-run with --keep-branches.')
+    try {
+      git(['branch', '-f', branch, base], root)
+    } catch (e) {
+      // every commit on it is already in base
+      throw new Error(
+        `could not move leftover ${branch} up to ${base}: ${String(e.message).split('\n')[0]}. ` +
+          'If that branch is checked out in another checkout, switch that checkout off it, or re-run with --keep-branches.',
+      )
     }
     moved = true
   }
@@ -74,7 +82,7 @@ export const shouldMoveLeftover = (d, opts = {}) => !opts.keepBranches && d.ahea
  * happens to share the branch's name, `main..rig/c1` measured the tag — and a branch holding
  * unmerged work read as "nothing ahead" and was moved.
  */
-export function divergence (root, branch, base) {
+export function divergence(root, branch, base) {
   const ref = branch.startsWith('refs/') ? branch : `refs/heads/${branch}`
   const ahead = tryGit(['rev-list', '--count', `${base}..${ref}`], root)
   const behind = tryGit(['rev-list', '--count', `${ref}..${base}`], root)
@@ -98,7 +106,7 @@ export function divergence (root, branch, base) {
  * `opts.fresh` adds `-x` (ignored files go too; `node_modules` is reinstalled). `opts.keep` is a
  * list of paths to spare from the clean, used for the run lock.
  */
-export function ensureDetachedWorktree (root, cfg, id, ref, opts = {}) {
+export function ensureDetachedWorktree(root, cfg, id, ref, opts = {}) {
   const base = worktreeBase(root, cfg)
   const path = worktreePath(root, cfg, id)
   mkdirSync(base, { recursive: true })
@@ -106,8 +114,10 @@ export function ensureDetachedWorktree (root, cfg, id, ref, opts = {}) {
   const existing = findWorktree(root, path)
   if (existing) {
     if (!existing.detached) {
-      throw new Error(`${path} is on branch ${existing.branch}, not a detached QA worktree: refusing to reset it. ` +
-        'A QA worktree holds nobody\'s work; a branch checkout might.')
+      throw new Error(
+        `${path} is on branch ${existing.branch}, not a detached QA worktree: refusing to reset it. ` +
+          "A QA worktree holds nobody's work; a branch checkout might.",
+      )
     }
     if (!isUnder(path, base)) throw new Error(`${path} is not under ${base}: refusing to reset a worktree outside this project's QA area.`)
     const cleaned = cleanWorktree(path, opts)
@@ -115,19 +125,26 @@ export function ensureDetachedWorktree (root, cfg, id, ref, opts = {}) {
     git(['checkout', '--detach', sha], path)
     return { path, created: false, sha: git(['rev-parse', 'HEAD'], path), ...cleaned }
   }
-  if (existsSync(path)) throw new Error(`${path} exists but is not a registered worktree. Move it aside; the rig will not delete it for you.`)
+  if (existsSync(path))
+    throw new Error(`${path} exists but is not a registered worktree. Move it aside; the rig will not delete it for you.`)
   git(['worktree', 'add', '--detach', path, sha], root)
   return { path, created: true, sha: git(['rev-parse', 'HEAD'], path), reset: [], removed: [] }
 }
 
 /** The registered worktree at `path`, matched by real path so a symlinked base still finds it. */
-export function findWorktree (root, path) {
+export function findWorktree(root, path) {
   const want = safeReal(path)
-  return listWorktrees(root).find(w => w.path === path || safeReal(w.path) === want) || null
+  return listWorktrees(root).find((w) => w.path === path || safeReal(w.path) === want) || null
 }
 
-function safeReal (p) { try { return realpathSync(p) } catch { return resolve(p) } }
-function isUnder (path, base) {
+function safeReal(p) {
+  try {
+    return realpathSync(p)
+  } catch {
+    return resolve(p)
+  }
+}
+function isUnder(path, base) {
   const rel = relative(safeReal(base), safeReal(path))
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 }
@@ -138,14 +155,19 @@ function isUnder (path, base) {
  * ignored) files deleted. Not `-x` by default: `node_modules` stays, so a Playwright suite does
  * not reinstall every run.
  */
-export function cleanWorktree (path, { fresh = false, keep = [] } = {}) {
+export function cleanWorktree(path, { fresh = false, keep = [] } = {}) {
   const before = porcelainLines(path)
-  const reset = before.filter(l => !l.startsWith('??') && !l.startsWith('!!')).map(pathOf)
+  const reset = before.filter((l) => !l.startsWith('??') && !l.startsWith('!!')).map(pathOf)
   git(['reset', '-q', '--hard'], path)
   const flags = '-fd' + (fresh ? 'x' : '')
-  const excludes = keep.flatMap(k => ['-e', k])
+  const excludes = keep.flatMap((k) => ['-e', k])
   const out = tryGit(['clean', flags, ...excludes], path)
-  const removed = out.ok ? out.out.split('\n').filter(l => l.startsWith('Removing ')).map(l => l.slice(9)) : []
+  const removed = out.ok
+    ? out.out
+        .split('\n')
+        .filter((l) => l.startsWith('Removing '))
+        .map((l) => l.slice(9))
+    : []
   return { reset, removed }
 }
 
@@ -159,10 +181,10 @@ export function cleanWorktree (path, { fresh = false, keep = [] } = {}) {
 // crashed on the add. Beside it, the lock is taken first with `wx`, so exactly one run owns a slot
 // before anything touches git, and nothing a clean does can delete it.
 
-export const qaLockPath = path => path + '.lock'
+export const qaLockPath = (path) => path + '.lock'
 
 /** { live, pid } for the lock of a QA worktree path. A pid that is not running is not live. */
-export function readQaLock (path) {
+export function readQaLock(path) {
   const p = qaLockPath(path)
   if (!existsSync(p)) return { live: false, pid: null }
   const pid = Number(readFileSync(p, 'utf8').trim())
@@ -170,18 +192,28 @@ export function readQaLock (path) {
   return { live: pidAlive(pid), pid }
 }
 
-export function pidAlive (pid) {
-  try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
+export function pidAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return e.code === 'EPERM'
+  }
 }
 
 /** Every QA slot this project has: [{ id, path, lock: { live, pid } }], for `rig down` and status. */
-export function qaSlots (root, cfg) {
+export function qaSlots(root, cfg) {
   const base = worktreeBase(root, cfg)
   if (!existsSync(base)) return []
-  return readdirSync(base).filter(n => /^qa(-\d+)?$/.test(n)).sort((a, b) => slotIndex(a) - slotIndex(b))
-    .map(id => { const path = join(base, id); return { id, path, lock: readQaLock(path) } })
+  return readdirSync(base)
+    .filter((n) => /^qa(-\d+)?$/.test(n))
+    .sort((a, b) => slotIndex(a) - slotIndex(b))
+    .map((id) => {
+      const path = join(base, id)
+      return { id, path, lock: readQaLock(path) }
+    })
 }
-const slotIndex = id => id === 'qa' ? 1 : Number(id.slice(3))
+const slotIndex = (id) => (id === 'qa' ? 1 : Number(id.slice(3)))
 
 /**
  * Claim the right to remove a stale lock: an exclusive takeover file named by the dead pid, so of
@@ -189,13 +221,20 @@ const slotIndex = id => id === 'qa' ? 1 : Number(id.slice(3))
  * the lock and the takeover file; a takeover file left by a crashed winner is itself stale when its
  * pid is dead and is taken over the same way.
  */
-export function takeOverStaleLock (path, stalePid, attempt = 0) {
+export function takeOverStaleLock(path, stalePid, attempt = 0) {
   const claim = `${qaLockPath(path)}.takeover-${stalePid}`
-  try { writeFileSync(claim, String(process.pid) + '\n', { flag: 'wx' }) } catch (e) {
+  try {
+    writeFileSync(claim, String(process.pid) + '\n', { flag: 'wx' })
+  } catch (e) {
     if (e.code !== 'EEXIST') throw e
     let holder = 0
-    try { holder = Number(readFileSync(claim, 'utf8').trim()) } catch {}
-    if (holder && !pidAlive(holder) && attempt < 3) { rmSync(claim, { force: true }); return takeOverStaleLock(path, stalePid, attempt + 1) }
+    try {
+      holder = Number(readFileSync(claim, 'utf8').trim())
+    } catch {}
+    if (holder && !pidAlive(holder) && attempt < 3) {
+      rmSync(claim, { force: true })
+      return takeOverStaleLock(path, stalePid, attempt + 1)
+    }
     return false
   }
   try {
@@ -205,44 +244,72 @@ export function takeOverStaleLock (path, stalePid, attempt = 0) {
     if (now.pid !== stalePid || now.live) return false
     rmSync(qaLockPath(path), { force: true })
     return true
-  } finally { rmSync(claim, { force: true }) }
+  } finally {
+    rmSync(claim, { force: true })
+  }
 }
 
 /**
  * Pick, lock, clean and pin a QA worktree for this process. Returns the worktree, the names of the
  * files the clean touched, `notes` for the person, and `release()`.
  */
-export function acquireQaWorktree (root, cfg, ref, opts = {}) {
+export function acquireQaWorktree(root, cfg, ref, opts = {}) {
   const notes = []
   mkdirSync(worktreeBase(root, cfg), { recursive: true })
   for (let n = 1; n <= 64; n++) {
     const id = n === 1 ? 'qa' : `qa-${n}`
     const path = worktreePath(root, cfg, id)
     const lock = readQaLock(path)
-    if (lock.live) { notes.push(`${id} is in use by pid ${lock.pid}`); continue }
+    if (lock.live) {
+      notes.push(`${id} is in use by pid ${lock.pid}`)
+      continue
+    }
     if (lock.pid) {
       // Never remove a lock you did not write without winning the right to: two runs that both saw
       // the same dead pid used to both remove it, and the second removed the first's fresh lock.
-      if (!takeOverStaleLock(path, lock.pid)) { notes.push(`${id} was taken while we looked`); continue }
+      if (!takeOverStaleLock(path, lock.pid)) {
+        notes.push(`${id} was taken while we looked`)
+        continue
+      }
       notes.push(`removed a stale lock in ${id} (pid ${lock.pid} is not running)`)
     }
     const existing = findWorktree(root, path)
     // Somebody's branch checkout in a QA slot is left exactly as it is; the run takes the next slot.
-    if (existing && !existing.detached) { notes.push(`${id} is on branch ${existing.branch}, not a QA worktree: left alone`); continue }
-    if (!existing && existsSync(path)) { notes.push(`${id} exists but is not a registered worktree: left alone`); continue }
+    if (existing && !existing.detached) {
+      notes.push(`${id} is on branch ${existing.branch}, not a QA worktree: left alone`)
+      continue
+    }
+    if (!existing && existsSync(path)) {
+      notes.push(`${id} exists but is not a registered worktree: left alone`)
+      continue
+    }
     // The lock first, before any git: `wx` means exactly one of two simultaneous runs gets it.
-    try { writeFileSync(qaLockPath(path), String(process.pid) + '\n', { flag: 'wx' }) } catch (e) {
-      if (e.code === 'EEXIST') { notes.push(`${id} was taken while we looked`); continue }
+    try {
+      writeFileSync(qaLockPath(path), String(process.pid) + '\n', { flag: 'wx' })
+    } catch (e) {
+      if (e.code === 'EEXIST') {
+        notes.push(`${id} was taken while we looked`)
+        continue
+      }
       throw e
     }
     const release = () => {
-      try { if (readFileSync(qaLockPath(path), 'utf8').trim() === String(process.pid)) rmSync(qaLockPath(path), { force: true }) } catch {}
+      try {
+        if (readFileSync(qaLockPath(path), 'utf8').trim() === String(process.pid)) rmSync(qaLockPath(path), { force: true })
+      } catch {}
     }
     let wt
-    try { wt = ensureDetachedWorktree(root, cfg, id, ref, opts) } catch (e) {
+    try {
+      wt = ensureDetachedWorktree(root, cfg, id, ref, opts)
+    } catch (e) {
       // A run that lost the race by a hair made the tree under us; that slot is theirs.
-      if (/already exists|is a missing but|already checked out/.test(e.message)) { release(); notes.push(`${id} was taken while we looked`); continue }
-      release(); throw e
+      if (/already exists|is a missing but|already checked out/.test(e.message)) {
+        release()
+        notes.push(`${id} was taken while we looked`)
+        continue
+      }
+      release()
+      throw e
     }
     return { ...wt, id, index: n - 1, notes, release }
   }
@@ -250,10 +317,16 @@ export function acquireQaWorktree (root, cfg, ref, opts = {}) {
 }
 
 /** Files this worktree has touched relative to base: committed + working tree + staged. */
-export function touchedFiles (worktree, base) {
+export function touchedFiles(worktree, base) {
   const set = new Set()
   const committed = tryGit(['diff', '--name-only', `${base}...HEAD`], worktree)
-  if (committed.ok) committed.out.split('\n').filter(Boolean).forEach(f => set.add(f))
+  if (committed.ok)
+    committed.out
+      .split('\n')
+      .filter(Boolean)
+      .forEach((f) => {
+        set.add(f)
+      })
   for (const p of porcelainPaths(worktree)) set.add(p)
   return [...set]
 }
@@ -266,10 +339,16 @@ export function touchedFiles (worktree, base) {
  * does not know they touched the file at all, and the same refusal reads as a nuisance in the way
  * of a commit — right up until it turns out to have been the only copy of something.
  */
-export function deletedFiles (cwd, base) {
+export function deletedFiles(cwd, base) {
   const out = new Set()
   const committed = tryGit(['diff', '--name-status', '--diff-filter=D', `${base}...HEAD`], cwd)
-  if (committed.ok) committed.out.split('\n').filter(Boolean).forEach(l => out.add(l.split('\t').pop()))
+  if (committed.ok)
+    committed.out
+      .split('\n')
+      .filter(Boolean)
+      .forEach((l) => {
+        out.add(l.split('\t').pop())
+      })
   const r = gitRaw(['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'], cwd)
   if (r.ok) {
     for (const line of r.out.split('\n').filter(Boolean)) {
@@ -279,29 +358,31 @@ export function deletedFiles (cwd, base) {
   return [...out]
 }
 
-export function stagedFiles (cwd) {
+export function stagedFiles(cwd) {
   const r = tryGit(['diff', '--cached', '--name-only'], cwd)
   return r.ok ? r.out.split('\n').filter(Boolean) : []
 }
 
-export function dirtyFiles (cwd) { return porcelainPaths(cwd) }
+export function dirtyFiles(cwd) {
+  return porcelainPaths(cwd)
+}
 
 /**
  * Parse `git status --porcelain`. The first two columns are status codes, the third is a space,
  * and the path starts at column 4 — so this must read UNtrimmed output. `core.quotePath=false`
  * keeps non-ASCII filenames from coming back C-escaped.
  */
-export function porcelainPaths (cwd) {
+export function porcelainPaths(cwd) {
   return porcelainLines(cwd).map(pathOf)
 }
 
 /** Raw `git status --porcelain -uall` lines, untrimmed. */
-export function porcelainLines (cwd) {
+export function porcelainLines(cwd) {
   const r = gitRaw(['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'], cwd)
   return r.ok ? r.out.split('\n').filter(Boolean) : []
 }
 
-function pathOf (line) {
+function pathOf(line) {
   const p = line.slice(3)
   // rename and copy lines read `R  old -> new`; the new path is the one that exists.
   return p.includes(' -> ') ? p.split(' -> ')[1] : p

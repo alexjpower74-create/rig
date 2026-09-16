@@ -6,7 +6,7 @@
 // the only question that matters: if a finger lands here, what does it hit?
 
 /** True when the centre of `selector` actually receives the hit. */
-export async function isHittable (page, selector) {
+export async function isHittable(page, selector) {
   return page.eval(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)})
     if (!el) return false
@@ -20,7 +20,7 @@ export async function isHittable (page, selector) {
 }
 
 /** What is actually at this point — for when isHittable says no and you need to know who stole it. */
-export async function whatIsAt (page, x, y) {
+export async function whatIsAt(page, x, y) {
   return page.eval(`(() => {
     const el = document.elementFromPoint(${x}, ${y})
     if (!el) return null
@@ -31,7 +31,7 @@ export async function whatIsAt (page, x, y) {
 }
 
 /** Every corner and the centre must land on the element — catches partial clipping. */
-export async function isFullyHittable (page, selector, inset = 2) {
+export async function isFullyHittable(page, selector, inset = 2) {
   return page.eval(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)})
     if (!el) return false
@@ -52,7 +52,7 @@ export async function isFullyHittable (page, selector, inset = 2) {
 }
 
 /** Minimum touch target. 44x44 CSS px is the WCAG 2.5.5 / Apple HIG floor. */
-export async function meetsTouchTarget (page, selector, min = 44) {
+export async function meetsTouchTarget(page, selector, min = 44) {
   return page.eval(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)})
     if (!el) return false
@@ -65,6 +65,6 @@ export async function meetsTouchTarget (page, selector, min = 44) {
  * A backgrounded or occluded tab renders nothing, so anything measured there is a picture of a lie.
  * Call this before you trust a single render check.
  */
-export async function isRendering (page) {
+export async function isRendering(page) {
   return page.eval('!document.hidden && document.visibilityState === "visible"')
 }

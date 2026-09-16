@@ -8,7 +8,7 @@ import { isOwnReport, allReportPaths } from '../reports.js'
 // Enforces the one rule that keeps a multi-agent build from turning into a merge disaster:
 // you edit your slice and nothing else. Runs as a pre-commit hook (`rig init --hook`) or by hand.
 
-export default function guard (args) {
+export default function guard(args) {
   const root = mainRoot()
   const cfg = loadConfig(root)
   const staged = args.includes('--staged')
@@ -39,7 +39,11 @@ export default function guard (args) {
     // worktree is for a person asking; a hook running it refused the lead's own commit because
     // another slice's checkout had untracked node_modules in it. A detached HEAD names no slice
     // either; `--agent <id>` enforces one there.
-    console.log(head === 'detached' ? 'detached HEAD, no slice named (--agent <id>); guard enforces slices only' : `not a slice branch (${branch}); guard enforces slices only`)
+    console.log(
+      head === 'detached'
+        ? 'detached HEAD, no slice named (--agent <id>); guard enforces slices only'
+        : `not a slice branch (${branch}); guard enforces slices only`,
+    )
     return
   }
   const plan = loadPlan(join(root, cfg.plan))
@@ -48,15 +52,18 @@ export default function guard (args) {
     // An agent's own report is exempt: it is deliberately tracked, deliberately outside every
     // slice, and the brief instructs the agent to commit it. Refusing it would make following the
     // brief impossible. The path carries the agent's own id, so this is not a general escape.
-    const stray = files.filter(f => !matchesAny(f, agent.owns) && !f.startsWith('.rig/') && !isOwnReport(f, agent))
-    if (!stray.length) { console.log(`\x1b[32mok\x1b[0m  ${agent.id}: ${files.length} file(s), all inside slice ${where}`); return 0 }
+    const stray = files.filter((f) => !matchesAny(f, agent.owns) && !f.startsWith('.rig/') && !isOwnReport(f, agent))
+    if (!stray.length) {
+      console.log(`\x1b[32mok\x1b[0m  ${agent.id}: ${files.length} file(s), all inside slice ${where}`)
+      return 0
+    }
 
     // Deletions get their own sentence. Somebody reaching into another slice usually knows they
     // did it; somebody deleting a file there usually does not, and the report they are removing
     // may be the only copy of another agent's reasoning.
     const deleted = new Set(cwd ? deletedFiles(cwd, base) : [])
     const declared = new Set(allReportPaths(plan))
-    const goneReports = stray.filter(f => deleted.has(f) && declared.has(f))
+    const goneReports = stray.filter((f) => deleted.has(f) && declared.has(f))
 
     console.error(`\x1b[31mREFUSED\x1b[0m  ${agent.id} reached outside its slice ${where}:`)
     for (const f of stray) console.error(`  ${f}${deleted.has(f) ? '  \x1b[31m(deleted)\x1b[0m' : ''}`)
@@ -73,8 +80,11 @@ export default function guard (args) {
 
   let bad = 0
   if (id) {
-    const agent = plan.agents.find(a => a.id === id)
-    if (!agent) { console.error(`No slice "${id}" in ${cfg.plan}.`); process.exit(2) }
+    const agent = plan.agents.find((a) => a.id === id)
+    if (!agent) {
+      console.error(`No slice "${id}" in ${cfg.plan}.`)
+      process.exit(2)
+    }
     const files = staged ? stagedFiles(process.cwd()) : touchedFiles(process.cwd(), base)
     bad += check(agent, files, staged ? '(staged)' : `(vs ${base})`, process.cwd())
   } else {
@@ -89,10 +99,20 @@ export default function guard (args) {
 }
 
 /** The slice whose worktree directory contains `cwd`, or null. Needs the plan; none yet means null. */
-export function sliceFromCwd (root, cfg, cwd) {
+export function sliceFromCwd(root, cfg, cwd) {
   let plan
-  try { plan = loadPlan(join(root, cfg.plan)) } catch { return null }
-  const real = p => { try { return realpathSync(p) } catch { return resolve(p) } }
+  try {
+    plan = loadPlan(join(root, cfg.plan))
+  } catch {
+    return null
+  }
+  const real = (p) => {
+    try {
+      return realpathSync(p)
+    } catch {
+      return resolve(p)
+    }
+  }
   const here = real(cwd)
   for (const agent of plan.agents) {
     const wt = real(worktreePath(root, cfg, agent.id))
@@ -101,4 +121,7 @@ export function sliceFromCwd (root, cfg, cwd) {
   return null
 }
 
-function argOf (args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
+function argOf(args, name) {
+  const i = args.indexOf(name)
+  return i >= 0 ? args[i + 1] : null
+}

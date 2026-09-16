@@ -11,23 +11,29 @@ import assert from 'node:assert/strict'
 import { suite, Suite } from '../harness/check.js'
 
 /** Run fn with console.log captured; return { value, log } and leave the exit code untouched. */
-async function quietly (fn) {
+async function quietly(fn) {
   const lines = []
   const orig = console.log
   const exitBefore = process.exitCode
   console.log = (...a) => lines.push(a.join(' '))
-  try { return { value: await fn(), log: lines.join('\n'), exitCode: process.exitCode } }
-  finally { console.log = orig; process.exitCode = exitBefore }
+  try {
+    return { value: await fn(), log: lines.join('\n'), exitCode: process.exitCode }
+  } finally {
+    console.log = orig
+    process.exitCode = exitBefore
+  }
 }
-const plain = s => s.replace(/\x1b\[[0-9;]*m/g, '')
+const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
 
 test('a false assertion is reported as FAIL and fails the run', async () => {
-  const r = await quietly(() => suite('broken input', async t => {
-    await t.check('the sky is green', {
-      assert: () => false,
-      breaks: () => () => {}
-    })
-  }))
+  const r = await quietly(() =>
+    suite('broken input', async (t) => {
+      await t.check('the sky is green', {
+        assert: () => false,
+        breaks: () => () => {},
+      })
+    }),
+  )
   assert.equal(r.value.fail, 1)
   assert.equal(r.value.pass, 0)
   assert.equal(r.value.ok, false)
@@ -37,9 +43,16 @@ test('a false assertion is reported as FAIL and fails the run', async () => {
 })
 
 test('an assertion that throws is a FAIL with the error as its detail', async () => {
-  const r = await quietly(() => suite('throwing input', async t => {
-    await t.check('explodes', { assert: () => { throw new Error('kaboom') }, breaks: () => () => {} })
-  }))
+  const r = await quietly(() =>
+    suite('throwing input', async (t) => {
+      await t.check('explodes', {
+        assert: () => {
+          throw new Error('kaboom')
+        },
+        breaks: () => () => {},
+      })
+    }),
+  )
   assert.equal(r.value.fail, 1)
   assert.equal(r.value.ok, false)
   assert.match(plain(r.log), /kaboom/)
@@ -48,12 +61,14 @@ test('an assertion that throws is a FAIL with the error as its detail', async ()
 test('an assertion that survives its own negative control is VOID, not PASS', async () => {
   // The classic vacuous check: `breaks` claims to break the page but changes nothing the assertion
   // reads. It must not be allowed to count as evidence.
-  const r = await quietly(() => suite('vacuous input', async t => {
-    await t.check('always true', {
-      assert: () => true,
-      breaks: () => () => {}          // "breaks" nothing
-    })
-  }))
+  const r = await quietly(() =>
+    suite('vacuous input', async (t) => {
+      await t.check('always true', {
+        assert: () => true,
+        breaks: () => () => {}, // "breaks" nothing
+      })
+    }),
+  )
   assert.equal(r.value.voids, 1)
   assert.equal(r.value.pass, 0)
   assert.equal(r.value.ok, false)
@@ -63,31 +78,45 @@ test('an assertion that survives its own negative control is VOID, not PASS', as
 })
 
 test('a check with no negative control is UNPROVEN, and fails when the suite requires one', async () => {
-  const lax = await quietly(() => suite('no control, lax', async t => {
-    await t.check('unbroken', { assert: () => true })
-  }))
+  const lax = await quietly(() =>
+    suite('no control, lax', async (t) => {
+      await t.check('unbroken', { assert: () => true })
+    }),
+  )
   assert.equal(lax.value.unproven, 1)
   assert.equal(lax.value.ok, true, 'without requireNegativeControl an UNPROVEN check is tolerated')
   assert.match(plain(lax.log), /UNPRV\s+unbroken/)
 
-  const strict = await quietly(() => suite('no control, strict', async t => {
-    await t.check('unbroken', { assert: () => true })
-  }, { requireNegativeControl: true }))
+  const strict = await quietly(() =>
+    suite(
+      'no control, strict',
+      async (t) => {
+        await t.check('unbroken', { assert: () => true })
+      },
+      { requireNegativeControl: true },
+    ),
+  )
   assert.equal(strict.value.unproven, 1)
   assert.equal(strict.value.ok, false)
   assert.equal(strict.exitCode, 1)
 })
 
 test('a hanging assertion is cut off by its timeout and reported as FAIL', async () => {
-  const r = await quietly(() => suite('hanging input', async t => {
-    await t.check('never settles', { timeout: 50, assert: () => new Promise(() => {}), breaks: () => () => {} })
-  }))
+  const r = await quietly(() =>
+    suite('hanging input', async (t) => {
+      await t.check('never settles', { timeout: 50, assert: () => new Promise(() => {}), breaks: () => () => {} })
+    }),
+  )
   assert.equal(r.value.fail, 1)
   assert.match(plain(r.log), /timed out after 50ms/)
 })
 
 test('a suite body that throws is a FAIL, not a silent green', async () => {
-  const r = await quietly(() => suite('body throws', async () => { throw new Error('setup died') }))
+  const r = await quietly(() =>
+    suite('body throws', async () => {
+      throw new Error('setup died')
+    }),
+  )
   assert.equal(r.value.fail, 1)
   assert.equal(r.value.ok, false)
   assert.match(plain(r.log), /ERROR\s+setup died/)
@@ -96,12 +125,19 @@ test('a suite body that throws is a FAIL, not a silent green', async () => {
 test('control: a real check with a real negative control still PASSes and restores the thing it broke', async () => {
   // Without this the tests above could pass against a harness that reports everything as broken.
   let value = 1
-  const r = await quietly(() => suite('good input', async t => {
-    await t.check('value is 1', {
-      assert: () => value === 1,
-      breaks: () => { value = 2; return () => { value = 1 } }
-    })
-  }))
+  const r = await quietly(() =>
+    suite('good input', async (t) => {
+      await t.check('value is 1', {
+        assert: () => value === 1,
+        breaks: () => {
+          value = 2
+          return () => {
+            value = 1
+          }
+        },
+      })
+    }),
+  )
   assert.equal(r.value.pass, 1)
   assert.equal(r.value.ok, true)
   assert.equal(r.exitCode, undefined, 'a green suite must not touch process.exitCode')
@@ -112,10 +148,24 @@ test('control: a real check with a real negative control still PASSes and restor
 test('Suite records every outcome in results, in order', async () => {
   const s = new Suite('direct')
   await quietly(async () => {
-    await s.check('pass', { assert: () => true, breaks: () => { let f = false; return () => { f = true } } })
+    await s.check('pass', {
+      assert: () => true,
+      breaks: () => {
+        // The whole point: this break writes a variable nothing reads, so assert sees
+        // no difference and the check must come out VOID (see the comment below).
+        // biome-ignore lint/correctness/noUnusedVariables: deliberately never read
+        let f = false
+        return () => {
+          f = true
+        }
+      },
+    })
   })
   // the breaks above returned a restore but never changed what assert reads: VOID
   await quietly(() => s.check('fail', { assert: () => false }))
   await quietly(() => s.check('unproven', { assert: () => true }))
-  assert.deepEqual(s.results.map(r => r.state), ['VOID', 'FAIL', 'UNPROVEN'])
+  assert.deepEqual(
+    s.results.map((r) => r.state),
+    ['VOID', 'FAIL', 'UNPROVEN'],
+  )
 })

@@ -22,7 +22,7 @@ const browser = await launch({ headless: true, width: 1280, height: 800 })
 const page = await browser.newPage(url)
 
 /** Put the page back to the top, then scroll 1500px using `ticks` wheel events. */
-async function scrollTo1500 (ticks) {
+async function scrollTo1500(ticks) {
   await page.eval('scrollTo(0, 0); document.getElementById("nav").classList.remove("hidden")')
   await sleep(150)
   await wheel(page, { x: 640, y: 400, dy: 1500, ticks, ms: 16 })
@@ -30,7 +30,7 @@ async function scrollTo1500 (ticks) {
 }
 
 /** The negative control used throughout: drop an overlay over the CTA and take it away again. */
-async function coverTheCta () {
+async function coverTheCta() {
   await page.eval(`(() => {
     const o = document.createElement('div'); o.id = '__control'
     const r = document.getElementById('cta').getBoundingClientRect()
@@ -41,10 +41,9 @@ async function coverTheCta () {
   return () => page.eval('document.getElementById("__control")?.remove()')
 }
 
-await suite('sticky nav vs the CTA', async t => {
-
+await suite('sticky nav vs the CTA', async (t) => {
   await t.check('the page is actually rendering', {
-    assert: () => isRendering(page)
+    assert: () => isRendering(page),
     // No negative control on purpose. A hidden tab cannot be forced from in here, and faking one
     // would be worse than admitting the check is unproven. UNPROVEN is an honest result.
   })
@@ -52,18 +51,19 @@ await suite('sticky nav vs the CTA', async t => {
   await scrollTo1500(60)
   await t.check('[hit-test] CTA is clickable after a SLOW scroll', {
     assert: () => isHittable(page, '#cta'),
-    breaks: coverTheCta
+    breaks: coverTheCta,
   })
 
   await scrollTo1500(6)
   await t.check('[rect] CTA has a real box after a FAST scroll', {
-    assert: () => page.eval('(() => { const r = document.getElementById("cta").getBoundingClientRect(); return r.width > 0 && r.height > 0 })()'),
-    breaks: coverTheCta
+    assert: () =>
+      page.eval('(() => { const r = document.getElementById("cta").getBoundingClientRect(); return r.width > 0 && r.height > 0 })()'),
+    breaks: coverTheCta,
   })
 
   await t.check('[hit-test] CTA is clickable after a FAST scroll', {
     assert: () => isHittable(page, '#cta'),
-    breaks: coverTheCta
+    breaks: coverTheCta,
   })
 })
 

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const url = pathToFileURL(join(here, 'fixture.html')).href
 const PACE = Number(process.env.PACE || 1)
-const beat = ms => sleep(ms * PACE)
+const beat = (ms) => sleep(ms * PACE)
 
 const browser = await launch({ headless: false, width: 1180, height: 900, port: 9444 })
 const page = await browser.newPage(url, { emulate: false })
@@ -30,10 +30,14 @@ await page.eval(`(() => {
 })()`)
 
 const say = (t, colour) => page.eval(`window.__say(${JSON.stringify(t)}, ${JSON.stringify(colour || null)})`)
-const mark = (sel, colour) => page.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)});
+const mark = (sel, colour) =>
+  page.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)});
   if(e){ e.style.outline='3px solid ${colour}'; e.style.outlineOffset='3px' } })()`)
-const unmark = sel => page.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)}); if(e) e.style.outline='none' })()`)
-const reset = async () => { await page.eval('scrollTo(0,0); document.getElementById("nav").classList.remove("hidden")'); await beat(500) }
+const unmark = (sel) => page.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)}); if(e) e.style.outline='none' })()`)
+const reset = async () => {
+  await page.eval('scrollTo(0,0); document.getElementById("nav").classList.remove("hidden")')
+  await beat(500)
+}
 
 await say('A sticky nav that hides when you scroll down, so it stops covering the page. Watch what happens at two different scroll speeds.')
 await beat(3800)
@@ -46,7 +50,10 @@ await wheel(page, { x: 590, y: 400, dy: 1500, ticks: 60, ms: 26 })
 await beat(700)
 await mark('#cta', '#4ec9a0')
 const slowOk = await isHittable(page, '#cta')
-await say(`The nav got out of the way. The button is reachable — hit-test says <b style="color:#4ec9a0">${slowOk ? 'PASS' : 'FAIL'}</b>. This is the test most suites would stop at.`, '#4ec9a0')
+await say(
+  `The nav got out of the way. The button is reachable — hit-test says <b style="color:#4ec9a0">${slowOk ? 'PASS' : 'FAIL'}</b>. This is the test most suites would stop at.`,
+  '#4ec9a0',
+)
 await beat(4200)
 await unmark('#cta')
 
@@ -59,13 +66,22 @@ await beat(900)
 await mark('#cta', '#e5645e')
 const fastOk = await isHittable(page, '#cta')
 const lands = await whatIsAt(page, 134, 65)
-await say(`Same page, same distance. The nav never hid, and it is sitting on the button.<br>Hit-test: <b style="color:#e5645e">${fastOk ? 'PASS' : 'FAIL'}</b> — a tap at the button\'s centre lands on <b>${lands}</b>.`, '#e5645e')
+await say(
+  `Same page, same distance. The nav never hid, and it is sitting on the button.<br>Hit-test: <b style="color:#e5645e">${fastOk ? 'PASS' : 'FAIL'}</b> — a tap at the button's centre lands on <b>${lands}</b>.`,
+  '#e5645e',
+)
 await beat(5200)
 
 // ---- the point -------------------------------------------------------------------------------
-await say('The button still <i>measures</i> 220&times;40 and is perfectly visible on screen. A test that checks its size passes here — which is why that test is marked <b style="color:#c07ad6">VOID</b>, not green.', '#c07ad6')
+await say(
+  'The button still <i>measures</i> 220&times;40 and is perfectly visible on screen. A test that checks its size passes here — which is why that test is marked <b style="color:#c07ad6">VOID</b>, not green.',
+  '#c07ad6',
+)
 await beat(6000)
-await say('Programmatic scrolling eases. Easing is exactly what this bug outruns. It only appears under real input, at real speed, hit-tested.', '#3A8F8F')
+await say(
+  'Programmatic scrolling eases. Easing is exactly what this bug outruns. It only appears under real input, at real speed, hit-tested.',
+  '#3A8F8F',
+)
 await beat(5500)
 
 console.log(`slow scroll -> CTA hittable: ${slowOk}`)

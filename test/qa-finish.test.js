@@ -14,7 +14,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const RIG = join(here, '..')
 const git = (args, cwd, env = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...env } }).trim()
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'rig-qa-')))
-const plain = s => s.replace(/\x1b\[[0-9;]*m/g, '')
+const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
 
 const { finishChecks, finishReport } = await import('../src/commands/finish.js')
 const { recordQa, qaLogPath, lastQaOn, lastNegativeOn } = await import('../src/qalog.js')
@@ -48,7 +48,7 @@ Task:
 Build the entry page.
 `
 
-function repoAt (name, planText = PLAN()) {
+function repoAt(name, planText = PLAN()) {
   const repo = join(tmp, name)
   mkdirSync(join(repo, 'docs'), { recursive: true })
   git(['init', '-q', '-b', 'main'], repo)
@@ -58,25 +58,47 @@ function repoAt (name, planText = PLAN()) {
   writeFileSync(join(repo, 'PLAN.md'), planText)
   writeFileSync(join(repo, 'README.md'), '# Depot draw\n')
   writeFileSync(join(repo, 'log.txt'), 'evidence\n')
-  git(['add', '-A'], repo); git(['commit', '-qm', 'plan'], repo)
+  git(['add', '-A'], repo)
+  git(['commit', '-qm', 'plan'], repo)
   mkdirSync(join(repo, '.rig'), { recursive: true })
   writeFileSync(join(repo, '.rig', 'config.json'), JSON.stringify({ worktreeDir: '.worktrees', qaPort: 5199, branchPrefix: 'rig/' }))
   return repo
 }
 const cfg = { plan: 'PLAN.md', worktreeDir: '.worktrees', branchPrefix: 'rig/' }
-const commit = (repo, msg, env) => { git(['add', '-A'], repo); git(['commit', '-qm', msg], repo, env); return git(['rev-parse', 'HEAD'], repo) }
+const commit = (repo, msg, env) => {
+  git(['add', '-A'], repo)
+  git(['commit', '-qm', msg], repo, env)
+  return git(['rev-parse', 'HEAD'], repo)
+}
 
 /** Run a rig command module in a child process, cwd = repo, like `rig <cmd>` would. */
-function rig (cmd, repo, args, env = {}) {
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e',
-    `import('${join(RIG, 'src', 'commands', cmd + '.js')}').then(m => m.default(process.argv.slice(1)))`, '--', ...args],
-  { cwd: repo, encoding: 'utf8', env: { ...process.env, ...env } })
+function rig(cmd, repo, args, env = {}) {
+  const r = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import('${join(RIG, 'src', 'commands', cmd + '.js')}').then(m => m.default(process.argv.slice(1)))`,
+      '--',
+      ...args,
+    ],
+    { cwd: repo, encoding: 'utf8', env: { ...process.env, ...env } },
+  )
   return { status: r.status, out: plain(r.stdout + r.stderr) }
 }
-const rigBg = (cmd, repo, args) => spawn(process.execPath, ['--input-type=module', '-e',
-  `import('${join(RIG, 'src', 'commands', cmd + '.js')}').then(m => m.default(process.argv.slice(1)))`, '--', ...args],
-{ cwd: repo, stdio: 'ignore' })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
+const rigBg = (cmd, repo, args) =>
+  spawn(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import('${join(RIG, 'src', 'commands', cmd + '.js')}').then(m => m.default(process.argv.slice(1)))`,
+      '--',
+      ...args,
+    ],
+    { cwd: repo, stdio: 'ignore' },
+  )
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ---------------------------------------------------------------------------------------------
 // rig qa
@@ -130,9 +152,15 @@ test('a second rig qa while a lock is live takes qa-2; a stale lock is removed w
 
   // SIGTERM releases the lock, and only after the command running in the tree is gone.
   bg.kill('SIGTERM')
-  await new Promise(r => bg.on('exit', r))
+  await new Promise((r) => bg.on('exit', r))
   assert.ok(!existsSync(lock), 'the lock is gone after SIGTERM')
-  assert.deepEqual(qaSlots(repo, { worktreeDir: '.worktrees' }).map(s => [s.id, s.lock.live]), [['qa', false], ['qa-2', false]])
+  assert.deepEqual(
+    qaSlots(repo, { worktreeDir: '.worktrees' }).map((s) => [s.id, s.lock.live]),
+    [
+      ['qa', false],
+      ['qa-2', false],
+    ],
+  )
 
   // Known-bad for "in use": with no live lock, the next run takes qa again.
   const third = rig('qa', repo, ['HEAD', '--run', 'true'])
@@ -166,7 +194,8 @@ test('--negative runs in the same pinned worktree and is recorded as kind negati
   assert.equal(lastNegativeOn(repo, sha).exit, 3)
   assert.equal(lastNegativeOn(repo, sha).kind, 'negative')
   // Known-bad: the negative entry must not answer for the test entry.
-  rmSync(qaLogPath(repo)); recordQa(repo, { kind: 'negative', sha, exit: 0, cmd: 'x' })
+  rmSync(qaLogPath(repo))
+  recordQa(repo, { kind: 'negative', sha, exit: 0, cmd: 'x' })
   assert.equal(lastQaOn(repo, sha), null)
 })
 
@@ -191,54 +220,103 @@ test('a signal reaches the command running in the worktree; the lock is released
   for (let i = 0; i < 100 && !existsSync(lock); i++) await sleep(50)
   await sleep(300) // the shell is running by now
   bg.kill('SIGTERM')
-  const code = await new Promise(r => bg.on('exit', r))
+  const code = await new Promise((r) => bg.on('exit', r))
   assert.equal(code, 143)
   assert.ok(!existsSync(lock))
   await sleep(2500)
   assert.ok(!existsSync(marker), 'the orphaned command must not keep writing into a tree the lock says is free')
 })
 
-const twoAtOnce = repo => Promise.all([0, 1].map(() => new Promise(resolve => {
-  const c = spawn(process.execPath, ['--input-type=module', '-e',
-    `import('${join(RIG, 'src', 'commands', 'qa.js')}').then(m => m.default(process.argv.slice(1)))`, '--', 'HEAD', '--run', 'sleep 1'],
-  { cwd: repo, encoding: 'utf8' })
-  let out = ''
-  c.stdout.on('data', d => { out += d }); c.stderr.on('data', d => { out += d })
-  c.on('exit', code => resolve({ code, out: plain(out) }))
-})))
+const twoAtOnce = (repo) =>
+  Promise.all(
+    [0, 1].map(
+      () =>
+        new Promise((resolve) => {
+          const c = spawn(
+            process.execPath,
+            [
+              '--input-type=module',
+              '-e',
+              `import('${join(RIG, 'src', 'commands', 'qa.js')}').then(m => m.default(process.argv.slice(1)))`,
+              '--',
+              'HEAD',
+              '--run',
+              'sleep 1',
+            ],
+            { cwd: repo, encoding: 'utf8' },
+          )
+          let out = ''
+          c.stdout.on('data', (d) => {
+            out += d
+          })
+          c.stderr.on('data', (d) => {
+            out += d
+          })
+          c.on('exit', (code) => resolve({ code, out: plain(out) }))
+        }),
+    ),
+  )
 
 test('two runs that both see the same stale lock land on qa and qa-2, and the winner’s lock is released (second review 2)', async () => {
   const repo = repoAt('stale-race')
   rig('qa', repo, ['HEAD', '--run', 'true'])
   writeFileSync(qaLockPath(join(repo, '.worktrees', 'qa')), '999999\n')
   const outs = await twoAtOnce(repo)
-  assert.deepEqual(outs.map(o => o.code), [0, 0], outs.map(o => o.out).join('\n----\n'))
-  const slots = outs.map(o => o.out.match(/QA worktree (qa(?:-\d+)?) pinned/)?.[1]).sort()
-  assert.deepEqual(slots, ['qa', 'qa-2'], outs.map(o => o.out).join('\n----\n'))
-  assert.equal(outs.filter(o => /removed a stale lock/.test(o.out)).length, 1, 'exactly one run took the stale lock over')
+  assert.deepEqual(
+    outs.map((o) => o.code),
+    [0, 0],
+    outs.map((o) => o.out).join('\n----\n'),
+  )
+  const slots = outs.map((o) => o.out.match(/QA worktree (qa(?:-\d+)?) pinned/)?.[1]).sort()
+  assert.deepEqual(slots, ['qa', 'qa-2'], outs.map((o) => o.out).join('\n----\n'))
+  assert.equal(outs.filter((o) => /removed a stale lock/.test(o.out)).length, 1, 'exactly one run took the stale lock over')
   assert.ok(!existsSync(qaLockPath(join(repo, '.worktrees', 'qa'))), 'the winner released its own lock')
 })
 
 test('two runs started in the same instant on a repo with no qa worktree take different slots (review 3)', async () => {
   const repo = repoAt('race')
-  const outs = await Promise.all([0, 1].map(() => new Promise(resolve => {
-    const c = spawn(process.execPath, ['--input-type=module', '-e',
-      `import('${join(RIG, 'src', 'commands', 'qa.js')}').then(m => m.default(process.argv.slice(1)))`, '--', 'HEAD', '--run', 'sleep 1'],
-    { cwd: repo, encoding: 'utf8' })
-    let out = ''
-    c.stdout.on('data', d => { out += d }); c.stderr.on('data', d => { out += d })
-    c.on('exit', code => resolve({ code, out: plain(out) }))
-  })))
-  assert.deepEqual(outs.map(o => o.code), [0, 0], outs.map(o => o.out).join('\n----\n'))
-  const slots = outs.map(o => o.out.match(/QA worktree (qa(?:-\d+)?) pinned/)?.[1]).sort()
-  assert.deepEqual(slots, ['qa', 'qa-2'], outs.map(o => o.out).join('\n----\n'))
+  const outs = await Promise.all(
+    [0, 1].map(
+      () =>
+        new Promise((resolve) => {
+          const c = spawn(
+            process.execPath,
+            [
+              '--input-type=module',
+              '-e',
+              `import('${join(RIG, 'src', 'commands', 'qa.js')}').then(m => m.default(process.argv.slice(1)))`,
+              '--',
+              'HEAD',
+              '--run',
+              'sleep 1',
+            ],
+            { cwd: repo, encoding: 'utf8' },
+          )
+          let out = ''
+          c.stdout.on('data', (d) => {
+            out += d
+          })
+          c.stderr.on('data', (d) => {
+            out += d
+          })
+          c.on('exit', (code) => resolve({ code, out: plain(out) }))
+        }),
+    ),
+  )
+  assert.deepEqual(
+    outs.map((o) => o.code),
+    [0, 0],
+    outs.map((o) => o.out).join('\n----\n'),
+  )
+  const slots = outs.map((o) => o.out.match(/QA worktree (qa(?:-\d+)?) pinned/)?.[1]).sort()
+  assert.deepEqual(slots, ['qa', 'qa-2'], outs.map((o) => o.out).join('\n----\n'))
 })
 
 // ---------------------------------------------------------------------------------------------
 // The finish gate.
 
 /** A repo where c1 built app/, merged, reported, and QA ran green on HEAD. Not reviewed yet. */
-function builtRepo (name, checks) {
+function builtRepo(name, checks) {
   const repo = repoAt(name, PLAN(checks))
   git(['checkout', '-qb', 'rig/c1'], repo)
   mkdirSync(join(repo, 'app'))
@@ -255,22 +333,33 @@ const review = (repo, date = '2026-09-15T12:00:00Z') => {
   writeFileSync(join(repo, 'docs', 'review-c1.md'), `# Review c1\nno findings (${date})\n`)
   return commit(repo, 'review c1', { GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date })
 }
-const check = (repo, name, opts) => finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main', opts).checks.find(c => c.name === name)
-const requal = (repo, sha) => { recordQa(repo, { kind: 'test', sha, exit: 0, cmd: 'npm test', dirtied: [] }) }
+const check = (repo, name, opts) =>
+  finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main', opts).checks.find((c) => c.name === name)
+const requal = (repo, sha) => {
+  recordQa(repo, { kind: 'test', sha, exit: 0, cmd: 'npm test', dirtied: [] })
+}
 
 test('an unreviewed slice fails the gate; --no-review warns and FINISH.md says so; a review on base passes', () => {
   const repo = builtRepo('review')
   assert.equal(check(repo, 'c1 reviewed').state, 'fail')
   assert.match(check(repo, 'c1 reviewed').detail, /docs\/review-c1\.md is not on main/)
   const warned = finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main', { noReview: true })
-  assert.equal(warned.checks.find(c => c.name === 'c1 reviewed').state, 'warn')
+  assert.equal(warned.checks.find((c) => c.name === 'c1 reviewed').state, 'warn')
   assert.match(finishReport(loadPlan(join(repo, 'PLAN.md')), warned, { noReview: true }), /Run with `--no-review`/)
   assert.doesNotMatch(finishReport(loadPlan(join(repo, 'PLAN.md')), warned, {}), /Run with `--no-review`/)
 
-  const head = review(repo); requal(repo, head)
+  const head = review(repo)
+  requal(repo, head)
   assert.equal(check(repo, 'c1 reviewed').state, 'ok')
   const r = finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main')
-  assert.equal(r.failed, false, r.checks.filter(c => c.state === 'fail').map(c => c.name + ': ' + c.detail).join('; '))
+  assert.equal(
+    r.failed,
+    false,
+    r.checks
+      .filter((c) => c.state === 'fail')
+      .map((c) => c.name + ': ' + c.detail)
+      .join('; '),
+  )
 })
 
 test('a review older than the slice’s last code commit does not count', () => {
@@ -290,7 +379,8 @@ test('a review older than the slice’s last code commit does not count', () => 
 test('a squash-merged slice whose branch still exists passes reviewed once its review is on base (review 1)', () => {
   const repo = repoAt('squash')
   git(['checkout', '-qb', 'rig/c1'], repo)
-  mkdirSync(join(repo, 'app')); writeFileSync(join(repo, 'app', 'entry.js'), 'export const entry = 1\n')
+  mkdirSync(join(repo, 'app'))
+  writeFileSync(join(repo, 'app', 'entry.js'), 'export const entry = 1\n')
   commit(repo, 'c1 part 1', { GIT_COMMITTER_DATE: '2026-09-15T10:00:00Z', GIT_AUTHOR_DATE: '2026-09-15T10:00:00Z' })
   writeFileSync(join(repo, 'app', 'entry.js'), 'export const entry = 2\n')
   commit(repo, 'c1 part 2', { GIT_COMMITTER_DATE: '2026-09-15T10:30:00Z', GIT_AUTHOR_DATE: '2026-09-15T10:30:00Z' })
@@ -302,7 +392,8 @@ test('a squash-merged slice whose branch still exists passes reviewed once its r
   assert.equal(check(repo, 'c1 reviewed').state, 'ok', check(repo, 'c1 reviewed').detail)
   // Known-bad: new unmerged code on the branch after the review makes it unreviewed again.
   git(['checkout', '-q', 'rig/c1'], repo)
-  writeFileSync(join(repo, 'app', 'more.js'), 'x\n'); commit(repo, 'c1 part 3')
+  writeFileSync(join(repo, 'app', 'more.js'), 'x\n')
+  commit(repo, 'c1 part 3')
   git(['checkout', '-q', 'main'], repo)
   assert.equal(check(repo, 'c1 merged').state, 'fail')
   assert.equal(check(repo, 'c1 reviewed').state, 'fail')
@@ -310,7 +401,9 @@ test('a squash-merged slice whose branch still exists passes reviewed once its r
 
 test('a slice that changed only docs/ needs no review', () => {
   const repo = repoAt('docs-only', PLAN().replace('- app/**', '- docs/notes/**'))
-  mkdirSync(join(repo, 'docs', 'notes')); writeFileSync(join(repo, 'docs', 'notes', 'a.md'), 'x\n'); commit(repo, 'notes')
+  mkdirSync(join(repo, 'docs', 'notes'))
+  writeFileSync(join(repo, 'docs', 'notes', 'a.md'), 'x\n')
+  commit(repo, 'notes')
   assert.equal(check(repo, 'c1 reviewed').state, 'ok')
   assert.match(check(repo, 'c1 reviewed').detail, /no code changes/)
 })
@@ -318,7 +411,8 @@ test('a slice that changed only docs/ needs no review', () => {
 test('negative controls must be green on THIS sha: a run on the previous sha does not count', () => {
   const repo = builtRepo('negative', '- `npm run demo` prints one VOID and one FAIL (the negative controls).')
   const old = git(['rev-parse', 'HEAD'], repo)
-  const head = review(repo); requal(repo, head)
+  const head = review(repo)
+  requal(repo, head)
   const name = `negative controls red on ${git(['rev-parse', '--short', 'HEAD'], repo)}`
   assert.equal(check(repo, name).state, 'fail')
   assert.match(check(repo, name).detail, /formatting moves the strings/)
@@ -334,9 +428,19 @@ test('negative controls must be green on THIS sha: a run on the previous sha doe
   assert.equal(finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main').failed, false)
 
   // Known-bad for the trigger: a plan with no negatives and no config command has no such gate.
-  const quiet = builtRepo('no-negative'); const h2 = review(quiet); requal(quiet, h2)
-  assert.equal(finishChecks(quiet, cfg, loadPlan(join(quiet, 'PLAN.md')), 'main').checks.some(c => /negative controls/.test(c.name)), false)
-  assert.equal(finishChecks(quiet, { ...cfg, negativeCommand: 'npm run demo' }, loadPlan(join(quiet, 'PLAN.md')), 'main').checks.some(c => /negative controls/.test(c.name) && c.state === 'fail'), true)
+  const quiet = builtRepo('no-negative')
+  const h2 = review(quiet)
+  requal(quiet, h2)
+  assert.equal(
+    finishChecks(quiet, cfg, loadPlan(join(quiet, 'PLAN.md')), 'main').checks.some((c) => /negative controls/.test(c.name)),
+    false,
+  )
+  assert.equal(
+    finishChecks(quiet, { ...cfg, negativeCommand: 'npm run demo' }, loadPlan(join(quiet, 'PLAN.md')), 'main').checks.some(
+      (c) => /negative controls/.test(c.name) && c.state === 'fail',
+    ),
+    true,
+  )
 })
 
 test('a QA run that dirtied the tree fails the gate by name', () => {
@@ -358,16 +462,19 @@ test('a QA run that dirtied the tree fails the gate by name', () => {
 // ---------------------------------------------------------------------------------------------
 // The desk: only on a pass.
 
-function stubs () {
-  const bin = join(tmp, 'bin'); mkdirSync(bin, { recursive: true })
+function stubs() {
+  const bin = join(tmp, 'bin')
+  mkdirSync(bin, { recursive: true })
   const log = join(tmp, 'desk.log')
   const stub = (name, body = '') => {
     writeFileSync(join(bin, name), `#!/bin/sh\nprintf '%s\\n' "${name} $*" >> "${log}"\n${body}\n`)
     chmodSync(join(bin, name), 0o755)
   }
-  stub('jot'); stub('apps'); stub('wrap')
+  stub('jot')
+  stub('apps')
+  stub('wrap')
   stub('gh', 'case "$2" in view) echo \'{"state":"OPEN"}\';; esac\nexit 0')
-  return { bin, log, lines: () => existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [] }
+  return { bin, log, lines: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []) }
 }
 
 test('a passing finish closes the slice issue, jots and touches the registry; a failing one does none of it', () => {
@@ -385,7 +492,8 @@ test('a passing finish closes the slice issue, jots and touches the registry; a 
   assert.deepEqual(d.lines(), [])
   assert.match(readFileSync(join(repo, 'docs', 'FINISH.md'), 'utf8'), /## Desk\n- skipped: a gate failed/)
 
-  const head = review(repo); requal(repo, head)
+  const head = review(repo)
+  requal(repo, head)
   const short = git(['rev-parse', '--short', 'HEAD'], repo)
   const pass = rig('finish', repo, [], env)
   assert.equal(pass.status, 0, pass.out)
@@ -395,7 +503,7 @@ test('a passing finish closes the slice issue, jots and touches the registry; a 
   assert.ok(lines.includes(`gh issue close 7 --comment Finished: \`npm test\` exit 0 on \`${short}\` (rig finish)`), lines.join('\n'))
   assert.ok(lines.includes(`jot [depot-draw] Depot draw: finished at ${short}; npm test exit 0; 1 slices`), lines.join('\n'))
   assert.ok(lines.includes('apps touch depot-draw'))
-  assert.ok(!lines.some(l => l.startsWith('wrap ')), 'wrap never runs without --wrap')
+  assert.ok(!lines.some((l) => l.startsWith('wrap ')), 'wrap never runs without --wrap')
   assert.match(pass.out, /next: wrap depot-draw "Depot draw: finished at/)
   const finishMd = readFileSync(join(repo, 'docs', 'FINISH.md'), 'utf8')
   assert.match(finishMd, /## Desk\n- ✓ close c1 issue #7/)
@@ -406,20 +514,25 @@ test('a passing finish closes the slice issue, jots and touches the registry; a 
   const again = rig('finish', repo, ['--wrap', 'shipped the draw'], env)
   assert.equal(again.status, 0, again.out)
   assert.ok(d.lines().includes('wrap depot-draw shipped the draw'))
-  assert.equal(d.lines().filter(l => l.startsWith('jot ')).length, 0, d.lines().join('\n'))
-  assert.equal(d.lines().filter(l => l.startsWith('apps touch')).length, 0)
+  assert.equal(d.lines().filter((l) => l.startsWith('jot ')).length, 0, d.lines().join('\n'))
+  assert.equal(d.lines().filter((l) => l.startsWith('apps touch')).length, 0)
   assert.match(again.out, /already jotted on/)
   // A new sha is a new finish: it jots once more.
-  writeFileSync(join(repo, 'docs', 'review-c1.md'), '# Review c1\nstill no findings\n'); const h2 = commit(repo, 'review again'); requal(repo, h2)
-  rmSync(d.log); rig('finish', repo, [], env)
-  assert.equal(d.lines().filter(l => l.startsWith('jot ')).length, 1)
+  writeFileSync(join(repo, 'docs', 'review-c1.md'), '# Review c1\nstill no findings\n')
+  const h2 = commit(repo, 'review again')
+  requal(repo, h2)
+  rmSync(d.log)
+  rig('finish', repo, [], env)
+  assert.equal(d.lines().filter((l) => l.startsWith('jot ')).length, 1)
 
   // --wrap misuse is refused out loud, exit 2, nothing run (review 6).
   rmSync(d.log)
   const noMsg = rig('finish', repo, ['--wrap'], env)
-  assert.equal(noMsg.status, 2); assert.match(noMsg.out, /--wrap needs a message/)
+  assert.equal(noMsg.status, 2)
+  assert.match(noMsg.out, /--wrap needs a message/)
   const contradict = rig('finish', repo, ['--wrap', 'x', '--no-desk'], env)
-  assert.equal(contradict.status, 2); assert.match(contradict.out, /--wrap and --no-desk contradict/)
+  assert.equal(contradict.status, 2)
+  assert.match(contradict.out, /--wrap and --no-desk contradict/)
   assert.deepEqual(d.lines(), [])
 
   // --no-desk runs nothing.
@@ -429,14 +542,16 @@ test('a passing finish closes the slice issue, jots and touches the registry; a 
 })
 
 test('without cfg.slug the desk uses rg2’s slug rule for the directory name (review 7)', () => {
-  const d = stubs(); rmSync(d.log, { force: true })
+  const d = stubs()
+  rmSync(d.log, { force: true })
   const env = { PATH: `${d.bin}:${process.env.PATH}` }
   const repo = builtRepo('Depot Draw')
-  const head = review(repo); requal(repo, head)
+  const head = review(repo)
+  requal(repo, head)
   const r = rig('finish', repo, [], env)
   assert.equal(r.status, 0, r.out)
   assert.ok(d.lines().includes('apps touch depot-draw'), d.lines().join('\n'))
-  assert.ok(d.lines().some(l => l.startsWith('jot [depot-draw] ')))
+  assert.ok(d.lines().some((l) => l.startsWith('jot [depot-draw] ')))
 })
 
 test('rig qa usage says the exit is the first non-zero of test then negative (review 8)', () => {
@@ -446,7 +561,8 @@ test('rig qa usage says the exit is the first non-zero of test then negative (re
 
 test('desk tools that are not on PATH are skipped with a reason, never thrown', () => {
   const repo = builtRepo('nodesk-tools')
-  const head = review(repo); requal(repo, head)
+  const head = review(repo)
+  requal(repo, head)
   const r = rig('finish', repo, [], { PATH: dirname(process.execPath) + ':/usr/bin:/bin' })
   assert.equal(r.status, 0, r.out)
   assert.match(r.out, /skip {2}jot .*— jot is not on PATH/)

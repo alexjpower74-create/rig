@@ -10,13 +10,13 @@ import { terminal } from '../terminal.js'
 // spots. `rig review <id>` writes a review brief for someone who did not write the code — another
 // slice, or a fresh agent in its own tab — pointed at exactly that slice's diff and the plan's rules.
 
-export default function review (args) {
+export default function review(args) {
   const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const id = firstBare(args)
   if (!id) throw new Error('usage: rig review <slice-id> [--base <ref>] [--by <slice-id>] [--launch]')
-  const agent = plan.agents.find(a => a.id === id)
+  const agent = plan.agents.find((a) => a.id === id)
   if (!agent) throw new Error(`no slice "${id}" in ${cfg.plan}`)
 
   const base = argOf(args, '--base') || currentBranch(root)
@@ -37,7 +37,10 @@ export default function review (args) {
   }
   if (args.includes('--launch')) {
     const term = terminal(cfg)
-    if (!term.available()) { console.log(`\n${term.name} not available; start a reviewer yourself with that brief.`); return }
+    if (!term.available()) {
+      console.log(`\n${term.name} not available; start a reviewer yourself with that brief.`)
+      return
+    }
     const label = `rv-${id}`
     const cmd = `${argOf(args, '--launch-cmd') || cfg.launch} "Read ${rel} and follow it."`
     const session = sessionName(root)
@@ -48,23 +51,29 @@ export default function review (args) {
 }
 
 const VALUE_FLAGS = new Set(['--base', '--by', '--launch-cmd'])
-function firstBare (args) {
+function firstBare(args) {
   for (let i = 0; i < args.length; i++) {
-    if (VALUE_FLAGS.has(args[i])) { i++; continue }
+    if (VALUE_FLAGS.has(args[i])) {
+      i++
+      continue
+    }
     if (!args[i].startsWith('-')) return args[i]
   }
   return null
 }
-function argOf (args, name) { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
+function argOf(args, name) {
+  const i = args.indexOf(name)
+  return i >= 0 ? args[i + 1] : null
+}
 
 /** The review brief text, and the files and output path it names. Pure apart from reading git. */
-export function reviewBrief (plan, agent, { root, base, branch, by }) {
+export function reviewBrief(plan, agent, { root, base, branch, by }) {
   const files = (() => {
     const r = tryGit(['diff', '--name-only', `${base}...${branch}`], root)
     return r.ok ? r.out.split('\n').filter(Boolean) : []
   })()
   const out = `docs/review-${agent.id}.md`
-  const rules = (plan.mustNotRules || []).filter(r => !/^<.*>$/.test(r))
+  const rules = (plan.mustNotRules || []).filter((r) => !/^<.*>$/.test(r))
   const text = `# Review brief — ${agent.id}${agent.title ? ' · ' + agent.title : ''}
 
 You are reviewing work you did not write${by ? ` (you are ${by})` : ''}. **Read only: do not edit, commit
@@ -76,9 +85,9 @@ if the project has one.
 ## What to read
 \`git diff ${base}...${branch}\`
 
-${files.length ? files.map(f => '- `' + f + '`').join('\n') : '- (no changes on that branch yet)'}
+${files.length ? files.map((f) => '- `' + f + '`').join('\n') : '- (no changes on that branch yet)'}
 
-The slice owns: ${agent.owns.map(o => '`' + o + '`').join(', ')}
+The slice owns: ${agent.owns.map((o) => '`' + o + '`').join(', ')}
 
 ## What to look for
 1. **Where this slice meets another.** Every real defect on a crew build has crossed that line: a
@@ -90,7 +99,7 @@ The slice owns: ${agent.owns.map(o => '`' + o + '`').join(', ')}
    daylight-saving night.
 4. **The hard rules below**, and anything in the diff that sends, deploys, spends or deletes.
 
-${rules.length ? `## What must not happen (from the plan)\n${rules.map(r => '- ' + r).join('\n')}\n\n` : ''}## Report
+${rules.length ? `## What must not happen (from the plan)\n${rules.map((r) => '- ' + r).join('\n')}\n\n` : ''}## Report
 Write \`${out}\`: actionable findings only, each with the file and line, the concrete input or state
 that goes wrong, and what the author should check. Say "no findings" if there are none; do not pad it.
 Commit only that file.

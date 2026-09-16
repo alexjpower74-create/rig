@@ -15,7 +15,7 @@ import { sep } from 'node:path'
 import { tryRun } from './sh.js'
 
 /** Is `cwd` the directory `dir` or below it? A deleted working directory still counts. */
-export function insideDir (cwd, dir) {
+export function insideDir(cwd, dir) {
   const clean = cwd.replace(/ \(deleted\)$/, '')
   return clean === dir || clean.startsWith(dir.endsWith(sep) ? dir : dir + sep)
 }
@@ -26,18 +26,32 @@ const inside = insideDir
  * `dir` is resolved through symlinks first: the kernel reports canonical working directories, so a
  * worktree reached through a symlinked home or /tmp would otherwise match nothing.
  */
-export function processesIn (dir, { resolve = true } = {}) {
-  if (resolve) { try { dir = realpathSync(dir) } catch { /* gone already: compare as given */ } }
+export function processesIn(dir, { resolve = true } = {}) {
+  if (resolve) {
+    try {
+      dir = realpathSync(dir)
+    } catch {
+      /* gone already: compare as given */
+    }
+  }
   const found = []
   if (process.platform === 'linux') {
     let entries = []
-    try { entries = readdirSync('/proc') } catch { return found }
+    try {
+      entries = readdirSync('/proc')
+    } catch {
+      return found
+    }
     for (const name of entries) {
       if (!/^\d+$/.test(name)) continue
       const pid = Number(name)
       if (pid === process.pid) continue
       let cwd
-      try { cwd = readlinkSync(`/proc/${pid}/cwd`) } catch { continue } // another user's, or gone
+      try {
+        cwd = readlinkSync(`/proc/${pid}/cwd`)
+      } catch {
+        continue
+      } // another user's, or gone
       if (inside(cwd, dir)) found.push(pid)
     }
     return found
@@ -54,10 +68,15 @@ export function processesIn (dir, { resolve = true } = {}) {
 }
 
 /** SIGTERM each pid; returns the ones that were signalled. */
-export function stopProcesses (pids) {
+export function stopProcesses(pids) {
   const stopped = []
   for (const pid of pids) {
-    try { process.kill(pid, 'SIGTERM'); stopped.push(pid) } catch { /* already gone */ }
+    try {
+      process.kill(pid, 'SIGTERM')
+      stopped.push(pid)
+    } catch {
+      /* already gone */
+    }
   }
   return stopped
 }

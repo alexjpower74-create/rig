@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process'
 const git = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
 /** A throwaway repo with a gitignored .rig/, one commit, and a linked worktree — the real shape. */
-function scaffold () {
+function scaffold() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'rig-test-')))
   git(['init', '-q', '-b', 'main'], root)
   git(['config', 'user.email', 'test@example.invalid'], root)
@@ -25,9 +25,16 @@ function scaffold () {
   writeFileSync(join(root, '.gitignore'), '.rig/\n.worktrees/\n')
   writeFileSync(join(root, 'PLAN.md'), PLAN)
   mkdirSync(join(root, '.rig'), { recursive: true })
-  writeFileSync(join(root, '.rig', 'config.json'), JSON.stringify({
-    plan: 'PLAN.md', worktreeDir: '.worktrees', portBase: 7777, qaPort: 7799, branchPrefix: 'slice/'
-  }))
+  writeFileSync(
+    join(root, '.rig', 'config.json'),
+    JSON.stringify({
+      plan: 'PLAN.md',
+      worktreeDir: '.worktrees',
+      portBase: 7777,
+      qaPort: 7799,
+      branchPrefix: 'slice/',
+    }),
+  )
   git(['add', '-A'], root)
   git(['commit', '-qm', 'base'], root)
   git(['worktree', 'add', '-q', join(root, '.worktrees', 'c1'), '-b', 'slice/c1'], root)
@@ -57,7 +64,7 @@ Prove it.
 
 const { root, worktree } = scaffold()
 
-await suite('rig, about itself', async s => {
+await suite('rig, about itself', async (s) => {
   const { mainRoot, loadConfig, DEFAULTS } = await import('../src/config.js')
   const { loadPlan } = await import('../src/plan.js')
   const { reportPath, isOwnReport } = await import('../src/reports.js')
@@ -75,7 +82,7 @@ await suite('rig, about itself', async s => {
       const p = join(root, '.rig', 'config.json')
       renameSync(p, p + '.aside')
       return () => renameSync(p + '.aside', p)
-    }
+    },
   })
 
   // The bug's actual signature: worktreeDir resolved against the wrong root, so the brief named
@@ -91,9 +98,9 @@ await suite('rig, about itself', async s => {
     },
     breaks: async () => {
       const p = join(root, '.rig', 'config.json')
-      renameSync(p, p + '.aside')            // DEFAULTS put worktreeDir at ../.rig-worktrees
+      renameSync(p, p + '.aside') // DEFAULTS put worktreeDir at ../.rig-worktrees
       return () => renameSync(p + '.aside', p)
-    }
+    },
   })
 
   // ----------------------------------------------------------------------------------------
@@ -102,8 +109,8 @@ await suite('rig, about itself', async s => {
   await s.check('a slice reports where the plan says, and the guard exempts that path', {
     assert: async () => {
       const plan = loadPlan(join(root, 'PLAN.md'))
-      const c1 = plan.agents.find(a => a.id === 'c1')
-      const c2 = plan.agents.find(a => a.id === 'c2')
+      const c1 = plan.agents.find((a) => a.id === 'c1')
+      const c2 = plan.agents.find((a) => a.id === 'c2')
       if (reportPath(c1) !== 'docs/build-report-bundle.md') throw new Error(`c1 -> ${reportPath(c1)}`)
       if (reportPath(c2) !== 'docs/build-report-c2.md') throw new Error(`c2 default lost: ${reportPath(c2)}`)
       // The guard has to agree, or the agent is refused for writing what the brief asked for.
@@ -118,7 +125,7 @@ await suite('rig, about itself', async s => {
       const p = join(root, 'PLAN.md')
       writeFileSync(p, PLAN.replace('Report: docs/build-report-bundle.md\n\n', ''))
       return () => writeFileSync(p, PLAN)
-    }
+    },
   })
 
   // ----------------------------------------------------------------------------------------
@@ -127,7 +134,12 @@ await suite('rig, about itself', async s => {
   await s.check('two slices cannot report to the same file', {
     assert: async () => {
       const clash = PLAN.replace('Task:\nProve it.', 'Report: docs/build-report-bundle.md\n\nTask:\nProve it.')
-      try { loadPlan.length; parsePlanGuard(clash) } catch (e) { return /both report to/.test(e.message) }
+      try {
+        loadPlan.length
+        parsePlanGuard(clash)
+      } catch (e) {
+        return /both report to/.test(e.message)
+      }
       throw new Error('a plan with two slices sharing a report path was accepted')
     },
     breaks: async () => {
@@ -135,15 +147,21 @@ await suite('rig, about itself', async s => {
       // for can no longer be raised, so a check that "passes whenever something throws" fails.
       const original = globalThis.__rigTestPlanOverride
       globalThis.__rigTestPlanOverride = PLAN
-      return () => { globalThis.__rigTestPlanOverride = original }
-    }
+      return () => {
+        globalThis.__rigTestPlanOverride = original
+      }
+    },
   })
 
-  function parsePlanGuard (text) {
+  function parsePlanGuard(text) {
     const src = globalThis.__rigTestPlanOverride ?? text
     const p = join(root, '.rig', 'clash-plan.md')
     writeFileSync(p, src)
-    try { return loadPlan(p) } finally { rmSync(p, { force: true }) }
+    try {
+      return loadPlan(p)
+    } finally {
+      rmSync(p, { force: true })
+    }
   }
 })
 

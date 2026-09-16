@@ -19,18 +19,27 @@ import { join, isAbsolute, resolve, basename } from 'node:path'
 import { parseSections } from './plan.js'
 import { tryGit, gitRaw } from './sh.js'
 
-const strip = s => s.replace(/`/g, '').trim()
+const strip = (s) => s.replace(/`/g, '').trim()
 
-export function parseRoll (text) {
+export function parseRoll(text) {
   const lines = text.split('\n')
-  const title = (lines.find(l => /^#\s+/.test(l)) || '# roll').replace(/^#\s+/, '').trim()
+  const title = (lines.find((l) => /^#\s+/.test(l)) || '# roll').replace(/^#\s+/, '').trim()
   const sections = parseSections(lines)
-  const sec = (re) => sections.find(x => re.test(x.heading))?.body || ''
-  const bulletsOf = (body) => body.split('\n').map(l => l.trim()).filter(l => /^[-*]\s+/.test(l)).map(l => l.replace(/^[-*]\s+/, '').trim())
+  const sec = (re) => sections.find((x) => re.test(x.heading))?.body || ''
+  const bulletsOf = (body) =>
+    body
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => /^[-*]\s+/.test(l))
+      .map((l) => l.replace(/^[-*]\s+/, '').trim())
 
   const purpose = sec(/^what it.?s for$/i).trim()
   const mustNot = bulletsOf(sec(/^what must not happen$/i))
-  const procedure = sec(/^procedure per repo$/i).split('\n').map(l => l.trim()).filter(l => /^(\d+[.)]|[-*])\s+/.test(l)).map(l => l.replace(/^(\d+[.)]|[-*])\s+/, '').trim())
+  const procedure = sec(/^procedure per repo$/i)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^(\d+[.)]|[-*])\s+/.test(l))
+    .map((l) => l.replace(/^(\d+[.)]|[-*])\s+/, '').trim())
   const commitSubject = strip(firstLine(sec(/^commit subject$/i)))
   const report = strip(firstLine(sec(/^report$/i)))
 
@@ -44,13 +53,17 @@ export function parseRoll (text) {
   // `## Lists` holds `### <tab id>` headings. parseSections keys ### under their own names, so
   // walk the raw lines from the Lists heading to the next ## instead.
   const lists = {}
-  const start = lines.findIndex(l => /^##\s+Lists\s*$/i.test(l))
+  const start = lines.findIndex((l) => /^##\s+Lists\s*$/i.test(l))
   if (start >= 0) {
     let tab = null
     for (const raw of lines.slice(start + 1)) {
       if (/^##\s+/.test(raw) && !/^###/.test(raw)) break
       const h = raw.match(/^###\s+(.+?)\s*$/)
-      if (h) { tab = h[1].split(/\s+[—–-]\s+/)[0].trim(); lists[tab] ||= []; continue }
+      if (h) {
+        tab = h[1].split(/\s+[—–-]\s+/)[0].trim()
+        lists[tab] ||= []
+        continue
+      }
       if (!tab) continue
       const line = raw.replace(/^\s*[-*]\s+/, '').trim()
       if (!line || /^<.*>$/.test(line)) continue
@@ -63,7 +76,8 @@ export function parseRoll (text) {
   const seen = new Map()
   for (const [tab, slugs] of Object.entries(lists)) {
     for (const slug of slugs) {
-      if (seen.has(slug) && seen.get(slug) !== tab) throw new Error(`slug "${slug}" is in two lists (${seen.get(slug)} and ${tab}); a repo belongs to one tab`)
+      if (seen.has(slug) && seen.get(slug) !== tab)
+        throw new Error(`slug "${slug}" is in two lists (${seen.get(slug)} and ${tab}); a repo belongs to one tab`)
       if (seen.has(slug)) throw new Error(`slug "${slug}" is listed twice under ${tab}`)
       seen.set(slug, tab)
     }
@@ -74,12 +88,21 @@ export function parseRoll (text) {
   return { title, purpose, mustNot, procedure, commitSubject, report, repos, lists }
 }
 
-function firstLine (body) { return body.split('\n').map(l => l.trim()).find(l => l && !/^<.*>$/.test(l)) || '' }
+function firstLine(body) {
+  return (
+    body
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l && !/^<.*>$/.test(l)) || ''
+  )
+}
 
-export function expandHome (p, home) { return p === '~' ? home : p.startsWith('~/') ? join(home, p.slice(2)) : p }
+export function expandHome(p, home) {
+  return p === '~' ? home : p.startsWith('~/') ? join(home, p.slice(2)) : p
+}
 
 /** The `code:` field of a registry file's frontmatter, or null. */
-export function registryCode (file) {
+export function registryCode(file) {
   if (!existsSync(file)) return null
   const text = readFileSync(file, 'utf8')
   const fm = text.match(/^---\n([\s\S]*?)\n---/)
@@ -94,7 +117,7 @@ export function registryCode (file) {
  * then `~/Projects/<slug>`. Every slug must resolve to an existing folder before anything is
  * launched: a tab that starts on a path that is not there wastes its first turn asking.
  */
-export function resolveRepos (roll, { home, registryDir, projectsDir } = {}) {
+export function resolveRepos(roll, { home, registryDir, projectsDir } = {}) {
   home ||= process.env.HOME
   registryDir ||= join(home, '.claude', 'apps')
   projectsDir ||= join(home, 'Projects')
@@ -104,29 +127,47 @@ export function resolveRepos (roll, { home, registryDir, projectsDir } = {}) {
     tabs[tab] = []
     for (const slug of slugs) {
       let path, via
-      if (roll.repos[slug]) { path = expandHome(roll.repos[slug], home); via = 'Repos' }
-      else {
+      if (roll.repos[slug]) {
+        path = expandHome(roll.repos[slug], home)
+        via = 'Repos'
+      } else {
         const code = registryCode(join(registryDir, slug + '.md'))
-        if (code) { path = expandHome(code, home); via = 'registry' }
-        else { path = join(projectsDir, slug); via = 'Projects' }
+        if (code) {
+          path = expandHome(code, home)
+          via = 'registry'
+        } else {
+          path = join(projectsDir, slug)
+          via = 'Projects'
+        }
       }
       if (!isAbsolute(path)) path = resolve(home, path)
-      if (!existsSync(path) || !statSync(path).isDirectory()) { missing.push(`${slug} (${via}: ${path})`); continue }
+      if (!existsSync(path) || !statSync(path).isDirectory()) {
+        missing.push(`${slug} (${via}: ${path})`)
+        continue
+      }
       tabs[tab].push({ slug, path, via })
     }
   }
-  if (missing.length) throw new Error(`${missing.length} slug(s) resolve to no folder — fix the list, the registry code: field, or add \`slug = ~/path\` under ## Repos:\n  ${missing.join('\n  ')}`)
+  if (missing.length)
+    throw new Error(
+      `${missing.length} slug(s) resolve to no folder — fix the list, the registry code: field, or add \`slug = ~/path\` under ## Repos:\n  ${missing.join('\n  ')}`,
+    )
   return tabs
 }
 
-export function rollName (briefPath, date = new Date()) {
-  const base = basename(briefPath).replace(/\.md$/i, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'roll'
+export function rollName(briefPath, date = new Date()) {
+  const base =
+    basename(briefPath)
+      .replace(/\.md$/i, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'roll'
   // Local date, as `rig qa`'s history uses: the dir is what the lead types into `status` and `finish`.
   const d = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
   return `${base}-${d}`
 }
 
-export function reportPathFor (roll, rollDir, tab, home) {
+export function reportPathFor(roll, rollDir, tab, home) {
   const raw = roll.report && !/^<.*>$/.test(roll.report) ? roll.report : ''
   if (!raw) return join(rollDir, tab, 'REPORT.md')
   const p = expandHome(raw.replace(/\{tab\}|<tab>/g, tab), home)
@@ -134,8 +175,8 @@ export function reportPathFor (roll, rollDir, tab, home) {
 }
 
 /** The brief one tab reads: purpose, the rules, the procedure, its repos, and the commit discipline. */
-export function tabBrief (roll, tab, repos, { rollDir, reportPath, briefPath }) {
-  const rules = roll.mustNot.filter(r => !/^<.*>$/.test(r))
+export function tabBrief(roll, tab, repos, { rollDir, reportPath, briefPath }) {
+  const rules = roll.mustNot.filter((r) => !/^<.*>$/.test(r))
   return `# Brief — ${tab} · ${roll.title}
 
 This is a ROLL: one procedure applied to a list of repos, one after the other. You own the repos
@@ -145,13 +186,17 @@ the roll's contract is \`${join(rollDir, 'ROLL.md')}\`.
 ## What it's for
 ${roll.purpose || '(not stated)'}
 
-${rules.length ? `## What must not happen — hard rules, from the brief
-${rules.map(r => '- ' + r).join('\n')}
+${
+  rules.length
+    ? `## What must not happen — hard rules, from the brief
+${rules.map((r) => '- ' + r).join('\n')}
 
 If a step seems to need one of these to happen, stop on that repo, write SKIPPED with the reason in
 your report, and move on. These outrank the procedure.
 
-` : ''}## Your repos, in order
+`
+    : ''
+}## Your repos, in order
 ${repos.map((r, i) => `${i + 1}. \`${r.slug}\`  ${r.path}`).join('\n')}
 
 Every one of them ends the roll in exactly one state in your report: done (with its commit sha) or
@@ -197,19 +242,22 @@ A usage pause lands mid-roll with no warning; the report is what survives it.
 // Status, read from the repos themselves. The roll keeps no memory of what an agent did; the git
 // tree and the report file are the only witnesses, and both are re-read every time.
 
-const short = sha => sha.slice(0, 7)
+const short = (sha) => sha.slice(0, 7)
 
 /** The remote a roll pushes to: `origin` when there is one, else the first remote, else null. A
  *  remote named anything else used to read as "no remote", and an unpushed commit passed as local only. */
-export function remoteName (repo) {
+export function remoteName(repo) {
   const r = tryGit(['remote'], repo)
   if (!r.ok || !r.out.trim()) return null
-  const names = r.out.split('\n').map(x => x.trim()).filter(Boolean)
+  const names = r.out
+    .split('\n')
+    .map((x) => x.trim())
+    .filter(Boolean)
   return names.includes('origin') ? 'origin' : names[0]
 }
 
 /** The remote's default branch as `<remote>/<name>`, or null when the repo has no remote. */
-export function remoteHead (repo) {
+export function remoteHead(repo) {
   const remote = remoteName(repo)
   if (!remote) return null
   const sym = tryGit(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`], repo)
@@ -218,7 +266,7 @@ export function remoteHead (repo) {
   return `${remote}/main`
 }
 
-export function isDirty (repo) {
+export function isDirty(repo) {
   const r = gitRaw(['-c', 'core.quotePath=false', 'status', '--porcelain', '-uall'], repo)
   return r.ok && r.out.trim().length > 0
 }
@@ -231,7 +279,7 @@ export function isDirty (repo) {
  * Committer date, not author date: a cherry-pick, rebase or `git am` on top keeps its old author
  * date and would otherwise stop the scan before the tab's commit.
  */
-export function rollCommit (repo, startedAt, commitSubject) {
+export function rollCommit(repo, startedAt, commitSubject) {
   const since = Math.floor(new Date(startedAt).getTime() / 1000)
   const r = tryGit(['log', '-n', '500', '--format=%H%x09%ct%x09%s'], repo)
   if (!r.ok || !r.out) return null
@@ -251,7 +299,7 @@ export function rollCommit (repo, startedAt, commitSubject) {
  * A slug mentioned in prose, a heading, or a longer hyphenated slug is not "named"; a done line
  * with the word SKIPPED later in it is done. Returns Map slug -> { state: 'done' | 'skipped', sha, note }.
  */
-export function reportLines (reportText) {
+export function reportLines(reportText) {
   const out = new Map()
   for (const line of (reportText || '').split('\n')) {
     const m = line.match(/^\s*[-*]\s*`?([A-Za-z0-9._-]+)`?\s*:\s*(done|SKIPPED)\b\s*(?:`?([0-9a-f]{7,40})`?)?\s*(.*)$/i)
@@ -264,14 +312,14 @@ export function reportLines (reportText) {
 }
 
 /** Slugs a report marks SKIPPED (`- <slug>: SKIPPED — <reason>` only). */
-export function skippedIn (reportText) {
+export function skippedIn(reportText) {
   return new Set([...reportLines(reportText)].filter(([, v]) => v.state === 'skipped').map(([k]) => k))
 }
 
 /** Slugs the report accounts for: a done or SKIPPED line of their own. */
-export function namedIn (reportText, slugs) {
+export function namedIn(reportText, slugs) {
   const lines = reportLines(reportText)
-  return new Set(slugs.filter(s => lines.has(s.toLowerCase())))
+  return new Set(slugs.filter((s) => lines.has(s.toLowerCase())))
 }
 
 /**
@@ -279,7 +327,7 @@ export function namedIn (reportText, slugs) {
  * `fetch: true` refreshes origin first, so `pushed` is what the remote says, not what a stale
  * tracking ref remembers.
  */
-export function repoState (entry, { startedAt, commitSubject, skipped, fetch = true }) {
+export function repoState(entry, { startedAt, commitSubject, skipped, fetch = true }) {
   const { slug, path } = entry
   if (!existsSync(path)) return { slug, path, state: 'missing', sha: null }
   const c = rollCommit(path, startedAt, commitSubject)
@@ -305,7 +353,7 @@ export function repoState (entry, { startedAt, commitSubject, skipped, fetch = t
 }
 
 /** Every tab, every repo, from the roll record and the repos on disk. */
-export function rollStatus (rollDir, { fetch = true } = {}) {
+export function rollStatus(rollDir, { fetch = true } = {}) {
   const record = JSON.parse(readFileSync(join(rollDir, 'roll.json'), 'utf8'))
   const tabs = {}
   for (const [tab, repos] of Object.entries(record.tabs)) {
@@ -315,8 +363,11 @@ export function rollStatus (rollDir, { fetch = true } = {}) {
     tabs[tab] = {
       reportPath,
       reportExists: reportText != null,
-      named: namedIn(reportText, repos.map(r => r.slug)),
-      repos: repos.map(r => repoState(r, { startedAt: record.startedAt, commitSubject: record.commitSubject, skipped, fetch }))
+      named: namedIn(
+        reportText,
+        repos.map((r) => r.slug),
+      ),
+      repos: repos.map((r) => repoState(r, { startedAt: record.startedAt, commitSubject: record.commitSubject, skipped, fetch })),
     }
   }
   return { record, tabs }

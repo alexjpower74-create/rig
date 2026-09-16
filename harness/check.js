@@ -6,15 +6,15 @@
 // between a suite that catches regressions and a suite that just runs.
 
 const C = {
-  pass: s => `\x1b[32m${s}\x1b[0m`,
-  fail: s => `\x1b[31m${s}\x1b[0m`,
-  void_: s => `\x1b[35m${s}\x1b[0m`,
-  warn: s => `\x1b[33m${s}\x1b[0m`,
-  dim: s => `\x1b[2m${s}\x1b[0m`
+  pass: (s) => `\x1b[32m${s}\x1b[0m`,
+  fail: (s) => `\x1b[31m${s}\x1b[0m`,
+  void_: (s) => `\x1b[35m${s}\x1b[0m`,
+  warn: (s) => `\x1b[33m${s}\x1b[0m`,
+  dim: (s) => `\x1b[2m${s}\x1b[0m`,
 }
 
 export class Suite {
-  constructor (name, opts = {}) {
+  constructor(name, opts = {}) {
     this.name = name
     this.results = []
     this.requireNegativeControl = opts.requireNegativeControl ?? false
@@ -26,13 +26,17 @@ export class Suite {
    *   breaks()  -> deliberately break the thing under test. Return a function that restores it.
    *               Omit only when you genuinely cannot break it; the result is reported UNPROVEN.
    */
-  async check (name, { assert, breaks, timeout = 10_000 } = {}) {
+  async check(name, { assert, breaks, timeout = 10_000 } = {}) {
     const started = Date.now()
     const rec = { name, state: null, detail: '', ms: 0 }
 
     let ok
-    try { ok = await withTimeout(assert(), timeout, name) }
-    catch (e) { ok = false; rec.detail = e.message }
+    try {
+      ok = await withTimeout(assert(), timeout, name)
+    } catch (e) {
+      ok = false
+      rec.detail = e.message
+    }
 
     if (!ok) {
       rec.state = 'FAIL'
@@ -49,10 +53,19 @@ export class Suite {
     let stillPasses
     try {
       restore = await withTimeout(breaks(), timeout, name + ' (breaks)')
-      try { stillPasses = await withTimeout(assert(), timeout, name + ' (control)') }
-      catch { stillPasses = false }
+      try {
+        stillPasses = await withTimeout(assert(), timeout, name + ' (control)')
+      } catch {
+        stillPasses = false
+      }
     } finally {
-      if (typeof restore === 'function') { try { await restore() } catch (e) { rec.detail = 'restore failed: ' + e.message } }
+      if (typeof restore === 'function') {
+        try {
+          await restore()
+        } catch (e) {
+          rec.detail = 'restore failed: ' + e.message
+        }
+      }
     }
 
     if (stillPasses) {
@@ -64,7 +77,7 @@ export class Suite {
     return this.#record(rec, started)
   }
 
-  #record (rec, started) {
+  #record(rec, started) {
     rec.ms = Date.now() - started
     this.results.push(rec)
     const tag = { PASS: C.pass('PASS '), FAIL: C.fail('FAIL '), VOID: C.void_('VOID '), UNPROVEN: C.warn('UNPRV') }[rec.state]
@@ -73,9 +86,12 @@ export class Suite {
     return rec
   }
 
-  report () {
-    const by = s => this.results.filter(r => r.state === s).length
-    const pass = by('PASS'), fail = by('FAIL'), voids = by('VOID'), unproven = by('UNPROVEN')
+  report() {
+    const by = (s) => this.results.filter((r) => r.state === s).length
+    const pass = by('PASS'),
+      fail = by('FAIL'),
+      voids = by('VOID'),
+      unproven = by('UNPROVEN')
     console.log(`\n${this.name}: ${pass} passed, ${fail} failed, ${voids} void, ${unproven} unproven`)
     if (voids) console.log(C.void_('  VOID checks passed against a broken page. They are not evidence of anything.'))
     if (unproven && this.requireNegativeControl) console.log(C.warn('  UNPROVEN checks are failing this run (requireNegativeControl).'))
@@ -84,21 +100,28 @@ export class Suite {
   }
 }
 
-export async function suite (name, fn, opts) {
+export async function suite(name, fn, opts) {
   const s = new Suite(name, opts)
   console.log(`\n${name}`)
-  try { await fn(s) } catch (e) { console.log(`  ${C.fail('ERROR')} ${e.message}`); s.results.push({ name: 'suite', state: 'FAIL', detail: e.message, ms: 0 }) }
+  try {
+    await fn(s)
+  } catch (e) {
+    console.log(`  ${C.fail('ERROR')} ${e.message}`)
+    s.results.push({ name: 'suite', state: 'FAIL', detail: e.message, ms: 0 })
+  }
   const r = s.report()
   if (!r.ok) process.exitCode = 1
   return r
 }
 
-function withTimeout (p, ms, what) {
+function withTimeout(p, ms, what) {
   // The timer must keep the event loop alive while the check is in flight: with an unref'd timer, a check whose
   // promise never settles let Node 22 run out of work and exit before the timeout could fire (CI, 2026-09-13:
   // "Promise resolution is still pending but the event loop has already resolved"). Clear it once the race settles
   // so a passing check does not hold the process open for the full timeout.
   let timer
-  const deadline = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timed out after ${ms}ms: ${what}`)), ms) })
+  const deadline = new Promise((_, rej) => {
+    timer = setTimeout(() => rej(new Error(`timed out after ${ms}ms: ${what}`)), ms)
+  })
   return Promise.race([Promise.resolve(p), deadline]).finally(() => clearTimeout(timer))
 }

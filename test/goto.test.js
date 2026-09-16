@@ -11,11 +11,14 @@ import { createServer } from 'node:http'
 
 /** Serves a real page on one path and hangs up without answering on the other. */
 const server = createServer((req, res) => {
-  if (req.url === '/dead') { req.socket.destroy(); return }   // -> ERR_EMPTY_RESPONSE
+  if (req.url === '/dead') {
+    req.socket.destroy()
+    return
+  } // -> ERR_EMPTY_RESPONSE
   res.writeHead(200, { 'content-type': 'text/html' })
   res.end('<!doctype html><title>A Real Page</title><h1>Real</h1><p>This page exists.</p>')
 })
-await new Promise(r => server.listen(0, '127.0.0.1', r))
+await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const base = `http://127.0.0.1:${server.address().port}`
 
 const browser = await launch({ headless: true, port: 9800 + Math.floor(Math.random() * 150) })
@@ -30,18 +33,19 @@ const NAV_TIMEOUT = 8_000
 const CHECK_TIMEOUT = 20_000
 
 /** Navigate and say only whether it threw. */
-async function tryGoto (url) {
+async function tryGoto(url) {
   const page = await browser.newPage(null)
   try {
     await page.goto(url, { timeout: NAV_TIMEOUT })
     return { threw: false, title: await page.eval('document.title') }
   } catch (e) {
     return { threw: true, why: e.message }
-  } finally { await page.close() }
+  } finally {
+    await page.close()
+  }
 }
 
-await suite('goto refuses to call an error page a load', async t => {
-
+await suite('goto refuses to call an error page a load', async (t) => {
   let target = `${base}/dead`
 
   await t.check('a server that hangs up is reported as a failed navigation', {
@@ -52,7 +56,13 @@ await suite('goto refuses to call an error page a load', async t => {
     },
     // Point the same check at a page that genuinely works. It must stop throwing — otherwise
     // this passes because goto throws at everything, which is not the behaviour under test.
-    breaks: () => { const was = target; target = `${base}/ok`; return () => { target = was } }
+    breaks: () => {
+      const was = target
+      target = `${base}/ok`
+      return () => {
+        target = was
+      }
+    },
   })
 
   let good = `${base}/ok`
@@ -65,7 +75,13 @@ await suite('goto refuses to call an error page a load', async t => {
     },
     // The success path is where a too-aggressive guard does its damage: a goto that rejects
     // working sites is worse than the bug it was added to fix.
-    breaks: () => { const was = good; good = `${base}/dead`; return () => { good = was } }
+    breaks: () => {
+      const was = good
+      good = `${base}/dead`
+      return () => {
+        good = was
+      }
+    },
   })
 })
 
@@ -78,7 +94,7 @@ server.close()
 // passing when re-run alone. That is the most expensive shape a bug can take.
 import { liveBrowsers } from '../harness/cdp.js'
 
-await suite('browsers do not leak', async t => {
+await suite('browsers do not leak', async (t) => {
   await t.check('a closed browser is no longer tracked', {
     timeout: CHECK_TIMEOUT,
     // Absolute, not relative. A before/after delta stays true no matter how many browsers are
@@ -95,7 +111,9 @@ await suite('browsers do not leak', async t => {
     // thing that leaks.
     breaks: async () => {
       const b = await launch({ headless: true, port: 9930 + Math.floor(Math.random() * 60) })
-      return async () => { await b.close() }
-    }
+      return async () => {
+        await b.close()
+      }
+    },
   })
 })

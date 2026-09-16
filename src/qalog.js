@@ -8,17 +8,27 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const qaLogPath = root => join(root, '.rig', 'qa-history.jsonl')
+export const qaLogPath = (root) => join(root, '.rig', 'qa-history.jsonl')
 
-export function recordQa (root, entry) {
+export function recordQa(root, entry) {
   mkdirSync(join(root, '.rig'), { recursive: true })
   appendFileSync(qaLogPath(root), JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n')
 }
 
-export function readQa (root) {
+export function readQa(root) {
   const p = qaLogPath(root)
   if (!existsSync(p)) return []
-  return readFileSync(p, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+  return readFileSync(p, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => {
+      try {
+        return JSON.parse(l)
+      } catch {
+        return null
+      }
+    })
+    .filter(Boolean)
 }
 
 /**
@@ -26,8 +36,12 @@ export function readQa (root) {
  * kinds existed are test runs. A green run on any other sha does not count: formatting moves the
  * strings a source-patching control anchors on, the sha changes, and so must the record.
  */
-export function lastQaOn (root, sha, kind = 'test') {
-  return readQa(root).filter(e => e.sha === sha && (e.kind || 'test') === kind).pop() || null
+export function lastQaOn(root, sha, kind = 'test') {
+  return (
+    readQa(root)
+      .filter((e) => e.sha === sha && (e.kind || 'test') === kind)
+      .pop() || null
+  )
 }
 
 /** The newest negative-control run on this commit, or null. */

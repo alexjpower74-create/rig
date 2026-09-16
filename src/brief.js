@@ -1,29 +1,33 @@
 /** The standing orders every agent gets, plus the plan's brief and its own slice. */
-export function briefFor (plan, agent, ctx) {
-  const others = plan.agents.filter(a => a.id !== agent.id)
-  const section = (title, body) => body && body.trim() && !/^<.*>$/.test(body.trim()) ? `## ${title}\n${body.trim()}\n\n` : ''
-  const mustNot = (plan.mustNotRules || []).filter(r => !/^<.*>$/.test(r))
+export function briefFor(plan, agent, ctx) {
+  const others = plan.agents.filter((a) => a.id !== agent.id)
+  const section = (title, body) => (body && body.trim() && !/^<.*>$/.test(body.trim()) ? `## ${title}\n${body.trim()}\n\n` : '')
+  const mustNot = (plan.mustNotRules || []).filter((r) => !/^<.*>$/.test(r))
   return `# Brief — ${agent.id}${agent.title ? ' · ' + agent.title : ''}
 
 Project: **${plan.title}**
 Your branch: \`${ctx.branch}\`   Your worktree: \`${ctx.path}\`
 The contract is \`${ctx.planPath}\` at the repo root. Read it before you touch anything.
 ${ctx.issue ? `Your issue: #${ctx.issue.number}${ctx.issue.url ? ' ' + ctx.issue.url : ''} — the lead closes it at \`rig finish\`; put what is waiting on a person there.\n` : ''}
-${section("What it's for", plan.purpose)}${section('Who uses it, on what', plan.users)}${section('What done looks like', plan.done)}${mustNot.length ? `## What must not happen — hard rules, from the plan
-${mustNot.map(r => '- ' + r).join('\n')}
+${section("What it's for", plan.purpose)}${section('Who uses it, on what', plan.users)}${section('What done looks like', plan.done)}${
+  mustNot.length
+    ? `## What must not happen — hard rules, from the plan
+${mustNot.map((r) => '- ' + r).join('\n')}
 
 If your task seems to need one of these to happen, stop and say so in your report. These outrank
 your task.
 
-` : ''}## You own
-${agent.owns.map(o => '- `' + o + '`').join('\n')}
+`
+    : ''
+}## You own
+${agent.owns.map((o) => '- `' + o + '`').join('\n')}
 
 Nothing else. If your task seems to need a change outside this list, **stop and say so in your
 report** — do not reach into another agent's files. \`rig guard\` will refuse the commit anyway,
 and a silent cross-slice edit is the defect that costs the most to find later.
 
 ## Also on this build
-${others.length ? others.map(a => `- \`${a.id}\`${a.title ? ' — ' + a.title : ''} owns ${a.owns.map(o => '`' + o + '`').join(', ')}`).join('\n') : '- (you are alone on this one)'}
+${others.length ? others.map((a) => `- \`${a.id}\`${a.title ? ' — ' + a.title : ''} owns ${a.owns.map((o) => '`' + o + '`').join(', ')}`).join('\n') : '- (you are alone on this one)'}
 
 ## Your task
 ${agent.task || '(none stated in the plan — ask before inventing one)'}

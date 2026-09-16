@@ -8,25 +8,36 @@ import { suite } from '../harness/check.js'
 // herdr is detected by HERDR_ENV=1 *and* HERDR_PANE_ID (both injected into every pane it manages).
 // The test controls both: a machine where one is already set must not make the check pass or void.
 const setEnv = (v) => {
-  if (v == null) { delete process.env.HERDR_ENV; delete process.env.HERDR_PANE_ID }
-  else { process.env.HERDR_ENV = v; process.env.HERDR_PANE_ID = 'w0:p0' }
+  if (v == null) {
+    delete process.env.HERDR_ENV
+    delete process.env.HERDR_PANE_ID
+  } else {
+    process.env.HERDR_ENV = v
+    process.env.HERDR_PANE_ID = 'w0:p0'
+  }
 }
 const saved = { env: process.env.HERDR_ENV, pane: process.env.HERDR_PANE_ID }
 
-await suite('terminal backend', async s => {
+await suite('terminal backend', async (s) => {
   const { terminal } = await import('../src/terminal.js')
   const { inspect } = await import('../src/blocked.js')
 
   setEnv('1')
   await s.check('inside herdr, auto picks the herdr driver', {
     assert: async () => terminal({ terminal: 'auto' }).name === 'herdr',
-    breaks: async () => { setEnv(null); return () => setEnv('1') }
+    breaks: async () => {
+      setEnv(null)
+      return () => setEnv('1')
+    },
   })
 
   setEnv(null)
   await s.check('outside herdr, auto picks tmux', {
     assert: async () => terminal({ terminal: 'auto' }).name === 'tmux',
-    breaks: async () => { setEnv('1'); return () => setEnv(null) }
+    breaks: async () => {
+      setEnv('1')
+      return () => setEnv(null)
+    },
   })
 
   // Explicit config beats the environment. Broken by removing the setting, at which point the
@@ -35,7 +46,12 @@ await suite('terminal backend', async s => {
   const cfg = { terminal: 'tmux' }
   await s.check('an explicit "terminal" setting overrides the environment', {
     assert: async () => terminal(cfg).name === 'tmux',
-    breaks: async () => { delete cfg.terminal; return () => { cfg.terminal = 'tmux' } }
+    breaks: async () => {
+      delete cfg.terminal
+      return () => {
+        cfg.terminal = 'tmux'
+      }
+    },
   })
 
   // herdr's own verdict is trusted ahead of the text scan. The pane here does not exist, so there
@@ -44,14 +60,26 @@ await suite('terminal backend', async s => {
   let status = 'blocked'
   await s.check('herdr-reported blocked state is trusted without prompt text on screen', {
     assert: async () => inspect('no-such-pane', status).blocked === true,
-    breaks: async () => { status = 'unknown'; return () => { status = 'blocked' } }
+    breaks: async () => {
+      status = 'unknown'
+      return () => {
+        status = 'blocked'
+      }
+    },
   })
 
   let status2 = 'working'
   await s.check('herdr-reported working state suppresses a stale prompt in scrollback', {
     assert: async () => inspect('no-such-pane', status2).blocked === false,
-    breaks: async () => { status2 = 'blocked'; return () => { status2 = 'working' } }
+    breaks: async () => {
+      status2 = 'blocked'
+      return () => {
+        status2 = 'working'
+      }
+    },
   })
-  if (saved.env == null) delete process.env.HERDR_ENV; else process.env.HERDR_ENV = saved.env
-  if (saved.pane == null) delete process.env.HERDR_PANE_ID; else process.env.HERDR_PANE_ID = saved.pane
+  if (saved.env == null) delete process.env.HERDR_ENV
+  else process.env.HERDR_ENV = saved.env
+  if (saved.pane == null) delete process.env.HERDR_PANE_ID
+  else process.env.HERDR_PANE_ID = saved.pane
 })

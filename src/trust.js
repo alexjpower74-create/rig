@@ -7,14 +7,18 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export function preTrust (cwd) {
+export function preTrust(cwd) {
   const file = path.join(os.homedir(), '.claude.json')
   let cfg
-  try { cfg = JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return false }
+  try {
+    cfg = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return false
+  }
   if (!cfg || typeof cfg !== 'object') return false
   cfg.projects ||= {}
   const key = path.resolve(cwd)
-  const entry = cfg.projects[key] ||= { allowedTools: [] }
+  const entry = (cfg.projects[key] ||= { allowedTools: [] })
   if (entry.hasTrustDialogAccepted === true) return true
   entry.hasTrustDialogAccepted = true
   const tmp = file + '.rig-tmp'

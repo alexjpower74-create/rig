@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const files = readdirSync(here).filter(f => f.endsWith('.test.js')).sort()
+const files = readdirSync(here)
+  .filter((f) => f.endsWith('.test.js'))
+  .sort()
 
 console.log(`test/run.js: ${files.length} file(s)\n  ${files.join('\n  ')}\n`)
 

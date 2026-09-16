@@ -8,25 +8,33 @@ import { terminal } from '../terminal.js'
 import { processesIn, stopProcesses, insideDir } from '../procs.js'
 import { realpathSync } from 'node:fs'
 
-const real = p => { try { return realpathSync(p) } catch { return p } }
+const real = (p) => {
+  try {
+    return realpathSync(p)
+  } catch {
+    return p
+  }
+}
 
-export default async function down (args) {
+export default async function down(args) {
   const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const force = args.includes('--force')
-  const sliceIds = plan.agents.map(a => a.id)
+  const sliceIds = plan.agents.map((a) => a.id)
   // 3.0: QA worktrees are per run (qa, qa-2, ...). Remove every slot, but never one whose lock holds a
   // live `rig qa`: tearing it down mid-run would record a dead exit as a real result.
   const slots = qaSlots(root, cfg)
-  const live = slots.filter(s => s.lock && s.lock.live)
+  const live = slots.filter((s) => s.lock && s.lock.live)
   if (live.length) {
     console.error('\x1b[31mrefusing to tear down\x1b[0m — a QA run is still using:')
     for (const s of live) console.error(`  ${s.id}: pid ${s.lock.pid}  ${s.path}  (lock: ${s.lock.path || s.path + '.lock'})`)
-    console.error('\nWait for it to finish (or stop that `rig qa`), then re-run. After a reboot a stale lock can name a reused pid: delete the lock file named above.')
+    console.error(
+      '\nWait for it to finish (or stop that `rig qa`), then re-run. After a reboot a stale lock can name a reused pid: delete the lock file named above.',
+    )
     process.exit(1)
   }
-  const qaIds = slots.map(s => s.id)
+  const qaIds = slots.map((s) => s.id)
   const ids = [...sliceIds, ...qaIds]
 
   // Run from inside a worktree it is about to remove, `rig down` would stop its own shell and the
@@ -82,8 +90,9 @@ export default async function down (args) {
   // Close the agents first (so they stop writing), then anything they left running.
   const term = terminal(cfg)
   if (term.available() && term.sessionExists(sessionName(root))) {
-    const closed = term.killSession(sessionName(root), [...sliceIds, ...sliceIds.map(i => 'rv-' + i)])
-    if (Array.isArray(closed)) console.log(closed.length ? `closed slice tabs: ${closed.join(', ')}` : 'no slice tabs of this plan were open')
+    const closed = term.killSession(sessionName(root), [...sliceIds, ...sliceIds.map((i) => 'rv-' + i)])
+    if (Array.isArray(closed))
+      console.log(closed.length ? `closed slice tabs: ${closed.join(', ')}` : 'no slice tabs of this plan were open')
     else console.log(`closed ${term.name} session ${sessionName(root)}`)
   }
 
@@ -95,11 +104,14 @@ export default async function down (args) {
     if (!existsSync(path)) continue
     // Only ever a directory strictly inside the worktree base: never the base, never above it.
     const rp = real(path)
-    if (rp === base || !insideDir(rp, base)) { console.log(`skipped stopping processes for ${id}: ${rp} is not inside ${base}`); continue }
+    if (rp === base || !insideDir(rp, base)) {
+      console.log(`skipped stopping processes for ${id}: ${rp} is not inside ${base}`)
+      continue
+    }
     const stopped = stopProcesses(processesIn(rp))
     if (stopped.length) console.log(`stopped ${stopped.length} process(es) still running inside ${id}: ${stopped.join(' ')}`)
   }
-  await new Promise(resolve => setTimeout(resolve, 500))
+  await new Promise((resolve) => setTimeout(resolve, 500))
 
   for (const id of ids) {
     const path = worktreePath(root, cfg, id)
