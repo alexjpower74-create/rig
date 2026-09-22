@@ -12,7 +12,7 @@ jot, and so a build report cannot call a formatted tree done until its negative 
 
 ## Who uses it, on what
 Alexander's lead sessions (Onyx on Claude Code, Cobalt on Codex) on the PC and the Mac, under herdr, and
-the Fable 5.1 peers those leads launch. Public repo: anyone running multi-agent builds with worktrees.
+the Opus peers those leads launch. Public repo: anyone running multi-agent builds with worktrees.
 
 ## What done looks like
 - `rig up` names the slices, opens one tab per slice in the CURRENT herdr workspace, and, when `gh` and a
