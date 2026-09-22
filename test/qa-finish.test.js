@@ -4,7 +4,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, existsSync, chmodSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, existsSync, chmodSync, symlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -563,7 +563,15 @@ test('desk tools that are not on PATH are skipped with a reason, never thrown', 
   const repo = builtRepo('nodesk-tools')
   const head = review(repo)
   requal(repo, head)
-  const r = rig('finish', repo, [], { PATH: dirname(process.execPath) + ':/usr/bin:/bin' })
+  // Only node, git and /bin. Not /usr/bin: macOS ships BSD /usr/bin/jot (a number-sequence tool),
+  // so "jot is not on PATH" never held there. Not node's own dir either: Homebrew puts gh beside it.
+  const bin = join(tmp, 'bare-bin')
+  mkdirSync(bin, { recursive: true })
+  for (const tool of [process.execPath, execFileSync('/bin/sh', ['-c', 'command -v git']).toString().trim()]) {
+    const link = join(bin, tool.split('/').pop())
+    if (!existsSync(link)) symlinkSync(tool, link)
+  }
+  const r = rig('finish', repo, [], { PATH: `${bin}:/bin` })
   assert.equal(r.status, 0, r.out)
   assert.match(r.out, /skip {2}jot .*— jot is not on PATH/)
   assert.match(r.out, /skip {2}close slice issues .*— no \.rig\/issues\.json/)
