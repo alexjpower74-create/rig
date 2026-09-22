@@ -559,6 +559,18 @@ test('rig qa usage says the exit is the first non-zero of test then negative (re
   assert.match(rig('qa', repo, ['--help']).out, /first non-zero of the test run, then the negative/)
 })
 
+test('macOS’s /usr/bin/jot is not the decision log: the lookup skips it and finds a real jot after it', async () => {
+  const { findOnPath } = await import('../src/desk.js')
+  const bin = join(tmp, 'real-jot-bin')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'jot'), '#!/bin/sh\n')
+  chmodSync(join(bin, 'jot'), 0o755)
+  assert.equal(findOnPath('jot', { PATH: `/usr/bin:${bin}` }), join(bin, 'jot'))
+  assert.equal(findOnPath('jot', { PATH: '/usr/bin:/bin' }), null)
+  // Only jot has a namesake: other tools in /usr/bin are still found there.
+  assert.equal(findOnPath('env', { PATH: '/usr/bin' }), '/usr/bin/env')
+})
+
 test('desk tools that are not on PATH are skipped with a reason, never thrown', () => {
   const repo = builtRepo('nodesk-tools')
   const head = review(repo)

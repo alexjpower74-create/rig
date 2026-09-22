@@ -10,10 +10,17 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import { join, delimiter } from 'node:path'
 
-/** The first executable named `name` on PATH, or null. */
+// System programs that share a desk tool's name and do something else entirely. macOS ships BSD
+// `jot` (it prints number sequences) in /usr/bin, so on a Mac without the decision log a bare
+// PATH lookup found it and `rig finish` reported a confusing failure. Look past these.
+export const NAMESAKES = { jot: ['/usr/bin/jot'] }
+
+/** The first executable named `name` on PATH, or null. Skips the system namesakes above. */
 export function findOnPath(name, env = process.env) {
+  const namesakes = NAMESAKES[name] || []
   for (const dir of (env.PATH || '').split(delimiter).filter(Boolean)) {
     const p = join(dir, name)
+    if (namesakes.includes(p)) continue
     try {
       if (existsSync(p) && statSync(p).isFile()) return p
     } catch {}
