@@ -8,7 +8,7 @@ export const DEFAULTS = {
   worktreeDir: '../.rig-worktrees',
   portBase: 5180,
   qaPort: 5199,
-  launch: 'claude --model opus --effort low',
+  launch: 'claude --model opus --effort medium',
   terminal: 'auto', // auto | herdr | tmux
   devCommand: null,
   // The app registry slug (`~/.claude/apps/<slug>.md`); `rig init` fills it in, `rig finish` jots under it.
