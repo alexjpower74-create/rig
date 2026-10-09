@@ -4,11 +4,12 @@
 
 Orchestration for builds where several Claude Code sessions work the same repo at once.
 
-**Rig 3.0 builds the workflow's desk in:** review before merge, a QA worktree per project and per
-run that never refuses, negative controls re-proved on the sha being called done, one GitHub issue
-per slice opened and closed by the rig, the app registry and the decision log written at the finish
-gate, and `rig roll` for one brief across many repos. See [CHANGELOG.md](CHANGELOG.md) for what
-changed and why.
+**Rig 4.0 keeps machine state on the machine:** every write into `.rig/` makes git ignore it, so a
+sync or a careless `git add -A` can never publish the QA record and its paths, and state already
+committed is named with the command to untrack it. It builds on 3.0's desk: review before merge, a QA
+worktree per project and per run, negative controls re-proved on the sha being called done, one
+GitHub issue per slice, the registry and decision log at the finish gate, and `rig roll` for one
+brief across many repos. See [CHANGELOG.md](CHANGELOG.md) for what changed and why.
 
 Three sessions in one checkout will quietly overwrite each other, review their own blind spots, and
 hand you a green test suite for a broken page. `rig` is the set of rules that stops each of those,

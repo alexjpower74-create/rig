@@ -1,6 +1,6 @@
 {
   "name": "@alexpower/rig",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Multi-agent build orchestration for Claude Code. File-ownership slices, a plan file as the contract, QA worktrees pinned to HEAD, and checks that must prove they can fail.",
   "type": "module",
   "bin": {

@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 4.0.0 — machine state stays on the machine
+
+Rig 4.0 comes out of the morning after a build finished clean. The crew had merged, the finish gate
+had passed on the exact sha, the tabs were closed, and a few hours later the repo's hygiene check went
+red. A nightly sync had swept up the rig's own working files, among them a QA record full of
+home-folder paths, and committed them. The repo had been set up before `rig init` learned to ignore
+`.rig/`, and nothing in the rig ever looked again. It is a major version because the rig now changes
+a clone's git settings on its own, and because peers launch on a different model by default.
 
 ### Machine state never reaches git
 - **What went wrong:** `rig init` put `.rig/` in .gitignore, but a repo set up before it did, or never
@@ -10,9 +17,19 @@
   refused without `--force`.
 - **Now:** every write into `.rig/` (`qa`, `up`, `review`, `finish`, issues, config) makes git ignore
   it first, through the clone's own `info/exclude`: shared by every worktree, nothing to commit. State
-  that was already committed is named on each run, with the `git rm --cached` command to untrack it.
-- Also: Opus 5.5 at medium effort is the default launch string; `jot` lookup skips macOS's
-  `/usr/bin/jot`.
+  that was already committed is named on each run, with the `git rm --cached` command to untrack it
+  (and a warning that `git commit -- <paths>` keeps a file tracked when it is still on disk).
+- **Checked:** `test/rig-state.test.js`, four checks, each red with the old bare `mkdir` swapped back
+  in; the first is also red with the old call sites restored, and a source scan fails if any command
+  creates `.rig/` without going through `rigDir()`.
+
+### Peers launch on Opus at medium effort
+- The default launch string is `claude --model opus --effort medium` (it was Fable 5.1 at low effort).
+  A project's `.rig/config.json` still overrides it.
+
+### Smaller
+- The decision-log lookup skips macOS's own `/usr/bin/jot`, which shadowed the log tool on PATH.
+- Biome lint and format, and `npm run check` (lint, the suite, the personal-data scan) as one gate.
 
 ## 3.0.0 — the workflow's desk built in
 
