@@ -1,9 +1,10 @@
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan } from '../plan.js'
 import { tryGit } from '../sh.js'
 import { terminal } from '../terminal.js'
+import { rigDir } from '../rigdir.js'
 
 // Fresh eyes before done. Every real defect on a multi-agent build crossed a boundary between two
 // people's work, and self-review found none of them: an author's tests share the author's blind
@@ -24,7 +25,7 @@ export default function review(args) {
   const by = argOf(args, '--by')
   const brief = reviewBrief(plan, agent, { root, base, branch, by })
   const rel = join('.rig', `REVIEW-${id}.md`)
-  mkdirSync(join(root, '.rig'), { recursive: true })
+  rigDir(root)
   writeFileSync(join(root, rel), brief.text)
 
   console.log(`review brief for ${id}: ${rel}`)

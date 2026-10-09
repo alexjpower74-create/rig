@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { git, tryGit } from './sh.js'
+import { rigDir } from './rigdir.js'
 
 export const DEFAULTS = {
   plan: 'PLAN.md',
@@ -88,7 +89,7 @@ function withWorktreeDir(root, fileCfg) {
 }
 
 export function saveConfig(root, cfg) {
-  mkdirSync(join(root, '.rig'), { recursive: true })
+  rigDir(root)
   writeFileSync(configPath(root), JSON.stringify(cfg, null, 2) + '\n')
 }
 

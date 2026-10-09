@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Machine state never reaches git
+- **What went wrong:** `rig init` put `.rig/` in .gitignore, but a repo set up before it did, or never
+  init'ed, had no such line and nothing noticed. A nightly `git add -A` sync then committed a finished
+  build's `.rig/qa-history.jsonl`, home-folder paths and all, and the public repo's hygiene check went
+  red. The same gap made every slice's `.rig/BRIEF.md` look like uncommitted work, so `rig down`
+  refused without `--force`.
+- **Now:** every write into `.rig/` (`qa`, `up`, `review`, `finish`, issues, config) makes git ignore
+  it first, through the clone's own `info/exclude`: shared by every worktree, nothing to commit. State
+  that was already committed is named on each run, with the `git rm --cached` command to untrack it.
+- Also: Opus 5.5 at medium effort is the default launch string; `jot` lookup skips macOS's
+  `/usr/bin/jot`.
+
 ## 3.0.0 — the workflow's desk built in
 
 Rig 3.0 comes out of the night the workflow got a desk: a registry file per app, a decision log, one

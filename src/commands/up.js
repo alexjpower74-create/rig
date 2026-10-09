@@ -8,6 +8,7 @@ import { openSliceIssues } from '../issues.js'
 import { reportPath } from '../reports.js'
 import { terminal } from '../terminal.js'
 import { git } from '../sh.js'
+import { rigDir } from '../rigdir.js'
 
 const YEL = (s) => `\x1b[33m${s}\x1b[0m`
 
@@ -72,7 +73,7 @@ export default function up(args) {
   }
 
   for (const m of made) {
-    mkdirSync(join(m.wt.path, '.rig'), { recursive: true })
+    rigDir(m.wt.path)
     mkdirSync(join(m.wt.path, 'docs'), { recursive: true })
     const brief = briefFor(plan, m.agent, {
       branch: m.wt.branch,

@@ -6,9 +6,10 @@
 // to close them. Everything here is best effort: no gh, no auth or no remote means no issues, said
 // once, and the build goes on. Nothing here ever closes or edits an issue.
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tryRun, tryGit } from './sh.js'
+import { rigDir } from './rigdir.js'
 
 export const issuesPath = (root) => join(root, '.rig', 'issues.json')
 
@@ -23,7 +24,7 @@ export function loadIssues(root) {
 }
 
 export function saveIssues(root, issues) {
-  mkdirSync(join(root, '.rig'), { recursive: true })
+  rigDir(root)
   writeFileSync(issuesPath(root), JSON.stringify(issues, null, 2) + '\n')
 }
 

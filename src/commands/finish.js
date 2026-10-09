@@ -7,6 +7,7 @@ import { reportPath } from '../reports.js'
 import { lastQaOn, lastNegativeOn } from '../qalog.js'
 import { git, tryGit } from '../sh.js'
 import { jot, appsTouch, ghIssueClose, ghAvailable, wrap } from '../desk.js'
+import { rigDir } from '../rigdir.js'
 
 // Ship means told. `rig finish` is the gate between "the agents stopped" and "it is done": it
 // refuses to call a build finished while a slice is unmerged, a tree is dirty, or the tests have not
@@ -145,7 +146,7 @@ export function deskActions(root, cfg, plan, r, { wrap: wrapMessage = null } = {
     actions.push({ what: `apps touch ${slug}`, ...t })
     if (j.ran && j.ok) {
       done[r.sha] = { jotted: new Date().toISOString(), slug }
-      mkdirSync(join(root, '.rig'), { recursive: true })
+      rigDir(root)
       writeFileSync(donePath, JSON.stringify(done, null, 2) + '\n')
     }
   }

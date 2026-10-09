@@ -5,13 +5,14 @@
 // the wrong sha. `rig finish` reads this file and refuses to call a build done unless the tests ran,
 // and exited 0, on the commit being called done.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { rigDir } from './rigdir.js'
 
 export const qaLogPath = (root) => join(root, '.rig', 'qa-history.jsonl')
 
 export function recordQa(root, entry) {
-  mkdirSync(join(root, '.rig'), { recursive: true })
+  rigDir(root)
   appendFileSync(qaLogPath(root), JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n')
 }
 
