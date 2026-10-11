@@ -22,6 +22,9 @@ export function rigDir(root) {
   return dir
 }
 
+/** A file name inside .rig/ that only a rule for the whole folder covers. */
+export const PROBE = '.rig/.rig-ignore-probe'
+
 const warned = new Set()
 
 /**
@@ -31,7 +34,10 @@ const warned = new Set()
  */
 export function ensureRigIgnored(root) {
   // --no-index asks the ignore rules alone: a tracked file is otherwise reported as not ignored.
-  const probe = tryGit(['check-ignore', '-q', '--no-index', '.rig/qa-history.jsonl'], root)
+  // The probe is a name no repo lists by hand. 4.0.0 probed .rig/qa-history.jsonl, and a repo whose
+  // .gitignore named that one file (Rota, after the 2026-10-09 clean-up) passed, so BRIEF.md and the
+  // rest stayed unignored and `rig down` saw uncommitted work in every slice.
+  const probe = tryGit(['check-ignore', '-q', '--no-index', PROBE], root)
   let did = 'ignored'
   if (!probe.ok) {
     // check-ignore exits 1 for "not ignored" and 128 for "not a repo"; only the first is ours to fix.

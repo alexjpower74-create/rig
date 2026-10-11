@@ -115,6 +115,35 @@ await suite(
       },
     })
 
+    // A repo that ignores some .rig files one by one is not ignoring .rig/. Rig 4.0.0's probe asked about
+    // .rig/qa-history.jsonl only, so Rota's .gitignore (which named it) passed, and every slice's
+    // BRIEF.md showed as uncommitted work at `rig down` (2026-10-10). Red with 4.0.0's probe put back.
+    const probe40 = (root) => {
+      mkdirSync(join(root, '.rig'), { recursive: true })
+      try {
+        git(['check-ignore', '-q', '--no-index', '.rig/qa-history.jsonl'], root)
+      } catch {
+        rigDir(root) // 4.0.0 only wrote the exclude line when this one file was not ignored
+      }
+      return join(root, '.rig')
+    }
+    let makeDir3 = rigDir
+    await s.check('a .gitignore that names some .rig files one by one still gets the whole folder ignored', {
+      assert: async () => {
+        const root = oldShapeRepo({ '.gitignore': 'node_modules/\n.rig/qa-history.jsonl\n.rig/issues.json\n' })
+        captureErr(() => writeFileSync(join(makeDir3(root), 'BRIEF.md'), '# brief\n'))
+        const dirty = git(['status', '--porcelain'], root)
+        if (dirty) throw new Error(`tree shows: ${dirty}`)
+        return true
+      },
+      breaks: async () => {
+        makeDir3 = probe40
+        return () => {
+          makeDir3 = rigDir
+        }
+      },
+    })
+
     // Ignoring does not untrack. A repo that already committed its state is told which files and
     // how; config.json is left out (some older repos track it on purpose, and it holds no paths).
     let makeDir2 = rigDir
