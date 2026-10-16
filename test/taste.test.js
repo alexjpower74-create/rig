@@ -603,6 +603,58 @@ await suite('rig taste', async (s) => {
     timeout: 60_000,
   })
 
+  // fv2's second re-check: the hide flush sends every queued answer at once, so a card re-rated
+  // while its first answer was in flight could end on the older rating. CDP's Fetch domain holds
+  // the first answer back and lets it land last, so the race is the same on every run.
+  await s.check('a re-rating that overtakes the first answer wins, even when the first lands last', {
+    assert: async () => {
+      const b = await board()
+      const page = await openBoard(browser, b.url, VIEWPORTS.desktop)
+      const input = countInput(page)
+      const r0 = b.round.refs[0].id
+      let held = null
+      const passed = []
+      page.on('Fetch.requestPaused', (e) => {
+        if (!held) held = e.requestId
+        else page.send('Fetch.continueRequest', { requestId: e.requestId }).then(() => passed.push(e.requestId))
+      })
+      try {
+        await page.send('Fetch.enable', { patterns: [{ urlPattern: '*/api/answer*', requestStage: 'Request' }] })
+        await press(page, input, '.rate[data-rating="4"]', { touch: false })
+        await waitFor(async () => (await progress(page)) === '2 of 6' && !!held)
+        await press(page, input, '#back', { touch: false })
+        await waitFor(async () => (await progress(page)) === '1 of 6')
+        await press(page, input, '.rate[data-rating="2"]', { touch: false })
+        await sleep(200)
+        // Hidden: the flush sends the waiting re-rating while the first is still held.
+        await page.eval(`(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+          document.dispatchEvent(new Event('visibilitychange'))
+          delete document.visibilityState
+        })()`)
+        await waitFor(async () => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 2, 3000)
+        await page.send('Fetch.continueRequest', { requestId: held })
+        await sleep(400)
+        const final = newest(ratingsJson(b.root)).ratings?.[r0]?.rating
+        if (final !== 2) console.log(`        card 1 ended at ${final}`)
+        return final === 2
+      } finally {
+        await page.send('Fetch.disable').catch(() => {})
+        await page.close()
+        await b.stop()
+      }
+    },
+    // The control: 94c50dc's answer handler, which took whatever arrived last.
+    breaks: swap(handlers, 'answer', (round, body) => {
+      const map = body.kind === 'comp' ? round.compRatings : round.ratings
+      const next = { ...(map[body.id] || {}), at: new Date().toISOString() }
+      if ('rating' in body) next.rating = body.rating
+      if ('note' in body) next.note = String(body.note ?? '')
+      map[body.id] = next
+    }),
+    timeout: 60_000,
+  })
+
   await s.check('a fast second tap is queued onto the next card, never dropped', {
     assert: async () => {
       const b = await board()

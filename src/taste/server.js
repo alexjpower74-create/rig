@@ -54,18 +54,31 @@ export const handlers = {
     const map = body.kind === 'comp' ? round.compRatings : round.ratings
     if (!list.some((c) => c.id === body.id)) throw fail(`no ${body.kind || 'ref'} "${body.id}" in this round`, 404)
     const next = { ...(map[body.id] || {}), at: new Date().toISOString() }
+    // An answer older than the one already held for this field arrived late (two sends raced when
+    // the tab was hidden): it is ignored, and still acknowledged so the page's queue clears.
+    const seq = Number.isFinite(body.seq) ? body.seq : null
+    const newer = (held) => seq === null || !(held > seq)
     if ('rating' in body) {
       if (!validRating(body.rating)) throw fail('rating must be 1 to 5', 400)
-      next.rating = body.rating
+      if (newer(next.ratingSeq)) {
+        next.rating = body.rating
+        if (seq !== null) next.ratingSeq = seq
+      }
     }
-    if ('note' in body) next.note = String(body.note ?? '').slice(0, NOTE_MAX)
+    if ('note' in body && newer(next.noteSeq)) {
+      next.note = String(body.note ?? '').slice(0, NOTE_MAX)
+      if (seq !== null) next.noteSeq = seq
+    }
     if (!next.rating && !next.note) delete map[body.id]
     else map[body.id] = next
   },
   /** { id: compId | null } — the starred favourite. */
   pick(round, body) {
     if (body.id !== null && !round.comps.some((c) => c.id === body.id)) throw fail(`no comp "${body.id}"`, 404)
+    const seq = Number.isFinite(body.seq) ? body.seq : null
+    if (seq !== null && round.pickSeq > seq) return
     round.pick = body.id
+    if (seq !== null) round.pickSeq = seq
   },
 }
 

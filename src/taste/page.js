@@ -126,8 +126,13 @@ function send(path, body){
   return fetch(path, { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json', 'x-taste-token': S.token }, body: JSON.stringify(body) })
 }
 function keyOf(path, body){ return path === '/api/pick' ? 'pick' : path + ':' + body.kind + ':' + body.id }
+// Every answer carries a number that only grows (the clock, nudged past the last one), so the
+// server can tell an older answer arriving late from a newer one and keep the newer.
+var lastSeq = 0
+function nextSeq(){ lastSeq = Math.max(Date.now(), lastSeq + 1); return lastSeq }
 function post(path, body){
   if (ended) return
+  body.seq = nextSeq()
   var k = keyOf(path, body)
   for (var i = 0; i < queue.length; i++){
     var q = queue[i]
