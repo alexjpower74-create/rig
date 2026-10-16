@@ -4,6 +4,7 @@
 //
 //   ## What it's for            purpose
 //   ## What must not happen     hard rules, bullets
+//   ## The bar                  optional: the number that says each repo is done well
 //   ## Procedure per repo       ordered steps, applied to every repo in turn
 //   ## Commit subject           one line; every roll commit carries it (how `status` finds them)
 //   ## Report                   where each tab writes; `{tab}` is replaced by the tab id
@@ -16,7 +17,8 @@
 
 import { readFileSync, existsSync, statSync } from 'node:fs'
 import { join, isAbsolute, resolve, basename } from 'node:path'
-import { parseSections } from './plan.js'
+import { parseSections, withoutPlaceholders } from './plan.js'
+import { MINDSET } from './mindset.js'
 import { tryGit, gitRaw } from './sh.js'
 
 const strip = (s) => s.replace(/`/g, '').trim()
@@ -34,6 +36,7 @@ export function parseRoll(text) {
       .map((l) => l.replace(/^[-*]\s+/, '').trim())
 
   const purpose = sec(/^what it.?s for$/i).trim()
+  const bar = withoutPlaceholders(sec(/^the bar$/i))
   const mustNot = bulletsOf(sec(/^what must not happen$/i))
   const procedure = sec(/^procedure per repo$/i)
     .split('\n')
@@ -85,7 +88,7 @@ export function parseRoll(text) {
   if (!Object.keys(lists).length) throw new Error('ROLL.md has no `## Lists` with `### <tab id>` headings; nothing to launch')
   for (const [tab, slugs] of Object.entries(lists)) if (!slugs.length) throw new Error(`list "${tab}" is empty`)
 
-  return { title, purpose, mustNot, procedure, commitSubject, report, repos, lists }
+  return { title, purpose, bar, mustNot, procedure, commitSubject, report, repos, lists }
 }
 
 function firstLine(body) {
@@ -179,6 +182,8 @@ export function tabBrief(roll, tab, repos, { rollDir, reportPath, briefPath }) {
   const rules = roll.mustNot.filter((r) => !/^<.*>$/.test(r))
   return `# Brief — ${tab} · ${roll.title}
 
+${MINDSET}
+
 This is a ROLL: one procedure applied to a list of repos, one after the other. You own the repos
 below for the length of this roll and nothing else. The brief you are reading is \`${briefPath}\`;
 the roll's contract is \`${join(rollDir, 'ROLL.md')}\`.
@@ -187,6 +192,15 @@ the roll's contract is \`${join(rollDir, 'ROLL.md')}\`.
 ${roll.purpose || '(not stated)'}
 
 ${
+  roll.bar
+    ? `## The bar
+${roll.bar}
+
+Measure every repo against it, and give the number for each one in your report.
+
+`
+    : ''
+}${
   rules.length
     ? `## What must not happen — hard rules, from the brief
 ${rules.map((r) => '- ' + r).join('\n')}

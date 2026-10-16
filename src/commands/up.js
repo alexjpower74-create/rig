@@ -1,7 +1,7 @@
-import { writeFileSync, mkdirSync, existsSync, lstatSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, lstatSync, copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
-import { loadPlan, missingBrief } from '../plan.js'
+import { loadPlan, missingBrief, barHasNoNumber } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
 import { briefFor } from '../brief.js'
 import { openSliceIssues } from '../issues.js'
@@ -31,11 +31,12 @@ export default function up(args) {
   const made = []
   const warnings = []
   // Said before anything is created, dry run included: a thin brief is cheapest to fix now.
-  const gaps = missingBrief(plan)
+  const gaps = missingBrief(plan, { aim: true })
   if (gaps.length)
     console.log(
       YEL('the plan’s brief is missing: ') + gaps.join(', ') + '\n  Agents build what the brief says; every gap here is a round later.\n',
     )
+  if (barHasNoNumber(plan)) console.log(YEL('the bar has no number: nothing can measure it, so nothing can say it was missed.') + '\n')
 
   for (const agent of plan.agents) {
     if (dry) {
@@ -72,15 +73,22 @@ export default function up(args) {
     for (const l of opened.lines) console.log(l)
   }
 
+  // His ratings live in the main checkout's docs/TASTE.md, often not yet committed. Each worktree
+  // gets a copy under .rig/, so the agent reads it inside its own tree (outside it is a permission
+  // prompt that stops the agent until someone notices).
+  const taste = join(root, 'docs', 'TASTE.md')
   for (const m of made) {
     rigDir(m.wt.path)
     mkdirSync(join(m.wt.path, 'docs'), { recursive: true })
+    const hasTaste = existsSync(taste)
+    if (hasTaste) copyFileSync(taste, join(m.wt.path, '.rig', 'TASTE.md'))
     const brief = briefFor(plan, m.agent, {
       branch: m.wt.branch,
       path: m.wt.path,
       planPath: cfg.plan,
       reportPath: reportPath(m.agent),
       issue: opened.issues[m.agent.id] || null,
+      taste: hasTaste ? '.rig/TASTE.md' : null,
     })
     writeFileSync(join(m.wt.path, '.rig', 'BRIEF.md'), brief)
   }

@@ -6,6 +6,9 @@ report per tab. `rig roll up <this file>` opens one tab per list in the workspac
 ## What it's for
 <the change every repo gets, in one or two sentences — not the tool>
 
+## The bar
+<optional: the number every repo must reach, e.g. "lint exits 0 with no new warnings"; leave this out if there is none>
+
 ## What must not happen
 - <a hard rule every tab obeys, e.g. "Never commit over a dirty tree; SKIP it and say so.">
 - <"Never touch a repo that is not on its default branch.">
