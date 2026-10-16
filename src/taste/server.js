@@ -69,6 +69,9 @@ export const handlers = {
   },
 }
 
+/** The page the board serves. An object so a test can serve an earlier page and watch it fail. */
+export const view = { page: pageHtml }
+
 /** This machine's IPv4 addresses on the local network, for the phone link `--lan` prints. */
 export function lanAddresses() {
   return Object.values(networkInterfaces())
@@ -135,7 +138,7 @@ export function startServer({
       }
       if (req.method === 'GET' && url.pathname === '/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' })
-        return res.end(pageHtml(publicState(round, token)))
+        return res.end(view.page(publicState(round, token)))
       }
       if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, publicState(round, token))
       if (req.method === 'GET' && images.has(url.pathname)) {

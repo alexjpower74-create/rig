@@ -3,7 +3,7 @@
 Final sha: **1d896e0** on `rig/fv3` (main merged in at 6676cc6, so fv2's `s.target` and `countInput` are in).
 QA: `rig qa 1d896e0 --run "npm ci --silent && npm run check"` printed
 `rig qa: test exit 0 at 1d896e0` and `rig qa: negative exit 0 at 1d896e0` (the demo still prints its
-one VOID and one FAIL). `test/taste.test.js` at that sha: **28 passed, 0 failed, 0 void, 0 unproven;
+one VOID and one FAIL). `test/taste.test.js` at that sha: **29 passed, 0 failed, 0 void, 0 unproven;
 targets 2 passed**.
 
 ## What I built — DONE
@@ -69,6 +69,7 @@ Every check is `s.check` / `s.target` with `breaks`. The controls put the old be
 | ratings.json + TASTE.md hold exactly the taps | `handlers.answer` that saves nothing |
 | same, through the button | rating buttons wired to nothing |
 | note typed, page left at once, is on disk | every fetch after `beforeunload` fails (the first draft's effect) |
+| an answer given offline, through a hidden tab, reaches disk once the board is back (fv2's re-check probe) | the 1d896e0 page served instead, via `view.page`: header "Saved", first answer gone |
 | fast second tap lands on the next card | the first draft's 160 ms drop rule, in front of the handler |
 | number keys rate and advance | keydown swallowed |
 | back returns with the rating shown | back button wired to nothing |
@@ -90,6 +91,11 @@ Every check is `s.check` / `s.target` with `breaks`. The controls put the old be
 | principles kept | the first draft, which always wrote the placeholder |
 
 Bugs found by the tests, each with a test that failed first:
+- **A hidden tab lost an answer it hadn't delivered** (found by fv2's re-check of 1d896e0). The hide
+  flush emptied the queue whatever happened to the sends, and the next good tap showed "Saved"
+  over the gap. Now answers leave the queue only when the server acknowledges them, go one at a time
+  in order, and merge into a waiting answer for the same card. "Saved" shows only when the queue is
+  empty.
 
 - **Swipe right left the board.** Mobile Chrome took it as the back gesture. The swipe check failed
   that way; the fix is `touch-action: pan-y` and `overscroll-behavior: none`.

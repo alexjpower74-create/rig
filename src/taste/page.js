@@ -111,34 +111,47 @@ var notes = {}
 function answerOf(kind, id){ return (kind === 'comp' ? S.compRatings : S.ratings)[id] || {} }
 function el(tag, cls, text){ var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e }
 
-// Saving. Every answer is POSTed at once, with keepalive so a tab closed right after a tap still
-// delivers it. A network failure is queued and retried, and the header says so. A 4xx is never
-// retried: the server is up and has said no (the round ended or changed), so the page says that
-// plainly instead of showing "Not saved" forever.
-var pending = 0, queue = [], retryTimer = null, ended = false
+// Saving. An answer joins a queue and leaves it only when the server says it is on disk; a failed
+// send stays queued and is retried, and "Saved" shows only when the queue is empty. Answers go one
+// at a time, in order, so a later answer for a card never lands under an earlier one; a newer
+// answer for a card still waiting is merged into it. A 4xx is never retried: the server is up and
+// has said no (the round ended or changed), so the page says that plainly.
+var queue = [], retryTimer = null, ended = false, failing = false
 function setSave(s){
   var t = $('save'); t.className = s === 'failed' ? 'failed' : ''
   t.textContent = s === 'saving' ? 'Saving' : s === 'saved' ? 'Saved' : s === 'failed' ? 'Not saved' : ''
 }
+function status(){ setSave(ended ? '' : !queue.length ? 'saved' : failing ? 'failed' : 'saving') }
 function send(path, body){
   return fetch(path, { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json', 'x-taste-token': S.token }, body: JSON.stringify(body) })
 }
+function keyOf(path, body){ return path === '/api/pick' ? 'pick' : path + ':' + body.kind + ':' + body.id }
 function post(path, body){
-  if (ended) return Promise.resolve(false)
-  pending++; setSave('saving')
-  return send(path, body)
-    .then(function(r){
-      pending--
-      if (r.status >= 400 && r.status < 500){ endRound(); return false }
-      if (!r.ok) throw new Error('HTTP ' + r.status)
-      if (!pending) setSave(queue.length ? 'failed' : 'saved')
-      return true
-    }, function(e){ pending--; throw e })
-    .catch(function(){ queue.push([path, body]); setSave('failed'); retrySoon(); return false })
+  if (ended) return
+  var k = keyOf(path, body)
+  for (var i = 0; i < queue.length; i++){
+    var q = queue[i]
+    if (!q.busy && q.key === k){ q.body = path === '/api/pick' ? body : Object.assign({}, q.body, body); status(); pump(); return }
+  }
+  queue.push({ path: path, body: body, key: k, busy: false })
+  status(); pump()
 }
+function deliver(item){
+  item.busy = true
+  return send(item.path, item.body)
+    .then(function(r){
+      item.busy = false
+      if (r.status >= 400 && r.status < 500){ endRound(); return }
+      if (!r.ok) throw new Error('HTTP ' + r.status)
+      var i = queue.indexOf(item); if (i >= 0) queue.splice(i, 1)
+      failing = false; status(); pump()
+    })
+    .catch(function(){ item.busy = false; failing = true; status(); retrySoon() })
+}
+function pump(){ if (!ended && !failing && queue.length && !queue[0].busy) deliver(queue[0]) }
 function retrySoon(){
   if (retryTimer) return
-  retryTimer = setTimeout(function(){ retryTimer = null; var q = queue; queue = []; q.forEach(function(p){ post(p[0], p[1]) }) }, 2000)
+  retryTimer = setTimeout(function(){ retryTimer = null; failing = false; pump() }, 2000)
 }
 function endRound(){
   if (ended) return
@@ -149,12 +162,14 @@ function endRound(){
   b.appendChild(el('span', null, ' Every answer it saved is on disk. Run rig taste again for a fresh link.'))
   document.body.appendChild(b)
 }
-// The tab is going (closed, switched away, phone locked): send the note being typed and anything
-// still queued now, as keepalive requests the browser finishes after the page is gone.
+// The tab is going (closed, switched away, phone locked): send the note being typed and everything
+// still queued now, as keepalive requests the browser finishes even after the page is gone. They
+// leave the queue only when acknowledged, so a tab that was merely hidden, with the board
+// unreachable, still has every answer to retry when it comes back.
 function flushAll(){
   if (ended) return
-  if (noteTimer){ clearTimeout(noteTimer); noteTimer = null; var t = noteTarget(); if (t) send('/api/answer', { kind: t.kind, id: t.id, note: note.value }) }
-  var q = queue; queue = []; q.forEach(function(p){ send(p[0], p[1]) })
+  flushNote()
+  queue.forEach(function(q){ if (!q.busy) deliver(q) })
 }
 window.addEventListener('pagehide', flushAll)
 document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'hidden') flushAll() })
@@ -407,7 +422,7 @@ function done(){
   $('done').textContent = 'Saving…'
   var until = Date.now() + 6000
   var wait = function(){
-    if (!pending && !queue.length) return Promise.resolve()
+    if (!queue.length) return Promise.resolve()
     if (Date.now() > until) return Promise.reject(new Error('unsaved'))
     return new Promise(function(r){ setTimeout(r, 120) }).then(wait)
   }

@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 import { crc32, deflateSync } from 'node:zlib'
 import * as H from '../harness/index.js'
 import { policy, runTaste } from '../src/commands/taste.js'
-import { guards, handlers, lanAddresses } from '../src/taste/server.js'
+import { guards, handlers, lanAddresses, view } from '../src/taste/server.js'
 import { localDay, tasteMarkdown } from '../src/taste/store.js'
 
 const { suite, launch, countInput, meetsTouchTarget, sleep } = H
@@ -539,6 +539,68 @@ await suite('rig taste', async (s) => {
       const f = window.fetch
       window.fetch = (...a) => (leaving ? Promise.reject(new Error('page gone')) : f(...a))
     })()`),
+  })
+
+  // fv2's probe, kept: 1d896e0's page emptied its queue when the tab was hidden and never looked at
+  // the result, so an answer given while the board was unreachable vanished, and the next good tap
+  // showed "Saved" over the hole. The control serves that page (from git) instead of today's.
+  const OLD_PAGE = (() => {
+    const old = spawnSync('git', ['show', '1d896e0:src/taste/page.js'], { cwd: here, encoding: 'utf8' })
+    if (old.status !== 0) return null
+    const file = join(work, 'page-1d896e0.mjs')
+    writeFileSync(file, old.stdout)
+    return file
+  })()
+  const offline = (page, on) =>
+    page.send('Network.emulateNetworkConditions', { offline: on, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+  await s.check('an answer given offline, through a hidden tab, reaches disk once the board is back', {
+    assert: async () => {
+      const b = await board()
+      const page = await openBoard(browser, b.url, VIEWPORTS.desktop)
+      const input = countInput(page)
+      const [r0, r1] = b.round.refs.map((c) => c.id)
+      try {
+        await page.send('Network.enable')
+        await offline(page, true)
+        await press(page, input, '.rate[data-rating="4"]', { touch: false })
+        await waitFor(async () => (await progress(page)) === '2 of 6')
+        await sleep(200)
+        const whileOffline = await page.eval('document.getElementById("save").textContent')
+        // The tab is hidden (switched away, phone locked) and shown again.
+        await page.eval(`(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+          document.dispatchEvent(new Event('visibilitychange'))
+          delete document.visibilityState
+          document.dispatchEvent(new Event('visibilitychange'))
+        })()`)
+        await sleep(300)
+        await offline(page, false)
+        await press(page, input, '.rate[data-rating="2"]', { touch: false })
+        const both = () => {
+          const rd = newest(ratingsJson(b.root))
+          return rd.ratings?.[r0]?.rating === 4 && rd.ratings?.[r1]?.rating === 2
+        }
+        await waitFor(async () => both(), 5000)
+        await sleep(200)
+        const after = await page.eval('document.getElementById("save").textContent')
+        const rd = newest(ratingsJson(b.root))
+        if (!both() || after !== 'Saved' || whileOffline !== 'Not saved')
+          console.log(
+            `        offline header "${whileOffline}", then "${after}"; on disk ${rd.ratings?.[r0]?.rating ?? '—'}, ${rd.ratings?.[r1]?.rating ?? '—'}`,
+          )
+        return both() && after === 'Saved' && whileOffline === 'Not saved'
+      } finally {
+        await page.close()
+        await b.stop()
+      }
+    },
+    breaks: OLD_PAGE
+      ? async () => {
+          const { pageHtml } = await import(OLD_PAGE)
+          return swap(view, 'page', pageHtml)()
+        }
+      : undefined,
+    timeout: 60_000,
   })
 
   await s.check('a fast second tap is queued onto the next card, never dropped', {
