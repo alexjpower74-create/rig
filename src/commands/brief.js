@@ -2,11 +2,12 @@ import { join } from 'node:path'
 import { mainRoot, loadConfig } from '../config.js'
 import { loadPlan } from '../plan.js'
 import { worktreePath } from '../worktrees.js'
-import { briefFor } from '../brief.js'
+import { briefFor, shareTaste } from '../brief.js'
 import { reportPath } from '../reports.js'
 
 // Prints the briefing so you can hand it over deliberately — paste it, or send it with whatever
 // message channel your agents use. The rig will not type into a pane on your behalf.
+// Run after a taste round, it also hands the slice's worktree a fresh copy of docs/TASTE.md.
 
 export default function brief(args) {
   const root = mainRoot()
@@ -22,12 +23,14 @@ export default function brief(args) {
     console.error(`No slice "${id}" in ${cfg.plan}. Have: ${plan.agents.map((a) => a.id).join(', ')}`)
     process.exit(2)
   }
+  const path = worktreePath(root, cfg, id)
   process.stdout.write(
     briefFor(plan, agent, {
       branch: cfg.branchPrefix + id,
-      path: worktreePath(root, cfg, id),
+      path,
       planPath: cfg.plan,
       reportPath: reportPath(agent),
+      taste: shareTaste(root, path),
     }),
   )
 }

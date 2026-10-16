@@ -6,18 +6,42 @@ A plan is a brief first and a slice list second.
 ## What it's for
 <the job it does in the world, in one or two sentences — not the tech>
 
+## The feeling
+<the one quality a person should feel in the first five seconds: "calm and sure", "fast as thought">
+
+## The specialist
+<who would do this best in the world, by trade: "a type designer", "an airline ops engineer">
+
+## The best at this job
+- <the best work anyone has done on this, by name and link: start there, then go past it>
+
+Anti-references:
+- <what this must never look or feel like, by name: the average it would drift to if left alone>
+
+## The bar
+<a number a check can go red on: "found in under 10 s", "3 taps at 390 px", "60 fps while scrolling">
+
 ## Who uses it, on what
 <who, and on what device: customers on their phones, staff on a tablet, the owner at a desk>
 
 ## What done looks like
 <the screen you want to see, the number you want to read, the thing that happens — concrete>
 
-## What must not happen
+## Where we're starting from
+<what exists today, its commit, and what is wrong with it: the honest before picture>
+
+## What must not happen or change
 - <a hard rule every agent obeys, e.g. "Never claim an amount it can't back up.">
 - <"Nothing is sent to a customer without the owner.">
 
 ## Where it lives
 <existing or new project, public or private, local only / staging / live>
+
+## Freedom
+<what is theirs to decide (look, wording, structure) and the little that is not>
+
+## Tools
+<what they can use: the harness, which browsers, which screenshot tool, which data to seed>
 
 ## Size and mode
 <small (one agent) · medium (one builder plus a fresh-eyes reviewer) · big (a crew of slices)>
@@ -25,6 +49,12 @@ A plan is a brief first and a slice list second.
 ## Checks
 <how "done" is proved: which suites, which must be shown to go red once, which screens get screenshots>
 Negative controls: <the one command whose run proves the checks can go red, e.g. npm run demo; rig finish wants it green on the final sha>
+
+## Budget and autonomy
+<how much usage to spend, and what to decide alone: everything with an established answer>
+
+## What to hand back
+<what lands at the end: green commits, a report with the red you saw, screenshots beside the references>
 
 ## Rules
 
