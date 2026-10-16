@@ -253,3 +253,70 @@ green at 4374679 and red at 1d896e0.
 **Verdict:** findings 1, 2, 3 and 5 are fixed at 1d896e0, and 6 and 7 are too. Each probe is red at
 4374679 and green at 1d896e0. One new gap remains (above): a queued answer is dropped when the tab is
 hidden while the board can't be reached. It's small, but it loses a tap and then shows "Saved".
+
+## Re-check 2 by fv2 (the flushAll fix at 94c50dc, against 1d896e0)
+
+Same rules and method as above, read-only. Both shas were unpacked whole. Boards ran on 5496,
+always with `--no-open`. Chrome was headless on 9364 at 390×844 mobile, and every tap went to a
+point that `elementFromPoint` confirmed. CDP `Fetch` failed or held `/api/answer` requests.
+
+**The header check.** Through every run, a sampler read the header, then `ratings.json`, about every
+20 ms. The server writes to disk before it answers. So a correct page can never show "Saved" while a
+tapped rating is still missing from disk. A sample where it does is counted as a lie.
+
+| Scenario | 1d896e0 | 94c50dc |
+|---|---|---|
+| **A.** My first probe (below) | first card **missing**; 51 lies | 4 and 2 on disk; 0 lies (298 samples) |
+| **B.** Slow board: every answer held 700 ms; three fast taps, then card 3 re-rated through ‹ back | 5, 3, 2; 0 lies | 5, 3, 2; 0 lies (339 samples) |
+| **C.** Flaky: every other answer fails at first; three taps, wait past the retries | 4, 5, 2; 0 lies | 4, 5, 2; 0 lies (507 samples) |
+
+Scenario A, step by step:
+1. Tap 4 while offline.
+2. The page's own `visibilitychange` fires, hidden then visible.
+3. Go back online and wait 3 s.
+4. Tap 2 on the next card.
+
+What the header read at each point:
+
+| | 1d896e0 | 94c50dc |
+|---|---|---|
+| after the offline tap | Not saved | Not saved |
+| back online, 3 s later | Not saved | Saved (retried) |
+| after the next tap | Saved | Saved |
+
+At 94c50dc, the answer stayed queued through the hide, and the 2 s retry delivered it. "Saved" never
+showed while the disk lacked an answer. The finding is fixed. fv3's new test does the same thing with
+`Network.emulateNetworkConditions`, and serves 1d896e0's page as its control.
+
+### Residual: a hidden tab can still let an older rating land after a newer one
+
+The comment at 94c50dc promises that "a later answer for a card never lands under an earlier one",
+and `pump()` keeps that by sending one at a time. `flushAll()` (`src/taste/page.js:169-173`) does
+not. It sends every queued item that isn't already in flight, at once, while an earlier answer for
+the same card may still be on the wire.
+
+Scenario **D**:
+1. Tap 4 on card 1. That request is held in flight.
+2. Tap ‹ back, then tap 2 on card 1.
+3. The tab is hidden and shown again.
+4. The held 4 is released.
+
+| | 1d896e0 | 94c50dc, tab hidden | 94c50dc, not hidden |
+|---|---|---|---|
+| card 1 on disk at the end | **4** | **4** | 2 |
+| header | Saved | Saved | Saved |
+| lies | 97 | 97 | 0 |
+
+So the fix put the ordering in place for the normal path, and only the hidden-tab path still breaks
+it. This was already broken at 1d896e0, so it is not a regression. It needs a re-rate inside one
+round trip, followed by the phone locking or the app switching while that first request is stuck.
+That's narrow, but the result is a wrong rating shown as "Saved".
+
+What to check:
+- Give each answer a per-page sequence number, and have `handlers.answer` ignore one older than the
+  rating it already has for that card. That holds whatever order the browser delivers in.
+- Or have `flushAll` skip any item whose key has an earlier item still in flight. The in-flight
+  keepalive then carries the older value, though, so the sequence number is the sounder fix.
+
+**Verdict: PASS** on the flushAll regression at 94c50dc. One narrow residual (D) remains: it predates
+the fix, and it's the lead's call whether it blocks the finish gate.
