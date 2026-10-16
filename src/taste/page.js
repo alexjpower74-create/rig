@@ -22,7 +22,6 @@ button{touch-action:manipulation;-webkit-tap-highlight-color:transparent;cursor:
 #app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;max-width:1600px;margin:0 auto}
 header{display:flex;align-items:center;gap:8px;padding:8px max(12px,env(safe-area-inset-left)) 4px}
 .icon{min-width:44px;height:44px;border:0;background:transparent;border-radius:22px;font-size:26px;line-height:1;display:grid;place-items:center}
-.icon:hover{background:var(--soft)}
 .icon:disabled{opacity:.25;cursor:default;background:transparent}
 .where{flex:1;min-width:0;display:flex;flex-direction:column}
 #progress{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-variant-numeric:tabular-nums}
@@ -43,7 +42,6 @@ footer{padding:4px 16px max(12px,env(safe-area-inset-bottom));display:flex;flex-
 .rates{display:flex;gap:8px}
 .rate{flex:1;height:60px;min-width:44px;border-radius:14px;border:1px solid var(--line);background:var(--paper);
   font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;transition:transform .08s ease,background .12s ease}
-.rate:hover{border-color:var(--ink)}
 .rate:active{transform:scale(.96)}
 .rate[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .anchors{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);padding:4px 4px 0}
@@ -85,6 +83,8 @@ footer{padding:4px 16px max(12px,env(safe-area-inset-bottom));display:flex;flex-
   .grid{gap:6px}
   .comp{padding:3px}
 }
+/* Hover only where a pointer really hovers: on a phone a sticky :hover reads as a rating already given. */
+@media (hover:hover){.icon:hover{background:var(--soft)}.rate:hover{border-color:var(--muted)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 `
 

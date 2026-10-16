@@ -19,7 +19,7 @@ export const DEFAULT_PORT = 5391
 export const policy = { openRound }
 
 export function parseArgs(args) {
-  const o = { from: [], urls: [], comps: null, ask: null, port: null, open: true, done: false, lan: false }
+  const o = { from: [], urls: [], comps: null, ask: null, port: null, open: true, done: false, network: false }
   const val = (i, flag) => {
     const v = args[i + 1]
     if (v === undefined || v.startsWith('--')) throw new Error(`${flag} needs a value`)
@@ -36,7 +36,7 @@ export function parseArgs(args) {
       if (!Number.isInteger(o.port) || o.port < 1 || o.port > 65535) throw new Error(`--port must be a port number, not "${args[i]}"`)
     } else if (a === '--no-open') o.open = false
     else if (a === '--done') o.done = true
-    else if (a === '--lan') o.lan = true
+    else if (a === '--lan') o.network = true
     else throw new Error(`rig taste: unknown argument "${a}". See rig taste --help.`)
   }
   if (o.comps && !o.ask) throw new Error('--comps needs --ask "<the one question>": a comps round asks one thing.')
@@ -142,11 +142,11 @@ export async function runTaste(args, { root = repoRoot(), log = console.log, war
   const { state, round } = opened
   saveState(root, state)
 
-  const board = await startServer({ root, state, round, port, lan: o.lan })
+  const board = await startServer({ root, state, round, port, lan: o.network })
   const answered = Object.keys(round.ratings).length + Object.keys(round.compRatings).length
   log(`\nTaste board, round ${round.n}${opened.resumed ? ' (resumed)' : ''}: ${board.url}`)
   for (const u of board.lanUrls) log(`  on a phone on this network: ${u}`)
-  if (o.lan && !board.lanUrls.length) warn('  --lan: this machine has no network address a phone could reach.')
+  if (o.network && !board.lanUrls.length) warn('  --lan: this machine has no network address a phone could reach.')
   log(
     `  ${round.refs.length} reference${round.refs.length === 1 ? '' : 's'}${round.comps.length ? `, ${round.comps.length} comps` : ''}${answered ? `, ${answered} already answered` : ''}. Tap 1–5 or press the number keys.`,
   )
