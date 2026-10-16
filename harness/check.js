@@ -4,6 +4,11 @@
 // page you have deliberately broken. If the assertion still passes while the thing it watches is
 // broken, it is not green — it is VOID, and the run fails. That single rule is the difference
 // between a suite that catches regressions and a suite that just runs.
+//
+// target() is the same rule for a number: a bar like "at most 3 taps" is checked against the real
+// page, then against a broken one, and the number is printed beside its bar every time.
+
+import { describe, formatBound, formatValue, insideBar } from './target.js'
 
 const C = {
   pass: (s) => `\x1b[32m${s}\x1b[0m`,
@@ -77,11 +82,118 @@ export class Suite {
     return this.#record(rec, started)
   }
 
+  /**
+   * target(name, { measure, atMost, atLeast, unit, breaks, timeout })
+   *   measure() -> a finite number: taps, ms, bytes, frames. Anything else is a FAIL that names
+   *               what came back. Throwing is a FAIL with the error as its detail.
+   *   atMost / atLeast -> the bar, inclusive. Set one or both; with neither, target() throws.
+   *   unit      -> printed after the number: 'taps' gives `2 taps (≤ 3)`.
+   *   breaks()  -> break the thing the bar protects and return a restore function, as in check().
+   *               measure() runs again while it is broken. If that number is still inside the bar,
+   *               the bar cannot tell broken from working and the result is VOID. If the broken run
+   *               produces no number at all, that is VOID too: the bar was never seen crossed.
+   *               Omit it and the result is UNPROVEN, exactly as check() reports it.
+   *   timeout   -> per measure() call, default 10 s.
+   *
+   *   await s.target('accept a Sunday', {
+   *     measure: async () => { input.reset(); await acceptShift(input); return input.counts().taps },
+   *     atMost: 3, unit: 'taps',
+   *     breaks: addAConfirmStep,
+   *   })
+   *   //  PASS  accept a Sunday — 2 taps (≤ 3) · broken: 4 taps
+   *
+   * The record in s.results keeps kind: 'target', value, brokenValue, bound { atMost, atLeast }
+   * and unit, beside the state, detail and ms every check has.
+   */
+  async target(name, { measure, atMost, atLeast, unit = '', breaks, timeout = 10_000 } = {}) {
+    if (typeof measure !== 'function') throw new TypeError(`target "${name}": measure must be a function that returns a number`)
+    if (atMost === undefined && atLeast === undefined) {
+      throw new TypeError(`target "${name}": set atMost, atLeast or both — a target with no bar measures nothing`)
+    }
+    for (const [k, v] of [
+      ['atMost', atMost],
+      ['atLeast', atLeast],
+    ]) {
+      if (v !== undefined && !Number.isFinite(v)) throw new TypeError(`target "${name}": ${k} must be a finite number, got ${describe(v)}`)
+    }
+    if (atMost !== undefined && atLeast !== undefined && atLeast > atMost) {
+      throw new TypeError(`target "${name}": atLeast (${atLeast}) is above atMost (${atMost}) — nothing could pass`)
+    }
+
+    const started = Date.now()
+    const bound = {}
+    if (atMost !== undefined) bound.atMost = atMost
+    if (atLeast !== undefined) bound.atLeast = atLeast
+    const rec = { name, kind: 'target', state: null, detail: '', ms: 0, value: null, brokenValue: null, bound, unit }
+
+    const read = async (what) => {
+      try {
+        const v = await withTimeout(measure(), timeout, what)
+        return Number.isFinite(v) ? { value: v } : { why: `measure() returned ${describe(v)}, not a finite number` }
+      } catch (e) {
+        return { why: e.message }
+      }
+    }
+
+    const first = await read(name)
+    if (first.why) {
+      rec.state = 'FAIL'
+      rec.detail = first.why
+      return this.#record(rec, started)
+    }
+    rec.value = first.value
+    if (!insideBar(rec.value, bound)) {
+      rec.state = 'FAIL'
+      rec.detail = `${formatValue(rec.value, unit)} is outside the bar ${formatBound(bound)}`
+      return this.#record(rec, started)
+    }
+
+    if (!breaks) {
+      rec.state = 'UNPROVEN'
+      rec.detail = 'no negative control — this bar has never been shown to fail'
+      return this.#record(rec, started)
+    }
+
+    let restore
+    let broken = { why: 'breaks() did not finish' }
+    try {
+      restore = await withTimeout(breaks(), timeout, name + ' (breaks)')
+      broken = await read(name + ' (control)')
+    } catch (e) {
+      broken = { why: e.message }
+    } finally {
+      if (typeof restore === 'function') {
+        try {
+          await restore()
+        } catch (e) {
+          rec.detail = 'restore failed: ' + e.message
+        }
+      }
+    }
+
+    const restoreNote = rec.detail
+    if (broken.why) {
+      rec.state = 'VOID'
+      rec.detail = `the broken run gave no number (${broken.why}), so the bar was never seen crossed`
+    } else {
+      rec.brokenValue = broken.value
+      if (insideBar(broken.value, bound)) {
+        rec.state = 'VOID'
+        rec.detail = 'the number stayed inside the bar with the thing broken — this bar measures nothing'
+      } else {
+        rec.state = 'PASS'
+        rec.detail = ''
+      }
+    }
+    if (restoreNote) rec.detail = rec.detail ? `${rec.detail}; ${restoreNote}` : restoreNote
+    return this.#record(rec, started)
+  }
+
   #record(rec, started) {
     rec.ms = Date.now() - started
     this.results.push(rec)
     const tag = { PASS: C.pass('PASS '), FAIL: C.fail('FAIL '), VOID: C.void_('VOID '), UNPROVEN: C.warn('UNPRV') }[rec.state]
-    console.log(`  ${tag} ${rec.name} ${C.dim(rec.ms + 'ms')}`)
+    console.log(`  ${tag} ${rec.kind === 'target' ? targetLine(rec) : rec.name} ${C.dim(rec.ms + 'ms')}`)
     if (rec.detail) console.log(`        ${C.dim(rec.detail)}`)
     return rec
   }
@@ -96,7 +208,12 @@ export class Suite {
     if (voids) console.log(C.void_('  VOID checks passed against a broken page. They are not evidence of anything.'))
     if (unproven && this.requireNegativeControl) console.log(C.warn('  UNPROVEN checks are failing this run (requireNegativeControl).'))
     const bad = fail + voids + (this.requireNegativeControl ? unproven : 0)
-    return { pass, fail, voids, unproven, ok: bad === 0 }
+    const targets = this.results.filter((r) => r.kind === 'target')
+    if (!targets.length) return { pass, fail, voids, unproven, ok: bad === 0 }
+    const t = (s) => targets.filter((r) => r.state === s).length
+    const tc = { pass: t('PASS'), fail: t('FAIL'), voids: t('VOID'), unproven: t('UNPROVEN') }
+    console.log(C.dim(`  of which targets: ${tc.pass} passed, ${tc.fail} failed, ${tc.voids} void, ${tc.unproven} unproven`))
+    return { pass, fail, voids, unproven, ok: bad === 0, targets: tc }
   }
 }
 
@@ -112,6 +229,13 @@ export async function suite(name, fn, opts) {
   const r = s.report()
   if (!r.ok) process.exitCode = 1
   return r
+}
+
+/** `accept a Sunday — 2 taps (≤ 3) · broken: 4 taps`. A run with no number says so instead. */
+function targetLine(rec) {
+  const now = rec.value === null ? 'no number' : formatValue(rec.value, rec.unit)
+  const broken = rec.brokenValue === null ? '' : ` · broken: ${formatValue(rec.brokenValue, rec.unit)}`
+  return `${rec.name} — ${now} ${formatBound(rec.bound)}${broken}`
 }
 
 function withTimeout(p, ms, what) {
