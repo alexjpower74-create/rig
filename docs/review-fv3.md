@@ -401,3 +401,36 @@ Add E as the control: it is green at 94c50dc and red at c8f3088.
 so the queue clears and nothing retries. But c8f3088 adds a new way to show a wrong rating under
 "Saved": two devices whose clocks disagree (E). That needs the same-tab fix above before the finish
 gate.
+
+## Re-check 4 by fv2 (per-tab ordering at b1a9ed7, against c8f3088)
+
+Same method: both shas unpacked whole, read-only. Boards ran on 5498 with `--no-open`, and Chrome
+was headless on 9366 at 390×844 mobile. Taps went to points hit-tested with `elementFromPoint`, and
+the header-then-disk sampler from Re-check 2 ran throughout. Each clock was moved with
+`Page.addScriptToEvaluateOnNewDocument` overriding `Date.now`. In probe E, the first tab rates
+card 1 a 4 and closes; a second tab then goes ‹ back and re-rates card 1 a 2. The later answer, the
+2, must be the one kept.
+
+| Probe | c8f3088 | b1a9ed7 |
+|---|---|---|
+| **D** in-flight 4 then 2, tab hidden, held 4 released | 2; 0 lies of 257 | 2; 0 lies of 258 |
+| **E** 4 with the clock right, then 2 with the clock 2 min behind | **4**; 76 lies of 81 | 2; 0 lies of 81 |
+| **E** 4 with the clock right, then 2 with the clock 2 min ahead | 2; 0 lies | 2; 0 lies |
+| **E** 4 with the clock 2 min ahead, then 2 with the clock right | **4**; 76 lies of 81 | 2; 0 lies of 81 |
+| **E** 4 with the clock 2 min behind, then 2 with the clock right | 2; 0 lies | 2; 0 lies |
+| **E** 4 with the clock 60 min behind, then 2 with the clock 60 min ahead | 2; 0 lies | 2; 0 lies |
+| **L** over the `--lan` address (`isSecureContext` is false) | 3 on disk, Saved | 3 on disk, Saved |
+
+- **D stays fixed.** The late, older answer from the same tab is still ignored.
+- **E is red at c8f3088** whenever the second device's clock runs behind the first's, whichever device
+  that is. At b1a9ed7 it is green for skew in both directions and in both orders: no clock is ever
+  compared.
+- **L.** The tab id comes from `crypto.getRandomValues`, which still works on the plain-HTTP LAN
+  address, where `crypto.randomUUID` would not. A rating given there reaches disk.
+
+One thing remains, by design and not blocking. An answer from a page that has since been *reloaded*
+counts as another tab. If it is still in flight when the reloaded page answers the same card, the
+one that arrives last wins. That needs a reload and a re-rate inside one round trip.
+
+**Verdict: PASS** at b1a9ed7. D stays green, and E is red at c8f3088 and green at b1a9ed7. Clock skew
+in either direction, and in either order, is harmless.
