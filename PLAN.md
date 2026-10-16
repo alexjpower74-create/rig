@@ -143,6 +143,7 @@ Owns:
 - src/mindset.js
 - src/commands/review.js
 - src/commands/up.js
+- src/commands/brief.js
 - src/roll.js
 - templates/**
 - test/brief-five.test.js

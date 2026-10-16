@@ -1,0 +1,123 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rig target fixture — accept a shift</title>
+<!--
+  The fixture for test/target.test.js. Accepting the Sunday shift takes 2 taps: open the shift,
+  then Accept. Load the page with ?confirm and a confirm step joins the flow (tick the box, then
+  Confirm), which makes it 4: the regression a bar of "at most 3 taps" exists to catch.
+
+  At every step exactly one control carries [data-next]. The test's walk taps whatever that is,
+  through real input, until the page says the shift is accepted, so the tap count is whatever the
+  flow costs, not a number written into the test.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f2ee; --card: #ffffff; --ink: #1d1f24; --muted: #6b6f78; --line: #e3e0da;
+    --accent: #1f6f5c; --accent-ink: #ffffff; --done: #e5f2ec; --scrim: rgb(20 22 26 / .38);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121418; --card: #1b1e24; --ink: #e9ebef; --muted: #9298a3; --line: #2a2e36;
+      --accent: #4fb596; --accent-ink: #08130f; --done: #183229; --scrim: rgb(0 0 0 / .55);
+    }
+  }
+  * { box-sizing: border-box }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink); font: 16px/1.45 system-ui, sans-serif }
+  main { max-width: 440px; margin: 0 auto; padding: 28px 16px }
+  h1 { font-size: 22px; margin: 0 0 4px }
+  p.sub { margin: 0 0 20px; color: var(--muted) }
+  .shift {
+    display: grid; grid-template-columns: 56px 1fr auto; gap: 14px; align-items: center; width: 100%;
+    padding: 14px 16px; margin: 0 0 10px; border: 1px solid var(--line); border-radius: 14px;
+    background: var(--card); color: inherit; font: inherit; text-align: left; cursor: pointer; min-height: 72px;
+  }
+  .shift .day { display: grid; place-items: center; height: 56px; border-radius: 10px; background: var(--bg); font-weight: 700; line-height: 1.1 }
+  .shift .day small { display: block; font-weight: 500; color: var(--muted); font-size: 12px }
+  .shift .what { color: var(--muted); font-size: 14px }
+  .shift .tag { font-size: 13px; color: var(--muted) }
+  .shift.accepted { background: var(--done); border-color: transparent }
+  .shift.accepted .tag { color: var(--accent); font-weight: 600 }
+  .scrim { position: fixed; inset: 0; background: var(--scrim); display: none; align-items: end; justify-content: center }
+  .scrim.open { display: flex }
+  .sheet { width: 100%; max-width: 440px; background: var(--card); border-radius: 18px 18px 0 0; padding: 22px 16px 28px }
+  .sheet h2 { margin: 0 0 4px; font-size: 19px }
+  .sheet p { margin: 0 0 18px; color: var(--muted) }
+  .primary {
+    display: block; width: 100%; min-height: 52px; border: 0; border-radius: 12px;
+    background: var(--accent); color: var(--accent-ink); font: 600 17px/1 system-ui, sans-serif; cursor: pointer;
+  }
+  .primary:disabled { opacity: .4; cursor: default }
+  label.tick { display: flex; gap: 12px; align-items: center; min-height: 52px; margin: 0 0 14px; padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer }
+  label.tick input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent) }
+  #status { margin-top: 18px; min-height: 1.5em; color: var(--accent); font-weight: 600 }
+</style>
+
+<main>
+  <h1>Open shifts</h1>
+  <p class="sub">Front desk · this week</p>
+  <button type="button" class="shift" id="shift-sun" data-next>
+    <span class="day">19<small>Sun</small></span>
+    <span><strong>09:00 – 17:00</strong><br><span class="what">Front desk · 8 h</span></span>
+    <span class="tag" id="sun-tag">Open</span>
+  </button>
+  <button type="button" class="shift" id="shift-mon" disabled>
+    <span class="day">20<small>Mon</small></span>
+    <span><strong>12:00 – 20:00</strong><br><span class="what">Front desk · 8 h</span></span>
+    <span class="tag">Taken</span>
+  </button>
+  <div id="status" role="status"></div>
+</main>
+
+<div class="scrim" id="detail">
+  <div class="sheet">
+    <h2>Sunday 19 · 09:00 – 17:00</h2>
+    <p>Front desk, 8 hours, 30 min break.</p>
+    <button type="button" class="primary" id="accept">Accept shift</button>
+  </div>
+</div>
+
+<div class="scrim" id="confirm">
+  <div class="sheet">
+    <h2>Can you make it?</h2>
+    <p>Accepted shifts go straight onto the rota.</p>
+    <label class="tick" id="tick-label"><input type="checkbox" id="tick"> I can work 09:00 – 17:00</label>
+    <button type="button" class="primary" id="confirm-btn" disabled>Confirm</button>
+  </div>
+</div>
+
+<script>
+  const confirmStep = new URLSearchParams(location.search).has('confirm')
+  const $ = (id) => document.getElementById(id)
+  const next = (el) => {
+    for (const n of document.querySelectorAll('[data-next]')) n.removeAttribute('data-next')
+    if (el) el.setAttribute('data-next', '')
+  }
+  const accepted = () => {
+    $('detail').classList.remove('open')
+    $('confirm').classList.remove('open')
+    $('shift-sun').classList.add('accepted')
+    $('sun-tag').textContent = 'Yours'
+    $('status').textContent = 'Shift accepted'
+    document.body.dataset.state = 'accepted'
+    next(null)
+  }
+
+  $('shift-sun').addEventListener('click', () => {
+    if (document.body.dataset.state === 'accepted') return
+    $('detail').classList.add('open')
+    next($('accept'))
+  })
+  $('accept').addEventListener('click', () => {
+    if (!confirmStep) return accepted()
+    $('detail').classList.remove('open')
+    $('confirm').classList.add('open')
+    next($('tick-label'))
+  })
+  $('tick').addEventListener('change', () => {
+    $('confirm-btn').disabled = !$('tick').checked
+    next($('tick').checked ? $('confirm-btn') : $('tick-label'))
+  })
+  $('confirm-btn').addEventListener('click', accepted)
+</script>
