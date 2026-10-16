@@ -42,3 +42,27 @@ Reviewer: fv1. Read only. Diff: `git diff main...rig/fv2` at e915a9d (`harness/c
 
 No findings against the hard rules: no dependencies, no new browser windows (`launch({ headless: true,
 port: 9351 })`), no personal data in the diff, and no edits outside fv2's Owns list.
+
+## Re-check — 8a5e2cc (`git diff e915a9d..8a5e2cc`): PASS
+
+Finding 1 is fixed. `Suite#target`'s `read()` calls `resetCounters()` before every `measure()` run
+(the real one and the broken one). `countInput` registers each counter in a WeakRef set, so a
+finished walk's counter can still be collected.
+
+Seen, not read: a script outside the repo builds a `countInput` over a stub page (it only accepts
+`Input.dispatch*` sends, no browser), gives `target()` a measure that taps twice and **never calls
+`reset()`**, and a break that changes nothing, with `atMost: 3`. Each tree was unpacked with
+`git archive`:
+- e915a9d (old): `PASS  break changes nothing — 2 taps (≤ 3) · broken: 4 taps`. The false PASS.
+- 8a5e2cc (fix): `VOID  break changes nothing — 2 taps (≤ 3) · broken: 2 taps`.
+
+So the old code makes the scenario red and the fix makes it right. I did not re-run fv2's own Chrome
+test with the old files swapped in: it is pinned to debugging port 9351, which fv2's own runs use, and
+I don't start what could collide with another slice's browser. The stub run exercises the same path
+(`read()` → counter → `insideBar`) with nothing else involved.
+
+Notes, not blockers:
+- `resetCounters()` resets **every** live counter, including one a caller keeps outside `target()`
+  to count a whole session across checks. The JSDoc says so ("a count that must span a target() call
+  belongs inside measure()"). Fine, and now on record.
+- The timeout note (finding 2) is now in the JSDoc. Finding 3 is unchanged by design.
