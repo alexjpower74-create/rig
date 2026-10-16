@@ -320,3 +320,84 @@ What to check:
 
 **Verdict: PASS** on the flushAll regression at 94c50dc. One narrow residual (D) remains: it predates
 the fix, and it's the lead's call whether it blocks the finish gate.
+
+## Re-check 3 by fv2 (the stale-answer fix at c8f3088, against 94c50dc)
+
+Same method again: both shas unpacked whole, read-only. Boards ran on 5497 with `--no-open`, and
+Chrome headless on 9365, 390×844 mobile. Taps went to points hit-tested with `elementFromPoint`. A
+CDP `Fetch` hold kept the first answer in flight. The header-then-disk sampler from Re-check 2 ran
+throughout.
+
+### D. A re-rate while the first answer is in flight: PASS
+
+The steps:
+1. Tap 4 on card 1, and hold that request.
+2. Tap ‹ back, then 2 on card 1.
+3. Hide the tab and show it again, or skip this step for the "not hidden" run.
+4. Release the held 4.
+
+| | 94c50dc | c8f3088 |
+|---|---|---|
+| tab hidden: card 1 before / after the held 4 lands | 2 → **4** | 2 → 2 |
+| tab hidden: lies ("Saved" with the disk wrong) | 192 of 290 samples | 0 of 290 |
+| not hidden: card 1 at the end; lies | 2; 0 | 2; 0 |
+| header at the end | Saved | Saved |
+| answer sends in the 3 s after the release | 0 | 0 |
+
+The stale 4 cleared the queue, nothing was sent again, and the newer 2 stayed.
+
+### A stale answer still gets a 200: PASS
+
+These were raw POSTs with the token, the board's own Origin, and JSON.
+
+| Request | 94c50dc | c8f3088 |
+|---|---|---|
+| rating 2 with `seq` 2000, then rating 4 with `seq` 1000 | 200, 200; disk **4** | 200, 200; disk 2 |
+| then a note with `seq` 1500 | 200; note saved, rating 4 | 200; note saved, rating stays 2 |
+| then rating 5 with no `seq` | 200; 5 | 200; 5 (an answer without a number still applies) |
+
+The rating and the note keep separate numbers, so a note typed after a rating is never thrown away
+because of the rating's number.
+
+### New: two devices whose clocks disagree, and the later answer is thrown away
+
+`seq` is the tab's own `Date.now()` (`src/taste/page.js:132`, `nextSeq`). The server compares numbers
+that came from different devices. `--lan` exists so he can rate from a phone while the desktop tab
+is also open. If the phone's clock is behind the desktop's by more than the time between his two
+answers, his later answer from the phone is ignored. The phone still shows his rating, under
+"Saved".
+
+Probe **E**, one tab at a time, as a person switching devices:
+1. Rate card 1 a 4 in a normal tab, and close it.
+2. Open the board in a tab whose `Date.now` runs 2 minutes behind
+   (`Page.addScriptToEvaluateOnNewDocument`).
+3. Go ‹ back to card 1 and rate it 2.
+
+| | 94c50dc | c8f3088 |
+|---|---|---|
+| card 1 on disk | 2 | **4** |
+| phone header | Saved | **Saved** |
+| lies | 0 of 102 | 96 of 101 |
+
+This is a regression from c8f3088. It is the same symptom D had, a wrong rating under "Saved",
+moved to a different case.
+
+How often it happens depends on how far apart the two clocks are. Devices that sync their time
+are usually within a second. A phone whose clock was set by hand, or that has been offline for a
+while, can be minutes out. A clock running *ahead* has the opposite effect: the desktop's later
+corrections are then ignored until real time catches up.
+
+What to check: only compare numbers from the same tab.
+- The page sends a random tab id, made once per page load, together with a counter that only goes
+  up.
+- `handlers.answer` ignores an answer only when the answer it already holds came from the same tab
+  with a higher counter.
+- Answers from different tabs apply in the order they arrive. That is the right order across
+  devices, because no one answers on two devices within one round trip.
+
+Add E as the control: it is green at 94c50dc and red at c8f3088.
+
+**Verdict:** the re-rate-in-flight case (D) is fixed at c8f3088, and a stale answer still gets a 200,
+so the queue clears and nothing retries. But c8f3088 adds a new way to show a wrong rating under
+"Saved": two devices whose clocks disagree (E). That needs the same-tab fix above before the finish
+gate.
