@@ -43,6 +43,20 @@ async function readJson(req, limit = 64 * 1024) {
 const NOTE_MAX = 2000
 const validRating = (r) => r === null || (Number.isInteger(r) && r >= 1 && r <= 5)
 
+/** Which tab sent an answer, and its place in that tab's count: { tab, seq }, or null. */
+const from = (body) => (typeof body.tab === 'string' && Number.isFinite(body.seq) ? { tab: body.tab.slice(0, 64), seq: body.seq } : null)
+
+/**
+ * True when the value held came from the same tab, later in its count, than this answer: two of its
+ * sends raced and this older one arrived last. It is ignored, and still acknowledged so the page's
+ * queue clears. Answers from different tabs are never compared (their clocks and counts are
+ * unrelated): the one that arrives last wins.
+ */
+const stale = (held, body) => {
+  const f = from(body)
+  return !!held && !!f && held.tab === f.tab && held.seq > f.seq
+}
+
 /**
  * The answers the page can send, applied to the open round. Exported as an object so a test can
  * swap one for a broken version and watch its assertion go red.
@@ -54,20 +68,16 @@ export const handlers = {
     const map = body.kind === 'comp' ? round.compRatings : round.ratings
     if (!list.some((c) => c.id === body.id)) throw fail(`no ${body.kind || 'ref'} "${body.id}" in this round`, 404)
     const next = { ...(map[body.id] || {}), at: new Date().toISOString() }
-    // An answer older than the one already held for this field arrived late (two sends raced when
-    // the tab was hidden): it is ignored, and still acknowledged so the page's queue clears.
-    const seq = Number.isFinite(body.seq) ? body.seq : null
-    const newer = (held) => seq === null || !(held > seq)
     if ('rating' in body) {
       if (!validRating(body.rating)) throw fail('rating must be 1 to 5', 400)
-      if (newer(next.ratingSeq)) {
+      if (!stale(next.ratingFrom, body)) {
         next.rating = body.rating
-        if (seq !== null) next.ratingSeq = seq
+        next.ratingFrom = from(body)
       }
     }
-    if ('note' in body && newer(next.noteSeq)) {
+    if ('note' in body && !stale(next.noteFrom, body)) {
       next.note = String(body.note ?? '').slice(0, NOTE_MAX)
-      if (seq !== null) next.noteSeq = seq
+      next.noteFrom = from(body)
     }
     if (!next.rating && !next.note) delete map[body.id]
     else map[body.id] = next
@@ -75,10 +85,9 @@ export const handlers = {
   /** { id: compId | null } — the starred favourite. */
   pick(round, body) {
     if (body.id !== null && !round.comps.some((c) => c.id === body.id)) throw fail(`no comp "${body.id}"`, 404)
-    const seq = Number.isFinite(body.seq) ? body.seq : null
-    if (seq !== null && round.pickSeq > seq) return
+    if (stale(round.pickFrom, body)) return
     round.pick = body.id
-    if (seq !== null) round.pickSeq = seq
+    round.pickFrom = from(body)
   },
 }
 

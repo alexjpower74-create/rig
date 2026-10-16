@@ -268,10 +268,12 @@ const VIEWPORTS = {
 // Page-side breaks the controls install; each runs after every load.
 const pageBreaks = []
 
-async function openBoard(browser, url, vp, { dark = false } = {}) {
+async function openBoard(browser, url, vp, { dark = false, before = null } = {}) {
   const page = await browser.newPage(null, { width: vp.width, height: vp.height, dpr: vp.dpr, mobile: vp.mobile })
   if (vp.touch) await page.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
   await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: dark ? 'dark' : 'light' }] })
+  // `before` runs ahead of the page's own script on every load (a skewed clock, for one).
+  if (before) await page.send('Page.addScriptToEvaluateOnNewDocument', { source: before })
   await page.goto(url)
   for (const fn of pageBreaks) await page.eval(fn)
   await page.eval('Promise.all([...document.images].map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r })))')
@@ -652,6 +654,69 @@ await suite('rig taste', async (s) => {
       if ('note' in body) next.note = String(body.note ?? '')
       map[body.id] = next
     }),
+    timeout: 60_000,
+  })
+
+  // fv2's probe E: c8f3088 numbered answers by each tab's own clock and compared them across tabs,
+  // so a phone whose clock runs 2 minutes behind could not change what the desktop said; the old
+  // value stayed on disk under "Saved". The control serves c8f3088's page and handler together.
+  const PAGE_C8 = (() => {
+    const old = spawnSync('git', ['show', 'c8f3088:src/taste/page.js'], { cwd: here, encoding: 'utf8' })
+    if (old.status !== 0) return null
+    const file = join(work, 'page-c8f3088.mjs')
+    writeFileSync(file, old.stdout)
+    return file
+  })()
+  const answerC8 = (round, body) => {
+    const map = body.kind === 'comp' ? round.compRatings : round.ratings
+    const next = { ...(map[body.id] || {}), at: new Date().toISOString() }
+    const seq = Number.isFinite(body.seq) ? body.seq : null
+    const newer = (held) => seq === null || !(held > seq)
+    if ('rating' in body && newer(next.ratingSeq)) {
+      next.rating = body.rating
+      if (seq !== null) next.ratingSeq = seq
+    }
+    if ('note' in body && newer(next.noteSeq)) {
+      next.note = String(body.note ?? '')
+      if (seq !== null) next.noteSeq = seq
+    }
+    map[body.id] = next
+  }
+  await s.check('a second tab whose clock runs 2 minutes behind can still change a rating', {
+    assert: async () => {
+      const b = await board()
+      const r0 = b.round.refs[0].id
+      const desk = await openBoard(browser, b.url, VIEWPORTS.desktop)
+      const phone = await openBoard(browser, b.url, VIEWPORTS.phone, {
+        before: 'Date.now = ((n) => () => n() - 120000)(Date.now.bind(Date))',
+      })
+      try {
+        await press(desk, countInput(desk), '.rate[data-rating="5"]', { touch: false })
+        await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 5, 2000)
+        await press(phone, countInput(phone), '.rate[data-rating="2"]', { touch: true })
+        await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 2, 2000)
+        await sleep(200)
+        const final = newest(ratingsJson(b.root)).ratings?.[r0]?.rating
+        const header = await phone.eval('document.getElementById("save").textContent')
+        if (final !== 2) console.log(`        card 1 on disk: ${final}, the phone's header: "${header}"`)
+        return final === 2 && header === 'Saved'
+      } finally {
+        await desk.close()
+        await phone.close()
+        await b.stop()
+      }
+    },
+    breaks: PAGE_C8
+      ? async () => {
+          const { pageHtml } = await import(PAGE_C8)
+          const restorePage = swap(view, 'page', pageHtml)()
+          const restoreAnswer = swap(handlers, 'answer', answerC8)()
+          return () => {
+            restoreAnswer()
+            restorePage()
+          }
+        }
+      : undefined,
     timeout: 60_000,
   })
 

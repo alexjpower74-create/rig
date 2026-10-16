@@ -3,7 +3,7 @@
 Final sha: **1d896e0** on `rig/fv3` (main merged in at 6676cc6, so fv2's `s.target` and `countInput` are in).
 QA: `rig qa 1d896e0 --run "npm ci --silent && npm run check"` printed
 `rig qa: test exit 0 at 1d896e0` and `rig qa: negative exit 0 at 1d896e0` (the demo still prints its
-one VOID and one FAIL). `test/taste.test.js` at that sha: **30 passed, 0 failed, 0 void, 0 unproven;
+one VOID and one FAIL). `test/taste.test.js` at that sha: **31 passed, 0 failed, 0 void, 0 unproven;
 targets 2 passed**.
 
 ## What I built — DONE
@@ -71,6 +71,7 @@ Every check is `s.check` / `s.target` with `breaks`. The controls put the old be
 | note typed, page left at once, is on disk | every fetch after `beforeunload` fails (the first draft's effect) |
 | an answer given offline, through a hidden tab, reaches disk once the board is back (fv2's re-check probe) | the 1d896e0 page served instead, via `view.page`: header "Saved", first answer gone |
 | a re-rating that overtakes the first answer wins when the first lands last (fv2's second re-check; CDP Fetch holds the first answer) | 94c50dc's answer handler: card 1 ended at 4, not 2 |
+| a second tab with its clock 2 minutes behind can still change a rating (fv2's probe E) | c8f3088's page and handler: card stayed 5 under "Saved" |
 | fast second tap lands on the next card | the first draft's 160 ms drop rule, in front of the handler |
 | number keys rate and advance | keydown swallowed |
 | back returns with the rating shown | back button wired to nothing |
@@ -93,9 +94,12 @@ Every check is `s.check` / `s.target` with `breaks`. The controls put the old be
 
 Bugs found by the tests, each with a test that failed first:
 - **A late, older answer could overwrite a newer one** (fv2's second re-check). The hide flush sends
-  every waiting answer at once. Each answer now carries a number that only grows (the clock,
-  nudged past the last), and the server keeps it per field (rating, note, star). It ignores an
-  older one with a 200, so the queue still clears.
+  every waiting answer at once. My first fix numbered answers by each tab's clock and compared them
+  across tabs. fv2's third re-check showed a phone with a slow clock then couldn't change what the
+  desktop said. Now each page load has a random tab id and a counter that only goes up. The server
+  keeps both per field (rating, note, star) and ignores an answer only when the held one came from
+  the same tab with a higher count (replying 200, so the queue clears). Different tabs apply in
+  arrival order.
 - **A hidden tab lost an answer it hadn't delivered** (found by fv2's re-check of 1d896e0). The hide
   flush emptied the queue whatever happened to the sends, and the next good tap showed "Saved"
   over the gap. Now answers leave the queue only when the server acknowledges them, go one at a time

@@ -126,13 +126,16 @@ function send(path, body){
   return fetch(path, { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json', 'x-taste-token': S.token }, body: JSON.stringify(body) })
 }
 function keyOf(path, body){ return path === '/api/pick' ? 'pick' : path + ':' + body.kind + ':' + body.id }
-// Every answer carries a number that only grows (the clock, nudged past the last one), so the
-// server can tell an older answer arriving late from a newer one and keep the newer.
+// Every answer carries this tab's random id and a counter that only goes up, so the server can
+// tell an older answer from this tab arriving late (two sends raced when the tab was hidden) and
+// keep the newer one. Not a clock: a phone whose clock runs behind the desktop's must still be able
+// to change what the desktop said. Answers from different tabs apply in the order they arrive.
+var TAB = Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(8)), function(b){ return (b + 256).toString(16).slice(1) }).join('')
 var lastSeq = 0
-function nextSeq(){ lastSeq = Math.max(Date.now(), lastSeq + 1); return lastSeq }
 function post(path, body){
   if (ended) return
-  body.seq = nextSeq()
+  body.tab = TAB
+  body.seq = ++lastSeq
   var k = keyOf(path, body)
   for (var i = 0; i < queue.length; i++){
     var q = queue[i]
