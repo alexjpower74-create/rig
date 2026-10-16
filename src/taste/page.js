@@ -56,14 +56,14 @@ footer{padding:4px 16px max(12px,env(safe-area-inset-bottom));display:flex;flex-
 .thumb img{display:block;object-fit:cover;object-position:top;border-radius:6px}
 .thumb span{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 #finish{height:56px;padding:0 32px;border-radius:28px;border:0;background:var(--ink);color:var(--bg);font-size:17px;font-weight:600}
-.question{font-family:ui-serif,Georgia,serif;font-size:20px;text-align:center;margin:0 0 4px;padding:0 8px}
-.grid{position:absolute;inset:0;display:grid;gap:12px}
+.asking #name{font-size:20px}
+.grid{position:absolute;inset:0;display:grid;gap:16px;justify-content:center;align-content:center}
 .comp{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;gap:6px;border-radius:12px;padding:6px;border:2px solid transparent;background:transparent}
 .comp.sel{border-color:var(--ink)}
-.comp .pick{flex:1;min-height:0;border:0;padding:0;background:var(--paper);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;display:block;width:100%}
+.comp .pick{flex:none;border:0;padding:0;background:var(--paper);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;display:block;width:100%}
 .comp .pick img{display:block;width:100%;height:100%;object-fit:contain}
 .comp .bar{display:flex;align-items:center;gap:6px;height:44px}
-.comp .label{flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.comp .label{flex:1;min-width:0;font-family:ui-serif,Georgia,serif;font-size:18px;padding-left:4px}
 .comp .score{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
 .star{width:44px;height:44px;border-radius:22px;border:1px solid var(--line);background:var(--paper);font-size:20px;line-height:1;color:var(--muted);flex:none}
 .star[aria-pressed=true]{color:var(--star);border-color:var(--star)}
@@ -79,8 +79,8 @@ footer{padding:4px 16px max(12px,env(safe-area-inset-bottom));display:flex;flex-
   main{padding:4px 12px}
   #stage{inset:4px 12px;--gap:12px}
   footer{padding-left:12px;padding-right:12px;gap:6px}
-  .question{font-size:17px}
-  .grid{gap:6px}
+  .asking #name{font-size:17px}
+  .grid{gap:8px}
   .comp{padding:3px}
 }
 /* Hover only where a pointer really hovers: on a phone a sticky :hover reads as a rating already given. */
@@ -190,15 +190,6 @@ function fit(figs){
     var s = f.querySelector('.shot'); s.style.width = Math.floor(w) + 'px'; s.style.height = Math.floor(h) + 'px'
   })
 }
-// A grid for n tiles of aspect ~a inside W x H, picking the column count that makes tiles biggest.
-function bestCols(n, W, H, a, extraH, gap){
-  var best = 1, bestS = 0
-  for (var c = 1; c <= n; c++){
-    var r = Math.ceil(n / c), cw = (W - gap * (c - 1)) / c, ch = (H - gap * (r - 1)) / r - extraH
-    var w = Math.min(cw, ch * a); if (w > bestS){ bestS = w; best = c }
-  }
-  return best
-}
 
 // The token rides on every image URL; v changes when the file does, so a reworked comp is never stale.
 function imgUrl(card, view){ return '/img/' + encodeURIComponent(card.id) + '/' + view + '?t=' + encodeURIComponent(S.token) + '&v=' + (card.v[view] || '') }
@@ -229,36 +220,49 @@ function renderRef(i){
   preload(refs[i + 1])
 }
 
+// The comps view: the question once, in the header, and the comps as large as the stage allows.
+// Each frame takes its image's own shape, and the column count is whichever makes them biggest.
 function renderComps(){
-  $('progress').textContent = 'Comps'
+  $('progress').textContent = 'Comps · ' + comps.length
   $('name').textContent = S.question || 'Which one?'; $('name').title = S.question || ''
+  document.body.classList.add('asking')
   stage.innerHTML = ''; stage.style.display = 'block'; stage.style.flexDirection = ''
-  var q = el('p', 'question', S.question || 'Which one?'); q.id = 'question'
-  var wrap = el('div'); wrap.style.cssText = 'position:absolute;left:0;right:0;bottom:0'
   var grid = el('div', 'grid'); grid.id = 'grid'
-  wrap.appendChild(grid); stage.appendChild(q); stage.appendChild(wrap)
+  stage.appendChild(grid)
+  var imgs = []
   comps.forEach(function(c, k){
-    var a = answerOf('comp', c.id)
+    var a = answerOf('comp', c.id), letter = String.fromCharCode(65 + k)
     var card = el('div', 'comp' + (k === sel ? ' sel' : '')); card.dataset.id = c.id
-    var pick = el('button', 'pick'); pick.type = 'button'; pick.setAttribute('aria-label', 'Select ' + c.name)
-    var img = new Image(); img.alt = c.name; img.src = imgUrl(c, c.views[0]); pick.appendChild(img)
+    var pick = el('button', 'pick'); pick.type = 'button'; pick.setAttribute('aria-label', 'Select comp ' + letter)
+    var img = new Image(); img.alt = 'Comp ' + letter; img.src = imgUrl(c, c.views[0]); pick.appendChild(img)
+    img.addEventListener('load', function(){ relayout() })
+    imgs.push(img)
     pick.addEventListener('click', function(){ select(k) })
     var bar = el('div', 'bar')
-    bar.appendChild(el('span', 'label', String.fromCharCode(65 + k) + '  ·  ' + c.name))
-    bar.appendChild(el('span', 'score', a.rating ? a.rating + '/5' : ''))
-    var star = el('button', 'star', '★'); star.type = 'button'; star.setAttribute('aria-label', 'Favourite: ' + c.name)
+    bar.appendChild(el('span', 'label', letter))
+    bar.appendChild(el('span', 'score', a.rating ? a.rating + ' / 5' : ''))
+    var star = el('button', 'star', '★'); star.type = 'button'; star.setAttribute('aria-label', 'Favourite: comp ' + letter)
     star.setAttribute('aria-pressed', S.pick === c.id ? 'true' : 'false')
     star.addEventListener('click', function(){ togglePick(k) })
     bar.appendChild(star)
     card.appendChild(pick); card.appendChild(bar); grid.appendChild(card)
   })
   relayout = function(){
-    var top = q.offsetHeight + 4
-    wrap.style.top = top + 'px'
-    var W = wrap.clientWidth, H = wrap.clientHeight, gap = parseFloat(getComputedStyle(grid).rowGap) || 8
-    var cols = bestCols(comps.length, W, H, 1.4, 56, gap)
-    grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))'
-    grid.style.gridTemplateRows = 'repeat(' + Math.ceil(comps.length / cols) + ', minmax(0, 1fr))'
+    var W = stage.clientWidth, H = stage.clientHeight, gap = parseFloat(getComputedStyle(grid).rowGap) || 8
+    var loaded = imgs.filter(function(i){ return i.naturalWidth && i.naturalHeight })
+    var a = loaded.length ? loaded.reduce(function(s, i){ return s + i.naturalWidth / i.naturalHeight }, 0) / loaded.length : 1.6
+    var cs = getComputedStyle(grid.firstChild)
+    var padW = parseFloat(cs.paddingLeft) * 2 + parseFloat(cs.borderLeftWidth) * 2
+    var padH = padW + 44 + parseFloat(cs.rowGap || 0)
+    var best = 1, bestW = 0, n = comps.length
+    for (var c = 1; c <= n; c++){
+      var r = Math.ceil(n / c)
+      var w = Math.min((W - gap * (c - 1)) / c - padW, ((H - gap * (r - 1)) / r - padH) * a)
+      if (w > bestW){ bestW = w; best = c }
+    }
+    bestW = Math.floor(Math.max(44, bestW))
+    grid.style.gridTemplateColumns = 'repeat(' + best + ', ' + (bestW + padW) + 'px)'
+    Array.prototype.forEach.call(grid.querySelectorAll('.pick'), function(p){ p.style.width = bestW + 'px'; p.style.height = Math.floor(bestW / a) + 'px' })
   }
   relayout()
   showRating(comps[sel] ? answerOf('comp', comps[sel].id).rating : null)
@@ -302,6 +306,7 @@ function updateDone(){
 
 function go(p){
   flushNote()
+  document.body.classList.remove('asking')
   pos = Math.max(0, Math.min(steps.length - 1, p))
   var s = steps[pos]
   $('back').disabled = pos === 0

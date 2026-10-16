@@ -894,8 +894,8 @@ await suite('rig taste', async (s) => {
     assert: async () => {
       const { b, page, input, close } = await compsBoard()
       try {
-        if ((await progress(page)) !== 'Comps') return false
-        const q = await page.eval('document.getElementById("question")?.textContent')
+        if (!(await progress(page)).startsWith('Comps')) return false
+        const q = await page.eval('document.getElementById("name")?.textContent')
         for (const r of [2, 5, 3, 4]) await press(page, input, `.rate[data-rating="${r}"]`, { touch: true })
         await sleep(300)
         await press(page, input, '.comp:nth-child(2) .star', { touch: true })
@@ -917,6 +917,31 @@ await suite('rig taste', async (s) => {
       }
     },
     breaks: swap(handlers, 'pick', () => {}),
+    timeout: 60_000,
+  })
+
+  await s.check('comps: the question shows once, and each frame takes the image’s shape', {
+    assert: async () => {
+      const { page, close } = await compsBoard()
+      try {
+        const times = await page.eval('document.body.innerText.split("Which header feels calm?").length - 1')
+        // The fixtures are 1440×900: a frame within a pixel of 1.6 wide per tall, no letterbox.
+        const shapes = await page.eval('[...document.querySelectorAll(".comp .pick")].map((p) => p.clientWidth / p.clientHeight)')
+        const ok = times === 1 && shapes.length === 4 && shapes.every((r) => Math.abs(r - 1.6) < 0.03)
+        if (!ok) console.log(`        question shown ${times}×, frames ${shapes.map((r) => r.toFixed(2)).join(', ')}`)
+        return ok
+      } finally {
+        await close()
+      }
+    },
+    // The control: the first comps view, with the question again above the grid and portrait frames.
+    breaks: pageBreak(`(() => {
+      new MutationObserver(() => {
+        const g = document.getElementById('grid')
+        if (g && !document.getElementById('again')) g.insertAdjacentHTML('beforebegin', '<p id="again">Which header feels calm?</p>')
+      }).observe(document.body, { childList: true, subtree: true })
+      document.head.insertAdjacentHTML('beforeend', '<style>.comp .pick{height:300px!important}</style>')
+    })()`),
     timeout: 60_000,
   })
 
