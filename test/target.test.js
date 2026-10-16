@@ -359,7 +359,7 @@ test('countInput counts what it delivered, and the page saw the same input', asy
   await c.click(200, 400)
   await c.tap(200, 400)
   await c.type('Sunday')
-  await c.type('é✓') // two characters, however many bytes
+  await c.type('é🙂') // two characters: the emoji is two UTF-16 units but one key
   await c.wheel({ x: 200, y: 400, dy: 300, ticks: 5, ms: 5 })
   await c.swipe({ x: 200, y: 600, dy: -200, steps: 4, ms: 5 })
   await sleep(50)
