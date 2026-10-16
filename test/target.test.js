@@ -136,6 +136,32 @@ test('VOID: a break that misses the flow leaves the number at 2, inside the bar'
   assert.equal(s.report().ok, false, 'a VOID target fails the run')
 })
 
+test('a measure that never resets its counter still gets VOID when the break changes nothing', async () => {
+  // Found in review: with the counter carried over, the broken run read 2 + 2 = 4 taps and a break
+  // that touched nothing came out PASS. target() now resets every live counter before each run.
+  const misspelt = () => {
+    query = '?confrim'
+    return () => {
+      query = ''
+    }
+  }
+  const forgetful = async () => {
+    await load(fixture + query)
+    await acceptSunday()
+    return input.counts().taps
+  }
+  input.reset() // start clean, so the Rig 4-era carry-over reads exactly 2 then 4: a false PASS
+  const s = new Suite('accept a shift')
+  const r = await quietly(() => s.target('accept a Sunday', { measure: forgetful, atMost: 3, unit: 'taps', breaks: misspelt }))
+  assert.equal(r.value.state, 'VOID', r.value.detail)
+  assert.equal(r.value.value, 2)
+  assert.equal(r.value.brokenValue, 2)
+  // Paired good case: the same forgetful measure with the real break is a PASS at 2 and 4.
+  const ok = await quietly(() => s.target('accept a Sunday', { measure: forgetful, atMost: 3, unit: 'taps', breaks: addConfirmStep }))
+  assert.equal(ok.value.state, 'PASS', ok.value.detail)
+  assert.deepEqual([ok.value.value, ok.value.brokenValue], [2, 4])
+})
+
 test('FAIL: a bar of 1 tap is missed by the real flow, and the number is printed against it', async () => {
   const s = new Suite('accept a shift')
   const r = await quietly(() => s.target('accept a Sunday', { measure: tapsToAccept, atMost: 1, unit: 'taps', breaks: addConfirmStep }))

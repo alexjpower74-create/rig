@@ -33,6 +33,10 @@ import { click, swipe, tap, type, wheel } from './input.js'
  *
  * An input that throws is not counted: it did not reach the page. `input.page` is the page itself,
  * for reads and hit-tests that are not input.
+ *
+ * Suite#target resets every live counter before each measure() run, the real one and the broken
+ * one, so a measure that forgets reset() cannot hand the broken run the first run's taps and turn
+ * a VOID into a PASS. A count that must span a target() call belongs inside measure().
  */
 export function countInput(page) {
   let taps = 0
@@ -40,7 +44,7 @@ export function countInput(page) {
   let gestures = 0
   let started = performance.now()
 
-  return {
+  const counter = {
     page,
     async tap(x, y) {
       await tap(page, x, y)
@@ -71,6 +75,21 @@ export function countInput(page) {
       gestures = 0
       started = performance.now()
     },
+  }
+  live.add(new WeakRef(counter))
+  return counter
+}
+
+// Every counter countInput() has made and the program still holds. Weak, so a finished walk's
+// counter (and the page it points at) can still be collected.
+const live = new Set()
+
+/** Reset every live counter. Suite#target calls this before each measure() run. */
+export function resetCounters() {
+  for (const ref of live) {
+    const c = ref.deref()
+    if (c) c.reset()
+    else live.delete(ref)
   }
 }
 

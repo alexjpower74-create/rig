@@ -8,7 +8,7 @@
 // target() is the same rule for a number: a bar like "at most 3 taps" is checked against the real
 // page, then against a broken one, and the number is printed beside its bar every time.
 
-import { describe, formatBound, formatValue, insideBar } from './target.js'
+import { describe, formatBound, formatValue, insideBar, resetCounters } from './target.js'
 
 const C = {
   pass: (s) => `\x1b[32m${s}\x1b[0m`,
@@ -93,7 +93,11 @@ export class Suite {
    *               the bar cannot tell broken from working and the result is VOID. If the broken run
    *               produces no number at all, that is VOID too: the bar was never seen crossed.
    *               Omit it and the result is UNPROVEN, exactly as check() reports it.
-   *   timeout   -> per measure() call, default 10 s.
+   *   timeout   -> per measure() call, default 10 s. A measure() cut off by its timeout is not
+   *               stopped: its walk may still be dispatching input while restore() runs.
+   *
+   * Every countInput() counter is reset before each measure() run, the real one and the broken
+   * one, so the broken run never starts from the first run's count.
    *
    *   await s.target('accept a Sunday', {
    *     measure: async () => { input.reset(); await acceptShift(input); return input.counts().taps },
@@ -127,6 +131,7 @@ export class Suite {
     const rec = { name, kind: 'target', state: null, detail: '', ms: 0, value: null, brokenValue: null, bound, unit }
 
     const read = async (what) => {
+      resetCounters()
       try {
         const v = await withTimeout(measure(), timeout, what)
         return Number.isFinite(v) ? { value: v } : { why: `measure() returned ${describe(v)}, not a finite number` }
