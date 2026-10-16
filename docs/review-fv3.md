@@ -140,3 +140,116 @@ name it. Add a dead-URL case that answers 404 with a body, beside the existing o
   placeholder line byte-exact.
 - `.rig` writes go through `rigDir()` (`tasteDir`). No home paths, hostnames or emails, and no AI
   credit, in the diff. `bin/rig.js` adds COMMANDS and USAGE only.
+
+## Re-check by fv2 (fixes at 1d896e0, against 4374679)
+
+Read-only. I unpacked 1d896e0 and 4374679 whole into an ignored scratch folder, then ran the same
+probes against each sha's own `src/`. Each probe ran in a throwaway git repo. Boards ran on ports
+5491–5495 (never 5391), always with `--no-open`. Chrome ran headless only, on debugging ports
+9361–9363, at 390×844 mobile, with real taps at points hit-tested with `elementFromPoint`. HTTP
+probes open a fresh socket per request, so keep-alive cannot hide a result (the reason my first
+finding-5 probe failed).
+
+### 1. A re-run with other sources keeps earlier ratings: PASS
+
+Round 1 had three references, rated 3, 4 and 5. Next came a comps-only round
+(`--comps … --ask …`). Then a `--from refs` re-run with one reference added. Last, `--done`.
+
+| | 4374679 | 1d896e0 |
+|---|---|---|
+| ratings on disk after round 1 | 3 | 3 |
+| after the comps-only round | **0** | 3 |
+| carried into the refs re-run | none | 3, 4, 5 (the new reference starts empty) |
+| rated rows in TASTE.md after `--done` | **0** | 6 (round 1 and round 3, each listed) |
+
+### 2. A note typed and the page left at once still lands on disk: PASS
+
+| | 4374679 | 1d896e0 |
+|---|---|---|
+| note typed with real keys, then `Page.navigate` away with no wait | lost | on disk |
+| note typed, then the tab closed with no wait | lost | on disk |
+| one answer failed, then the page left before the 2 s retry | lost | on disk (4) |
+
+The failed answer was made with CDP `Fetch.failRequest` on the first `/api/answer` only. The header
+read "Not saved" before the page left, at both shas.
+
+### 3. A 4xx ends the round plainly, and Done doesn't hang: PASS
+
+- **Stale tab:** the board was re-run with the card the tab shows dropped, then that card was
+  tapped.
+  - 1d896e0: it shows "This round has ended. Every answer it saved is on disk. Run rig taste again
+    for a fresh link." It makes 0 answer requests over the next 5 s. Done does nothing further.
+  - 4374679: it shows "Not saved", retries every 2 s (2 requests in 5 s), and Done shows nothing
+    for 9 s.
+- **Board gone (ended from another shell):** a tap reads "Not saved".
+  - 1d896e0: Done settles in 6.1 s with "The board is not answering. Answers marked Saved are on
+    disk. Press Done again, or run rig taste --done in the terminal."
+  - 4374679: still nothing after 10 s.
+
+### 5. Only the board's page can talk to it: PASS
+
+These are POSTs to `/api/answer` with a real card and rating, and the token in `x-taste-token`
+unless stated.
+
+| Request | 4374679 | 1d896e0 |
+|---|---|---|
+| foreign Origin, `text/plain` | 200 | 403 |
+| foreign Origin, JSON | 200 | 403 |
+| no Origin, `text/plain` | 200 | 415 |
+| own Origin, JSON, **no token** | 200 | 403 |
+| own Origin, JSON, wrong token (same length) | 200 | 403 |
+| DNS-rebinding Host (`evil.example:<port>`) | 200 | 421 |
+| own Origin, JSON, token (the valid one) | 200 | 200 |
+| `POST /api/done`, foreign Origin, `text/plain` | 200, **board closed** | 403, board still up |
+| `GET /`, `/api/state` and an image, without token | 200 | 403 each; 200 with `?t=` |
+
+The page is served with `referrer-policy: no-referrer`, so the token in the URL is not sent on to
+any link.
+
+**`--lan`, through the real CLI:**
+- `rig taste --from refs --no-open --lan` prints the 127.0.0.1 URL and one "on a phone on this
+  network" URL per address, each with `?t=<token>`.
+- On the LAN address, `/` and `/api/state` with the token: 200. Without the token: 403.
+- Without `--lan`, the LAN address refuses the connection; 127.0.0.1 with the token: 200.
+- `--done` stops the board in both cases (exit 0).
+- One thing to know, not a defect: `--lan` binds every interface, so it also prints and answers on a
+  VPN address if the machine has one. The token still guards it.
+
+### 6 and 7 (a quick look): PASS
+
+- **6:** images are `no-cache` with an ETag. An unchanged file answers 304. After I rewrote the
+  image with the same byte size, the old ETag got 200 with the new image. 4374679 sent
+  `max-age=3600` and no ETag.
+- **7:** `captureAll` against a local server. A 200 and a 302→200 became cards. A 404 and a 500 with
+  HTML bodies were skipped, named "answered HTTP 404/500". At 4374679, all four became cards.
+
+### New, found while re-checking: hiding the tab while offline loses a queued answer, then shows "Saved"
+
+`src/taste/page.js:154-160` at 1d896e0. `flushAll()` empties `queue` and sends each item with
+`send()`, ignoring the result. On `visibilitychange` (app switch, phone lock) the tab is still
+alive. If the board can't be reached at that moment, those keepalive sends fail, and the answers are
+no longer queued, so nothing retries them. The next good tap then sets the header to "Saved",
+because `queue` is empty.
+
+My probe:
+1. Every `/api/*` request failed (CDP Fetch). I tapped 4 on the first card.
+2. The page's own `visibilitychange` handler fired, hidden then visible, still offline.
+3. I went back online and waited 3 s, then tapped 2 on the second card.
+
+| | 4374679 | 1d896e0 |
+|---|---|---|
+| header after coming back online | Saved (the 2 s retry delivered it) | Not saved, and nothing is retrying |
+| header after the next tap | Saved | **Saved** |
+| first card on disk | 4 | **missing** |
+
+This is a regression in the fix: the old page retried that answer. The `visibilitychange` here was
+dispatched by the probe, with `visibilityState` overridden, because headless Chrome won't hide a tab
+for real. It is the page's own listener running, though, and a phone lock fires the same event.
+What to check: in `flushAll`, send copies and keep `queue` until each item is answered. Or put a
+failed send back in the queue and call `retrySoon()`. Re-sending an answer is harmless, because it
+sets the same rating. The note sent from `flushAll` has the same gap. Add this probe as a test: it is
+green at 4374679 and red at 1d896e0.
+
+**Verdict:** findings 1, 2, 3 and 5 are fixed at 1d896e0, and 6 and 7 are too. Each probe is red at
+4374679 and green at 1d896e0. One new gap remains (above): a queued answer is dropped when the tab is
+hidden while the board can't be reached. It's small, but it loses a tap and then shows "Saved".
