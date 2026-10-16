@@ -194,7 +194,13 @@ async function newPage(port, url, { width, height, dpr = 2, mobile = false, emul
       const done = new Promise((res) => on(waitUntil === 'load' ? 'Page.loadEventFired' : 'Page.domContentEventFired', res))
       const nav = await send('Page.navigate', { url: u })
       if (nav.errorText) throw new Error(`navigation to ${u} failed: ${nav.errorText}`)
-      await Promise.race([done, new Promise((_, rej) => setTimeout(() => rej(new Error(`navigation to ${u} timed out`)), timeout))])
+      // Clear the deadline once the load wins: an uncleared 30 s timer kept every suite that called
+      // goto() alive for 30 s after its last check.
+      let timer
+      const deadline = new Promise((_, rej) => {
+        timer = setTimeout(() => rej(new Error(`navigation to ${u} timed out`)), timeout)
+      })
+      await Promise.race([done, deadline]).finally(() => clearTimeout(timer))
 
       // The load event is not proof. Ask where we actually ended up.
       const landed = await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true })
