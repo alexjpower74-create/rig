@@ -53,6 +53,10 @@ Alexander's lead sessions (Onyx on Claude Code) on the PC and the Mac, under her
 peers those leads launch. Alexander himself uses only `rig taste`, in a browser on a desktop or phone.
 Public repo: anyone running multi-agent builds with worktrees.
 
+## Where it lives
+The existing public repo (MIT), installed by `npm link` and the Homebrew tap. This is a local build:
+the release, the tag and the tap update are the lead's to do, on Alexander's word, after `rig finish`.
+
 ## Where we're starting from
 Rig 4.0.0 plus the untagged ignore-probe fix (main at 7d40d97). `briefFor` (src/brief.js),
 `reviewBrief` (src/commands/review.js) and `tabBrief` (src/roll.js) write the three kinds of brief.
