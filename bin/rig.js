@@ -50,7 +50,7 @@ rig roll down   [<rollDir>]   [--force]  closes only this roll's tabs; makes and
   references: images in --from (name-desktop.png + name-phone.png pair up), each --url, and URLs under
   "## The best at this job" in the plan, captured headless at 1440×900 and 390×844 into .rig/taste/shots/;
   --comps <dir> --ask "<q>" adds one question over 2 to 4 comps, rated and starred side by side;
-  --port defaults to tastePort in .rig/config.json, else 5391; --no-open prints the URL without opening it;
+  --port defaults to tastePort in .rig/config.json, else 5391 (0 takes any free port); --no-open prints the URL without opening it;
   --lan also listens on this machine's network address and prints a link for a phone (with the round's token);
   --done writes docs/TASTE.md from the saved ratings (and stops a board still running in this repo).
   Every round is kept in .rig/taste/ratings.json; the same sources again resume the newest round`,

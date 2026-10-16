@@ -110,10 +110,11 @@ Bugs found by the tests, each with a test that failed first:
 
 ## Left undone / for others
 
-- **Tests use port 5391.** That's the plan's number, and also the default for his real board. A
-  board he has open during `npm test` makes the suite fail with EADDRINUSE. His board is unharmed.
-  Lead's call.
+- DONE (the lead's ruling): **tests never use 5391.** Every test board takes `--port 0` and reads
+  its real port back; 5391 stays the CLI default. The test holds 5391 itself for the whole run, as
+  his open board would. Red: the 1d896e0 test, with 5391 held, failed at once with "Port 5391 is
+  in use". Green: the new one passes 28/0/0 with it held.
 - **`rig taste` never commits `docs/TASTE.md`.** It prints the path and says to commit it. The lead
   commits it.
-- **From my review of fv1 (docs/review-fv1.md):** `rig brief <id>` doesn't pass the TASTE pointer.
-  That's `src/commands/brief.js`, which no slice owns.
+- DONE (fv1, on main at 5d9a012, merged into this branch): `rig brief <id>` now carries the TASTE
+  pointer.

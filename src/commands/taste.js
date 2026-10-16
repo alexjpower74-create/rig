@@ -33,7 +33,7 @@ export function parseArgs(args) {
     else if (a === '--ask') o.ask = val(i++, a)
     else if (a === '--port') {
       o.port = Number(val(i++, a))
-      if (!Number.isInteger(o.port) || o.port < 1 || o.port > 65535) throw new Error(`--port must be a port number, not "${args[i]}"`)
+      if (!Number.isInteger(o.port) || o.port < 0 || o.port > 65535) throw new Error(`--port must be a port number, not "${args[i]}"`)
     } else if (a === '--no-open') o.open = false
     else if (a === '--done') o.done = true
     else if (a === '--lan') o.network = true

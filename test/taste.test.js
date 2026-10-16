@@ -1,7 +1,8 @@
 // rig taste, driven the way he uses it: real taps and clicks through the harness, at points checked
 // with elementFromPoint, against the real server writing real files.
 //
-// Headless Chrome on debugging port 9352, the board on 5391, always --no-open: no window ever opens
+// Headless Chrome on debugging port 9352, every board on a free port (--port 0, never 5391: that is
+// the default his real board listens on), always --no-open: no window ever opens
 // on anyone's screen. Every image is generated here; none is anyone's real work.
 //
 // The bar from the plan: 6 references in at most 7 taps (one per reference plus Done), with no typing
@@ -33,7 +34,6 @@ const { suite, launch, countInput, meetsTouchTarget, sleep } = H
 const here = dirname(fileURLToPath(import.meta.url))
 const RIG = join(here, '..', 'bin', 'rig.js')
 const CDP_PORT = 9352
-const BOARD_PORT = 5391
 const SHOTS = process.env.RIG_TASTE_SHOTS || null
 
 // ── fixtures ────────────────────────────────────────────────────────────────────────────────────
@@ -330,6 +330,11 @@ async function walk(page, ratings, { touch, notes = {}, shots = null }) {
 
 // ── the run ─────────────────────────────────────────────────────────────────────────────────────
 
+// His board's default port is held for the whole run, as it is when he has a round open. Nothing
+// here may need it: every board takes --port 0. If his real board already has it, that is the same test.
+const squatter = createServer((_, res) => res.end('his board'))
+await new Promise((r) => squatter.once('error', r).listen(5391, '127.0.0.1', r))
+
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'rig-taste-fx-')))
 const fx = makeFixtures(work)
 const site = await siteServer()
@@ -337,7 +342,7 @@ const STUDIO = `${site.base}/studio`
 const DEAD = `${site.base}/dead`
 const MISSING = `${site.base}/missing`
 const browser = await launch({ headless: true, port: CDP_PORT })
-const ARGS = ['--from', fx.refs, '--url', STUDIO, '--url', DEAD, '--url', MISSING, '--port', String(BOARD_PORT), '--no-open']
+const ARGS = ['--from', fx.refs, '--url', STUDIO, '--url', DEAD, '--url', MISSING, '--port', '0', '--no-open']
 const COMPS_ARGS = [...ARGS, '--comps', fx.comps, '--ask', 'Which header feels calm?']
 const RATINGS = [5, 2, 4, 1, 3, 5]
 const NAMES = ['ember', 'harbor', 'meadow', 'slate.png', 'tide.svg', STUDIO]
@@ -623,7 +628,7 @@ await suite('rig taste', async (s) => {
       await page.close()
       await b1.stop()
       // Round 2: the comps alone, as `rig taste --comps … --ask …` with no --from.
-      const b2 = await board(['--comps', fx.comps, '--ask', 'Which header feels calm?', '--port', String(BOARD_PORT), '--no-open'], b1.root)
+      const b2 = await board(['--comps', fx.comps, '--ask', 'Which header feels calm?', '--port', '0', '--no-open'], b1.root)
       await b2.stop()
       const j = ratingsJson(b1.root)
       const r1 = j.rounds[0]
@@ -691,7 +696,11 @@ await suite('rig taste', async (s) => {
       try {
         // The board is re-run under the open tab: a new token, so this tab's answers are refused.
         await b.stop()
-        const b2 = await board(ARGS, b.root)
+        // Same port as the open tab, so its answers reach the new board and are refused.
+        const b2 = await board(
+          ARGS.map((a, i) => (ARGS[i - 1] === '--port' ? String(b.port) : a)),
+          b.root,
+        )
         try {
           await press(page, input, '.rate[data-rating="4"]', { touch: false })
           const shown = await waitFor(() => page.eval('/round has ended/.test(document.getElementById("ended")?.textContent || "")'), 3000)
@@ -717,7 +726,7 @@ await suite('rig taste', async (s) => {
     assert: async () => {
       const b = await board()
       const id = b.round.refs[0].id
-      const base = `http://127.0.0.1:${BOARD_PORT}`
+      const base = `http://127.0.0.1:${b.port}`
       const body = JSON.stringify({ kind: 'ref', id, rating: 1 })
       const json = { 'content-type': 'application/json', 'x-taste-token': b.token }
       try {
@@ -733,9 +742,8 @@ await suite('rig taste', async (s) => {
         }
         // node:http lets the Host header lie, as a DNS-rebinding page's would.
         const rebind = await new Promise((res) => {
-          request(
-            { host: '127.0.0.1', port: BOARD_PORT, path: `/?t=${b.token}`, headers: { host: `attacker.example:${BOARD_PORT}` } },
-            (r) => res(r.statusCode),
+          request({ host: '127.0.0.1', port: b.port, path: `/?t=${b.token}`, headers: { host: `attacker.example:${b.port}` } }, (r) =>
+            res(r.statusCode),
           ).end()
         })
         const saved = !!newest(ratingsJson(b.root)).ratings?.[id]
@@ -768,7 +776,7 @@ await suite('rig taste', async (s) => {
       const b = await board(COMPS_ARGS)
       try {
         const v = async () => {
-          const st = await (await fetch(`http://127.0.0.1:${BOARD_PORT}/api/state?t=${b.token}`)).json()
+          const st = await (await fetch(`http://127.0.0.1:${b.port}/api/state?t=${b.token}`)).json()
           return st.comps[1].v.single
         }
         const before = await v()
@@ -777,7 +785,7 @@ await suite('rig taste', async (s) => {
         writeFileSync(file, was.replace('#2d6a4f', '#ff00aa'))
         if (keepStamp) spawnSync('touch', ['-r', keepStamp, file])
         const after = await v()
-        const img = await fetch(`http://127.0.0.1:${BOARD_PORT}/img/${b.round.comps[1].id}/single?t=${b.token}&v=${after}`)
+        const img = await fetch(`http://127.0.0.1:${b.port}/img/${b.round.comps[1].id}/single?t=${b.token}&v=${after}`)
         writeFileSync(file, was)
         return before !== after && img.headers.get('cache-control') === 'no-cache' && (await img.text()).includes('#ff00aa')
       } finally {
@@ -818,16 +826,16 @@ await suite('rig taste', async (s) => {
         out += d
       })
       const exited = new Promise((r) => child.on('exit', r))
-      const m = await waitFor(async () => /http:\/\/127\.0\.0\.1:5391\/\?t=\S+/.test(out), 30_000)
+      const m = await waitFor(async () => /http:\/\/127\.0\.0\.1:\d+\/\?t=\S+/.test(out), 30_000)
       if (!m) {
         child.kill()
         return false
       }
-      const url = out.match(/http:\/\/127\.0\.0\.1:5391\/\?t=(\S+)/)
+      const url = out.match(/http:\/\/127\.0\.0\.1:(\d+)\/\?t=(\S+)/)
       const id = newest(ratingsJson(root)).refs[0].id
-      const answer = await fetch(`http://127.0.0.1:5391/api/answer`, {
+      const answer = await fetch(`http://127.0.0.1:${url[1]}/api/answer`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-taste-token': url[1] },
+        headers: { 'content-type': 'application/json', 'x-taste-token': url[2] },
         body: JSON.stringify({ kind: 'ref', id, rating: 4 }),
       })
       const done = spawnSync(process.execPath, [...cliPreload, RIG, 'taste', '--done'], { cwd: root, encoding: 'utf8' })
@@ -858,12 +866,12 @@ await suite('rig taste', async (s) => {
           (r) => r.status,
           () => 'refused',
         )
-      const viaLanDefault = await reach(`http://${ip}:${BOARD_PORT}/?t=${local.token}`)
+      const viaLanDefault = await reach(`http://${ip}:${local.port}/?t=${local.token}`)
       await local.stop()
       const lan = await board([...ARGS, '--lan'])
       try {
         const viaLan = await reach(lan.lanUrls[0] || 'http://0.0.0.0:1/')
-        const noToken = await reach(`http://${ip}:${BOARD_PORT}/`)
+        const noToken = await reach(`http://${ip}:${lan.port}/`)
         return viaLanDefault === 'refused' && viaLan === 200 && noToken === 403 && lan.lanUrls[0]?.includes(`?t=${lan.token}`)
       } finally {
         await lan.stop()
@@ -1104,5 +1112,6 @@ await suite('rig taste', async (s) => {
 
 await browser.close()
 site.server.close()
+squatter.close()
 for (const r of roots) rmSync(r, { recursive: true, force: true })
 rmSync(work, { recursive: true, force: true })
