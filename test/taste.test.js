@@ -898,7 +898,10 @@ await suite('rig taste', async (s) => {
         const q = await page.eval('document.getElementById("name")?.textContent')
         for (const r of [2, 5, 3, 4]) await press(page, input, `.rate[data-rating="${r}"]`, { touch: true })
         await sleep(300)
-        await press(page, input, '.comp:nth-child(2) .star', { touch: true })
+        // One comp at a time on a phone: B's chip, then its star.
+        await press(page, input, '.chip[data-k="1"]', { touch: true })
+        await sleep(100)
+        await press(page, input, '.comp .star', { touch: true })
         await sleep(150)
         await press(page, input, '#done', { touch: true })
         const path = await Promise.race([b.finished, sleep(4000).then(() => null)])
@@ -911,6 +914,7 @@ await suite('rig taste', async (s) => {
         ]
         const rows = tableRows(md, '## Comps — "Which header feels calm?"')
         if (JSON.stringify(rows) !== JSON.stringify(want)) console.log(`        comps rows: ${JSON.stringify(rows)}`)
+        if (q !== 'Which header feels calm?') console.log(`        header reads ${q}`)
         return q === 'Which header feels calm?' && JSON.stringify(rows) === JSON.stringify(want)
       } finally {
         await close()
@@ -927,7 +931,7 @@ await suite('rig taste', async (s) => {
         const times = await page.eval('document.body.innerText.split("Which header feels calm?").length - 1')
         // The fixtures are 1440×900: a frame within a pixel of 1.6 wide per tall, no letterbox.
         const shapes = await page.eval('[...document.querySelectorAll(".comp .pick")].map((p) => p.clientWidth / p.clientHeight)')
-        const ok = times === 1 && shapes.length === 4 && shapes.every((r) => Math.abs(r - 1.6) < 0.03)
+        const ok = times === 1 && shapes.length >= 1 && shapes.every((r) => Math.abs(r - 1.6) < 0.03)
         if (!ok) console.log(`        question shown ${times}×, frames ${shapes.map((r) => r.toFixed(2)).join(', ')}`)
         return ok
       } finally {
@@ -945,13 +949,64 @@ await suite('rig taste', async (s) => {
     timeout: 60_000,
   })
 
-  const TARGETS = [
-    '.rate',
-    '#note',
-    '#done',
-    '#back',
-    ...[1, 2, 3, 4].flatMap((n) => [`.comp:nth-child(${n}) .star`, `.comp:nth-child(${n}) .pick`]),
-  ]
+  /** Which comp the phone view shows, and what each chip says. */
+  const shownComp = (page) => page.eval('document.querySelector("#grid .comp")?.dataset.id')
+  const chipText = (page, k) => page.eval(`document.querySelector('.chip[data-k="${k}"]')?.innerText.replace(/\\s+/g, ' ').trim()`)
+
+  await s.check('comps on a phone: tapping a chip shows that comp, and the chip carries its rating', {
+    assert: async () => {
+      const { b, page, input, close } = await compsBoard()
+      try {
+        await press(page, input, '.chip[data-k="2"]', { touch: true })
+        await waitFor(async () => (await shownComp(page)) === b.round.comps[2].id, 1000)
+        const showsC = (await shownComp(page)) === b.round.comps[2].id
+        await press(page, input, '.rate[data-rating="4"]', { touch: true })
+        await sleep(300)
+        const chip = await chipText(page, 2)
+        if (!showsC || chip !== 'C 4 / 5') console.log(`        shows C: ${showsC}; chip C reads "${chip}"`)
+        return showsC && chip === 'C 4 / 5'
+      } finally {
+        await close()
+      }
+    },
+    // The control: chips that take the tap and do nothing with it.
+    breaks: pageBreak(`document.addEventListener('click', (e) => { if (e.target.closest('.chip')) e.stopImmediatePropagation() }, true)`),
+    timeout: 60_000,
+  })
+
+  await s.check('comps on a phone: a swipe left shows the next comp, a swipe right the one before', {
+    assert: async () => {
+      const { b, page, input, close } = await compsBoard()
+      try {
+        const box = await page.eval(
+          '(() => { const r = document.querySelector("#grid .comp .pick").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()',
+        )
+        const start = await shownComp(page)
+        await input.swipe({ x: box.x + 100, y: box.y, dx: -200, dy: 0 })
+        await waitFor(async () => (await shownComp(page)) !== start, 1000)
+        const next = await shownComp(page)
+        await input.swipe({ x: box.x - 100, y: box.y, dx: 200, dy: 0 })
+        await waitFor(async () => (await shownComp(page)) !== next, 1000)
+        const back = await shownComp(page)
+        const ids = b.round.comps.map((c) => c.id)
+        const ok = start === ids[0] && next === ids[1] && back === ids[0]
+        if (!ok)
+          console.log(
+            `        start ${ids.indexOf(start)}, after left ${ids.indexOf(next)}, after right ${ids.indexOf(back)}; progress ${await progress(page)}; stage: ${(await page.eval('document.getElementById("stage").innerHTML')).slice(0, 200)}`,
+          )
+        return ok
+      } finally {
+        await close()
+      }
+    },
+    // The control: a board deaf to swipes, its touch never reaching the comp.
+    breaks: pageBreak(
+      `document.addEventListener('touchend', (e) => { if (e.target.closest('#stage')) e.stopImmediatePropagation() }, true)`,
+    ),
+    timeout: 60_000,
+  })
+
+  const TARGETS = ['.rate', '#note', '#done', '#back', '.comp .star', '.comp .pick', ...[0, 1, 2, 3].map((k) => `.chip[data-k="${k}"]`)]
   await s.check('comps at 390 wide: every target is at least 44 px', {
     assert: async () => {
       const { page, close } = await compsBoard()
@@ -968,7 +1023,7 @@ await suite('rig taste', async (s) => {
     timeout: 60_000,
   })
 
-  // The control: four fixed 160 px columns, the layout that runs off a phone's right edge.
+  // The control: a fixed 640 px column, the layout that runs off a phone's right edge.
   await s.check('comps at 390 wide: no sideways scroll, every control in reach', {
     assert: async () => {
       const { page, close } = await compsBoard()
@@ -980,9 +1035,7 @@ await suite('rig taste', async (s) => {
         await close()
       }
     },
-    breaks: pageBreak(
-      `document.head.insertAdjacentHTML('beforeend', '<style>.grid{grid-template-columns:repeat(4,160px)!important}</style>')`,
-    ),
+    breaks: pageBreak(`document.head.insertAdjacentHTML('beforeend', '<style>.grid{grid-template-columns:640px!important}</style>')`),
     timeout: 60_000,
   })
 
@@ -1042,7 +1095,7 @@ await suite('rig taste', async (s) => {
         await round(vp, { dark, notes: {}, shots: async (page, at) => at === 'round' && snap(page, `taste-round-${vp}-${theme}`) })
         const { page, input, close } = await compsBoard(vp, dark)
         for (const r of [4, 2]) await press(page, input, `.rate[data-rating="${r}"]`, { touch: VIEWPORTS[vp].touch }).then(() => sleep(260))
-        await press(page, input, '.comp:nth-child(1) .star', { touch: VIEWPORTS[vp].touch })
+        await press(page, input, '.comp .star', { touch: VIEWPORTS[vp].touch })
         await snap(page, `taste-comps-${vp}-${theme}`)
         await close()
       }

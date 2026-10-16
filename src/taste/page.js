@@ -15,7 +15,7 @@ const CSS = `
   color-scheme:dark;
 }}
 *{box-sizing:border-box}
-html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;background:var(--bg);color:var(--ink);
   font:15px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 button,input{font:inherit;color:inherit}
 button{touch-action:manipulation;-webkit-tap-highlight-color:transparent;cursor:pointer}
@@ -31,7 +31,8 @@ header{display:flex;align-items:center;gap:8px;padding:8px max(12px,env(safe-are
 #done{height:44px;min-width:72px;padding:0 16px;border-radius:22px;border:1px solid var(--line);background:var(--paper);font-weight:600}
 #done.ready{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 main{position:relative;min-height:0;padding:8px 16px}
-#stage{position:absolute;inset:8px 16px;display:flex;align-items:center;justify-content:center;gap:var(--gap,20px);transition:opacity .12s ease}
+/* A sideways swipe on the stage is the board's (next comp), never the browser's back gesture. */
+#stage{touch-action:pan-y;position:absolute;inset:8px 16px;display:flex;align-items:center;justify-content:center;gap:var(--gap,20px);transition:opacity .12s ease}
 #stage.leaving{opacity:0}
 figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:6px}
 figure .shot{background:var(--paper);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;display:block}
@@ -60,6 +61,13 @@ footer{padding:4px 16px max(12px,env(safe-area-inset-bottom));display:flex;flex-
 .grid{position:absolute;inset:0;display:grid;gap:16px;justify-content:center;align-content:center}
 .comp{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column;gap:6px;border-radius:12px;padding:6px;border:2px solid transparent;background:transparent}
 .comp.sel{border-color:var(--ink)}
+.one .comp.sel{border-color:transparent}
+.chips{position:absolute;top:0;left:0;right:0;display:flex;gap:8px;justify-content:center}
+.chip{flex:1;max-width:88px;min-width:44px;height:52px;border-radius:12px;border:1px solid var(--line);background:var(--paper);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.1;padding:0}
+.chip b{font-family:ui-serif,Georgia,serif;font-size:19px;font-weight:500}
+.chip small{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.chip[aria-selected=true]{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.chip b{color:var(--ink)}
 .comp .pick{flex:none;border:0;padding:0;background:var(--paper);border-radius:8px;box-shadow:var(--shadow);overflow:hidden;display:block;width:100%}
 .comp .pick img{display:block;width:100%;height:100%;object-fit:contain}
 .comp .bar{display:flex;align-items:center;gap:6px;height:44px}
@@ -195,6 +203,16 @@ function fit(figs){
 function imgUrl(card, view){ return '/img/' + encodeURIComponent(card.id) + '/' + view + '?t=' + encodeURIComponent(S.token) + '&v=' + (card.v[view] || '') }
 
 var relayout = function(){}
+// A horizontal swipe on the single comp moves to the next or previous one.
+var swipeFrom = null
+stage.addEventListener('touchstart', function(e){ swipeFrom = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null }, { passive: true })
+stage.addEventListener('touchend', function(e){
+  var t = e.changedTouches[0], from = swipeFrom; swipeFrom = null
+  if (!from || !t || steps[pos].kind !== 'comps' || innerWidth >= ONE_UNDER) return
+  var dx = t.clientX - from.x, dy = t.clientY - from.y
+  if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.2) return
+  select(Math.max(0, Math.min(comps.length - 1, sel + (dx < 0 ? 1 : -1))))
+})
 window.addEventListener('resize', function(){ relayout() })
 
 function shotFig(card, view, caption){
@@ -222,15 +240,35 @@ function renderRef(i){
 
 // The comps view: the question once, in the header, and the comps as large as the stage allows.
 // Each frame takes its image's own shape, and the column count is whichever makes them biggest.
+// Under 600 px wide a grid of four is four thumbnails, so a phone shows one comp at a time at
+// full width, with A–D chips above it (tap one, or swipe the comp) carrying each one's rating.
+var ONE_UNDER = 600
 function renderComps(){
+  var one = innerWidth < ONE_UNDER
   $('progress').textContent = 'Comps · ' + comps.length
   $('name').textContent = S.question || 'Which one?'; $('name').title = S.question || ''
   document.body.classList.add('asking')
+  document.body.classList.toggle('one', one)
   stage.innerHTML = ''; stage.style.display = 'block'; stage.style.flexDirection = ''
+  var chips = null
+  if (one){
+    chips = el('div', 'chips'); chips.id = 'chips'; chips.setAttribute('role', 'tablist')
+    comps.forEach(function(c, k){
+      var a = answerOf('comp', c.id), letter = String.fromCharCode(65 + k)
+      var chip = el('button', 'chip'); chip.type = 'button'; chip.dataset.k = k
+      chip.setAttribute('role', 'tab'); chip.setAttribute('aria-selected', String(k === sel)); chip.setAttribute('aria-label', 'Comp ' + letter + (a.rating ? ', rated ' + a.rating : ''))
+      chip.appendChild(el('b', null, letter + (S.pick === c.id ? ' ★' : '')))
+      chip.appendChild(el('small', null, a.rating ? a.rating + ' / 5' : '–'))
+      chip.addEventListener('click', function(){ select(k) })
+      chips.appendChild(chip)
+    })
+    stage.appendChild(chips)
+  }
   var grid = el('div', 'grid'); grid.id = 'grid'
   stage.appendChild(grid)
   var imgs = []
   comps.forEach(function(c, k){
+    if (one && k !== sel) return
     var a = answerOf('comp', c.id), letter = String.fromCharCode(65 + k)
     var card = el('div', 'comp' + (k === sel ? ' sel' : '')); card.dataset.id = c.id
     var pick = el('button', 'pick'); pick.type = 'button'; pick.setAttribute('aria-label', 'Select comp ' + letter)
@@ -248,13 +286,15 @@ function renderComps(){
     card.appendChild(pick); card.appendChild(bar); grid.appendChild(card)
   })
   relayout = function(){
-    var W = stage.clientWidth, H = stage.clientHeight, gap = parseFloat(getComputedStyle(grid).rowGap) || 8
+    if ((innerWidth < ONE_UNDER) !== one) return renderComps()
+    if (chips) grid.style.top = chips.offsetHeight + 12 + 'px'
+    var W = grid.clientWidth, H = grid.clientHeight, gap = parseFloat(getComputedStyle(grid).rowGap) || 8
     var loaded = imgs.filter(function(i){ return i.naturalWidth && i.naturalHeight })
     var a = loaded.length ? loaded.reduce(function(s, i){ return s + i.naturalWidth / i.naturalHeight }, 0) / loaded.length : 1.6
     var cs = getComputedStyle(grid.firstChild)
     var padW = parseFloat(cs.paddingLeft) * 2 + parseFloat(cs.borderLeftWidth) * 2
     var padH = padW + 44 + parseFloat(cs.rowGap || 0)
-    var best = 1, bestW = 0, n = comps.length
+    var best = 1, bestW = 0, n = grid.children.length
     for (var c = 1; c <= n; c++){
       var r = Math.ceil(n / c)
       var w = Math.min((W - gap * (c - 1)) / c - padW, ((H - gap * (r - 1)) / r - padH) * a)
@@ -306,7 +346,7 @@ function updateDone(){
 
 function go(p){
   flushNote()
-  document.body.classList.remove('asking')
+  document.body.classList.remove('asking', 'one')
   pos = Math.max(0, Math.min(steps.length - 1, p))
   var s = steps[pos]
   $('back').disabled = pos === 0
