@@ -255,6 +255,13 @@ function splitAnti(body) {
   }
 }
 
+// A placeholder hugs its brackets: `<the one command>`, never `< 200 ms`. Bars are where `<` and `>`
+// turn up as comparisons ("answers in < 200 ms and fails > 1 time"), and reading one as a placeholder
+// once dropped the bar from every brief while nothing warned.
+const WHOLE_PLACEHOLDER = /^<(?!\s)[^<>]*[^<>\s]>$/
+// Inside a line, one counts as prose (and takes the line with it) when it is a phrase: three words.
+const PROSE_PLACEHOLDER = /<(?!\s)[^<>`\n]*\s[^<>`\n]*\s[^<>`\n]*[^<>`\s]>/
+
 /**
  * A section body with the template's `<placeholder>` text taken out. A line that is wholly a
  * placeholder goes, and so does a line carrying one written as prose (`Negative controls: <the one
@@ -262,13 +269,12 @@ function splitAnti(body) {
  * angle-bracket names (`<id>`, `<sha>`) and anything inside backticks are real text and stay.
  */
 export function withoutPlaceholders(body) {
-  const prose = /<[^<>`]*\s[^<>`]*\s[^<>`]*>/ // a placeholder is a phrase: three words or more
   return (body || '')
     .split('\n')
     .filter((l) => {
       const t = l.replace(/^\s*[-*]\s+/, '').trim()
-      if (/^<.*>$/.test(t)) return false
-      return !prose.test(t.replace(/`[^`]*`/g, ''))
+      if (WHOLE_PLACEHOLDER.test(t)) return false
+      return !PROSE_PLACEHOLDER.test(t.replace(/`[^`]*`/g, ''))
     })
     .join('\n')
     .trim()
@@ -279,7 +285,7 @@ const isPlaceholder = (text) =>
     .split('\n')
     .map((l) => l.replace(/^\s*[-*]\s+/, '').trim())
     .filter(Boolean)
-    .every((l) => /^<.*>$/.test(l))
+    .every((l) => WHOLE_PLACEHOLDER.test(l))
 
 /**
  * Which brief parts a plan leaves empty. `rig up` warns; it does not refuse. With `{ aim: true }`

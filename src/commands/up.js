@@ -1,9 +1,9 @@
-import { writeFileSync, mkdirSync, existsSync, lstatSync, copyFileSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync, lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan, missingBrief, barHasNoNumber } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
-import { briefFor } from '../brief.js'
+import { briefFor, shareTaste } from '../brief.js'
 import { openSliceIssues } from '../issues.js'
 import { reportPath } from '../reports.js'
 import { terminal } from '../terminal.js'
@@ -73,22 +73,16 @@ export default function up(args) {
     for (const l of opened.lines) console.log(l)
   }
 
-  // His ratings live in the main checkout's docs/TASTE.md, often not yet committed. Each worktree
-  // gets a copy under .rig/, so the agent reads it inside its own tree (outside it is a permission
-  // prompt that stops the agent until someone notices).
-  const taste = join(root, 'docs', 'TASTE.md')
   for (const m of made) {
     rigDir(m.wt.path)
     mkdirSync(join(m.wt.path, 'docs'), { recursive: true })
-    const hasTaste = existsSync(taste)
-    if (hasTaste) copyFileSync(taste, join(m.wt.path, '.rig', 'TASTE.md'))
     const brief = briefFor(plan, m.agent, {
       branch: m.wt.branch,
       path: m.wt.path,
       planPath: cfg.plan,
       reportPath: reportPath(m.agent),
       issue: opened.issues[m.agent.id] || null,
-      taste: hasTaste ? '.rig/TASTE.md' : null,
+      taste: shareTaste(root, m.wt.path),
     })
     writeFileSync(join(m.wt.path, '.rig', 'BRIEF.md'), brief)
   }

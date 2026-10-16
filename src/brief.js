@@ -1,5 +1,23 @@
+import { existsSync, copyFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { MINDSET } from './mindset.js'
 import { withoutPlaceholders } from './plan.js'
+import { rigDir } from './rigdir.js'
+
+/**
+ * The owner's ratings live in the main checkout's docs/TASTE.md, often not yet committed. A worktree
+ * gets a copy at .rig/TASTE.md, so the agent reads it inside its own tree (outside it is a permission
+ * prompt that stops the agent until someone notices). Returns the path for the brief, or null when
+ * there is no TASTE.md or no worktree yet. `rig up` and `rig brief` both call it, so a taste round run
+ * after the crew started reaches it with one `rig brief <id>`.
+ */
+export function shareTaste(root, worktree) {
+  const taste = join(root, 'docs', 'TASTE.md')
+  if (!existsSync(taste) || !existsSync(worktree)) return null
+  rigDir(worktree)
+  copyFileSync(taste, join(worktree, '.rig', 'TASTE.md'))
+  return '.rig/TASTE.md'
+}
 
 /**
  * The plan's specialist lines for this slice. A bullet that starts with a slice id (`- fv1 writes
@@ -97,7 +115,7 @@ ${taskText(agent.task) || '(none stated in the plan — ask before inventing one
 
 ${
   ctx.taste
-    ? `## His taste, in ratings
+    ? `## The owner's taste, in ratings
 Read \`${ctx.taste}\` before you design anything (a copy of the main checkout's \`docs/TASTE.md\`).
 It holds the ratings the owner tapped on real examples. The ratings outrank your own taste: where they disagree with what you would have made,
 they win. In your report, name the principles behind them that you designed to.

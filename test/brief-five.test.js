@@ -757,6 +757,101 @@ await suite('rig 5.0, the creative prompt in every brief', async (s) => {
   })
 
   // ----------------------------------------------------------------------------------------------
+  // 13. From fv3's review of this slice. The control for these is the slice as it was reviewed
+  //     (be201ba), unpacked whole, so the old placeholder rule runs inside the old briefs.
+  const pre = join(tmp, 'pre-review')
+  mkdirSync(pre)
+  git(['archive', '-o', join(tmp, 'pre.tar'), 'be201ba'], repoRoot)
+  execFileSync('tar', ['-xf', join(tmp, 'pre.tar'), '-C', pre])
+  const live = {
+    plan: await import('../src/plan.js'),
+    brief: await import('../src/brief.js'),
+    review: await import('../src/commands/review.js'),
+    roll: await import('../src/roll.js'),
+  }
+  const old = {
+    plan: await import(join(pre, 'src', 'plan.js')),
+    brief: await import(join(pre, 'src', 'brief.js')),
+    review: await import(join(pre, 'src', 'commands', 'review.js')),
+    roll: await import(join(pre, 'src', 'roll.js')),
+  }
+  const COMPARE = 'Search answers in < 200 ms and fails > 1 time in 1000 runs.'
+  let code = live
+  await s.check('a bar that compares with < and > reaches the slice, review and roll briefs; real placeholders still do not', {
+    assert: async () => {
+      const p = code.plan.parsePlan(FIVE.replace('A customer enters in at most 3 taps and under 30 s, at 390 px.', COMPARE))
+      const slice = code.brief.briefFor(p, p.agents[0], ctx())
+      const review = code.review.reviewBrief(p, p.agents[0], { root: tmp, base: 'main', branch: 'rig/s1' }).text
+      const tab = code.roll.tabBrief(
+        code.roll.parseRoll(ROLL.replace('Lint exits 0 with 0 new warnings in every repo.', COMPARE)),
+        'lint1',
+        [],
+        tabCtx,
+      )
+      const stillDropped = code.plan.withoutPlaceholders(
+        '<the one command whose run proves it>\nNegative controls: <the one command whose run proves it>',
+      )
+      return (
+        slice.includes('## The bar\n' + COMPARE) &&
+        review.includes('   ' + COMPARE) &&
+        tab.includes('## The bar\n' + COMPARE) &&
+        code.plan.missingBrief(p, { aim: true }).length === 0 &&
+        stillDropped === ''
+      )
+    },
+    breaks: async () => {
+      code = old
+      return () => {
+        code = live
+      }
+    },
+  })
+
+  await s.check('barHasNoNumber sees a comparison bar: true with no digit, false with one', {
+    assert: async () => {
+      const bar = (b) => code.plan.parsePlan(FIVE.replace('A customer enters in at most 3 taps and under 30 s, at 390 px.', b))
+      return (
+        code.plan.barHasNoNumber(bar('Replies in < a blink and never > a breath.')) === true &&
+        code.plan.barHasNoNumber(bar(COMPARE)) === false
+      )
+    },
+    breaks: async () => {
+      code = old
+      return () => {
+        code = live
+      }
+    },
+  })
+
+  // `rig brief <id>` after a taste round: the crew is already building, and the re-printed brief and
+  // the worktree's copy carry the new ratings. Red with the slice as reviewed: rig brief had no taste.
+  let briefBin = join(repoRoot, 'bin', 'rig.js')
+  await s.check('rig brief <id> after a later taste round copies the new TASTE.md and points at it', {
+    assert: async () => {
+      const LATER = TASTE.replace('| apple-pay | 5 | |', '| apple-pay | 5 | |\n| starbucks | 2 | too busy |')
+      writeFileSync(join(tasted, 'docs', 'TASTE.md'), LATER)
+      try {
+        const r = runRig(briefBin, ['brief', 's1'], tasted)
+        if (r.status !== 0) throw new Error(r.stderr || r.stdout)
+        const copy = join(tasted, '.worktrees', 's1', '.rig', 'TASTE.md')
+        return (
+          r.stdout.includes("## The owner's taste, in ratings") &&
+          r.stdout.includes('Read `.rig/TASTE.md` before you design anything') &&
+          readFileSync(copy, 'utf8') === LATER
+        )
+      } finally {
+        writeFileSync(join(tasted, 'docs', 'TASTE.md'), TASTE)
+      }
+    },
+    breaks: async () => {
+      briefBin = join(pre, 'bin', 'rig.js')
+      return () => {
+        briefBin = join(repoRoot, 'bin', 'rig.js')
+      }
+    },
+  })
+
+  // ----------------------------------------------------------------------------------------------
   // 12. Templates. PLAN.md carries the new sections in the contract's order, each with a one-line
   //     placeholder, and keeps every Rig 4 section; ROLL.md has an optional ## The bar.
   let templates = repoRoot

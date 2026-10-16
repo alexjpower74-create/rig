@@ -101,6 +101,23 @@ feeling and The best at this job) and the one yellow bar line.
   found. That's an environment gap, not a test result.)
 - Final sha: see the line below, added after this report is committed.
 
+## Fixes from fv3's review (docs/review-fv1.md on rig/fv3 at 71216a2)
+
+- DONE **A bar written with `<` and `>` as comparisons vanished from every brief.** The rule read
+  `< 200 ms and fails >` as a placeholder, so the bar's line was dropped from slice, review and roll
+  briefs, and since the raw text was not a placeholder, neither `missingBrief` nor `barHasNoNumber`
+  warned. Now a placeholder has to hug its brackets: no space after `<` and none before `>`
+  (`<the one command>` is a placeholder, `< 200 ms … >` is not). Two checks were seen red against the
+  slice as reviewed (be201ba, unpacked whole): the comparison bar reaches all three briefs (old: absent
+  from the brief, with no warning), and `barHasNoNumber` is true for a comparison bar with no digit
+  (old: false, because the line had been stripped).
+- DONE **`rig brief <id>` dropped the taste pointer.** `src/commands/brief.js` is now fv1's (plan at
+  e89c887). `shareTaste(root, worktree)` in `src/brief.js` does the copy for both `rig up` and
+  `rig brief`, so re-running `rig brief <id>` after a taste round hands a crew that is already
+  building the new ratings. Check: write a later TASTE.md, run `rig brief s1`, and the output points at
+  `.rig/TASTE.md` and the worktree copy is the new file. Red with be201ba's `bin/rig.js`.
+- DONE **Heading:** "The owner's taste, in ratings" (it's a public tool).
+
 ## Left / needs others
 
 - Cross-review: fv3 has `.rig/REVIEW-fv1.md` (per the lead). I reviewed fv2 (docs/review-fv2.md). The
