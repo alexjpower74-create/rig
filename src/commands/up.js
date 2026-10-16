@@ -1,9 +1,9 @@
 import { writeFileSync, mkdirSync, existsSync, lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
-import { loadPlan, missingBrief } from '../plan.js'
+import { loadPlan, missingBrief, barHasNoNumber, droppedNumbers } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
-import { briefFor } from '../brief.js'
+import { briefFor, shareTaste } from '../brief.js'
 import { openSliceIssues } from '../issues.js'
 import { reportPath } from '../reports.js'
 import { terminal } from '../terminal.js'
@@ -31,11 +31,14 @@ export default function up(args) {
   const made = []
   const warnings = []
   // Said before anything is created, dry run included: a thin brief is cheapest to fix now.
-  const gaps = missingBrief(plan)
+  const gaps = missingBrief(plan, { aim: true })
   if (gaps.length)
     console.log(
       YEL('the plan’s brief is missing: ') + gaps.join(', ') + '\n  Agents build what the brief says; every gap here is a round later.\n',
     )
+  for (const d of droppedNumbers(plan))
+    console.log(YEL(`read as a placeholder and left out of the briefs, though it has a number (## ${d.heading}): `) + d.line)
+  if (barHasNoNumber(plan)) console.log(YEL('the bar has no number: nothing can measure it, so nothing can say it was missed.') + '\n')
 
   for (const agent of plan.agents) {
     if (dry) {
@@ -81,6 +84,7 @@ export default function up(args) {
       planPath: cfg.plan,
       reportPath: reportPath(m.agent),
       issue: opened.issues[m.agent.id] || null,
+      taste: shareTaste(root, m.wt.path),
     })
     writeFileSync(join(m.wt.path, '.rig', 'BRIEF.md'), brief)
   }

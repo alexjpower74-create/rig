@@ -1,10 +1,11 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
-import { loadPlan } from '../plan.js'
+import { loadPlan, withoutPlaceholders } from '../plan.js'
 import { tryGit } from '../sh.js'
 import { terminal } from '../terminal.js'
 import { rigDir } from '../rigdir.js'
+import { MINDSET } from '../mindset.js'
 
 // Fresh eyes before done. Every real defect on a multi-agent build crossed a boundary between two
 // people's work, and self-review found none of them: an author's tests share the author's blind
@@ -75,7 +76,10 @@ export function reviewBrief(plan, agent, { root, base, branch, by }) {
   })()
   const out = `docs/review-${agent.id}.md`
   const rules = (plan.mustNotRules || []).filter((r) => !/^<.*>$/.test(r))
+  const bar = withoutPlaceholders(plan.bar)
   const text = `# Review brief — ${agent.id}${agent.title ? ' · ' + agent.title : ''}
+
+${MINDSET}
 
 You are reviewing work you did not write${by ? ` (you are ${by})` : ''}. **Read only: do not edit, commit
 or fix anything.** Your job is to find what the author's own tests could not.
@@ -99,7 +103,18 @@ The slice owns: ${agent.owns.map((o) => '`' + o + '`').join(', ')}
 3. **Paths nobody ran.** Errors, retries, offline, a second tab, two requests at once, midnight, a
    daylight-saving night.
 4. **The hard rules below**, and anything in the diff that sends, deploys, spends or deletes.
-
+5. **The bar, measured and looked at.** Is the plan's bar written as an \`s.target\` check (with
+   \`countInput\` where it counts input) that was seen red once, with the number printed beside the
+   bar? And how does the work look beside the references: put the screenshots side by side and say
+   where it falls short of them.
+${
+  bar
+    ? `\n   The bar, from the plan:\n${bar
+        .split('\n')
+        .map((l) => '   ' + l)
+        .join('\n')}\n`
+    : ''
+}
 ${rules.length ? `## What must not happen (from the plan)\n${rules.map((r) => '- ' + r).join('\n')}\n\n` : ''}## Report
 Write \`${out}\`: actionable findings only, each with the file and line, the concrete input or state
 that goes wrong, and what the author should check. Say "no findings" if there are none; do not pad it.

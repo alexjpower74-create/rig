@@ -200,14 +200,23 @@ export function bullets(body) {
 }
 
 /**
- * The five parts of a good brief, found by heading. A plan is a brief first and a slice list
- * second: an agent that knows what must not happen can refuse to do it, and one that only knows its
- * files cannot.
+ * The parts of a good brief, found by heading. A plan is a brief first and a slice list second: an
+ * agent that knows what must not happen can refuse to do it, and one that only knows its files
+ * cannot. Rig 5 adds the parts an agent cannot guess: the feeling, the specialist, the best work to
+ * start from (and what not to make), and the bar, with a number.
  */
 export function briefFields(sections) {
   // Anchored, so a coincidental heading ("Page sizes", "Non-goals") cannot fill a brief field.
   const find = (re) => sections.find((s) => re.test(s.heading))?.body || ''
-  const mustNot = find(/^(what must not happen|hard rules)\b/i)
+  // "What must not happen", "What must not change" and "What must not happen or change" are one
+  // list. A plan that has two of them meant both, so their rules are combined, never one dropped.
+  const mustNot = sections
+    .filter((s) => /^(what must not (happen|change)|hard rules)\b/i.test(s.heading))
+    .map((s) => s.body)
+    .filter(Boolean)
+    .join('\n')
+  const refs = splitAnti(find(/^(the best at this job|references)\b/i))
+  const antiSection = find(/^anti-?references\b/i)
   return {
     purpose: find(/^(what it'?s for|purpose|goals?)\b/i),
     users: find(/^who uses it\b/i),
@@ -218,11 +227,95 @@ export function briefFields(sections) {
     size: find(/^size (and|&) mode\b/i),
     checks: find(/^(checks|how we prove)\b/i),
     openQuestions: find(/^(open questions|needs (you|the owner))\b/i),
+    feeling: find(/^(the feeling|the one quality)\b/i),
+    specialist: find(/^the specialist\b/i),
+    referencesText: refs.refs,
+    references: bullets(refs.refs),
+    antiReferences: [...bullets(refs.anti), ...bullets(antiSection)],
+    bar: find(/^the bar\b/i),
+    start: find(/^where we.?re starting from\b/i),
+    freedom: find(/^freedom\b/i),
+    tools: find(/^tools\b/i),
+    budget: find(/^budget (and|&) autonomy\b/i),
+    handBack: find(/^what to hand back\b/i),
   }
 }
 
-/** Which of the five brief parts a plan leaves empty. `rig up` warns; it does not refuse. */
-export function missingBrief(plan) {
+/** A references body split at its `Anti-references:` line: what to start from, and what not to make. */
+function splitAnti(body) {
+  const lines = (body || '').split('\n')
+  const at = lines.findIndex((l) => /^\s*\**anti-?references\**:?\**\s*$/i.test(l))
+  if (at < 0) return { refs: body || '', anti: '' }
+  return {
+    refs: lines.slice(0, at).join('\n').trim(),
+    anti: lines
+      .slice(at + 1)
+      .join('\n')
+      .trim(),
+  }
+}
+
+// A placeholder hugs its brackets with words: `<the one command>`, never `< 200 ms` or `x<3 and y>2`.
+// Bars are where `<` and `>` turn up as comparisons ("answers in < 200 ms and fails > 1 time",
+// "latency<200 ms and jank>1 frame"), and reading one as a placeholder once dropped the bar from every
+// brief while nothing warned. So no space or digit right inside either bracket.
+const WHOLE_PLACEHOLDER = /^<(?![\s\d])[^<>]*[^<>\s\d]>$/
+// Inside a line, one counts as prose (and takes the line with it) when it is a phrase: three words.
+const PROSE_PLACEHOLDER = /<(?![\s\d])[^<>`\n]*\s[^<>`\n]*\s[^<>`\n]*[^<>`\s\d]>/
+
+/**
+ * A section body with the template's `<placeholder>` text taken out. A line that is wholly a
+ * placeholder goes, and so does a line carrying one written as prose (`Negative controls: <the one
+ * command ...>`), so a half-filled template never reaches an agent as if it were the plan. Short
+ * angle-bracket names (`<id>`, `<sha>`) and anything inside backticks are real text and stay.
+ */
+export function withoutPlaceholders(body) {
+  return (body || '')
+    .split('\n')
+    .filter((l) => {
+      const t = l.replace(/^\s*[-*]\s+/, '').trim()
+      if (WHOLE_PLACEHOLDER.test(t)) return false
+      return !PROSE_PLACEHOLDER.test(t.replace(/`[^`]*`/g, ''))
+    })
+    .join('\n')
+    .trim()
+}
+
+/**
+ * Lines the placeholder rule takes out of the briefs that still hold a number outside the placeholder:
+ * [{ heading, line }]. A template line that is all placeholder is not one of them. Anything here is a
+ * line an agent will never see, so `rig up` names each one: nothing numeric disappears without a word.
+ */
+export function droppedNumbers(plan) {
+  const out = []
+  for (const { heading, body } of plan.sections || []) {
+    if (/^(agents|slices)\b/i.test(heading)) continue
+    const kept = new Set(withoutPlaceholders(body).split('\n'))
+    for (const l of body.split('\n')) {
+      if (kept.has(l)) continue
+      const t = l.replace(/^\s*[-*]\s+/, '').trim()
+      if (!t || WHOLE_PLACEHOLDER.test(t)) continue
+      const rest = t.replace(/`[^`]*`/g, '').replace(new RegExp(PROSE_PLACEHOLDER.source, 'g'), '')
+      if (/\d/.test(rest)) out.push({ heading, line: t })
+    }
+  }
+  return out
+}
+
+const isPlaceholder = (text) =>
+  text
+    .split('\n')
+    .map((l) => l.replace(/^\s*[-*]\s+/, '').trim())
+    .filter(Boolean)
+    .every((l) => WHOLE_PLACEHOLDER.test(l))
+
+/**
+ * Which brief parts a plan leaves empty. `rig up` warns; it does not refuse. With `{ aim: true }`
+ * (what `rig up` asks for) it also names the three an agent cannot guess: The feeling, The best at
+ * this job and The bar. Without it the answer is Rig 4's five, so a caller written for them still
+ * counts five.
+ */
+export function missingBrief(plan, { aim = false } = {}) {
   const want = [
     ['purpose', "What it's for"],
     ['users', 'Who uses it, on what'],
@@ -230,14 +323,18 @@ export function missingBrief(plan) {
     ['mustNot', 'What must not happen'],
     ['lives', 'Where it lives'],
   ]
+  if (aim) want.push(['feeling', 'The feeling'], ['referencesText', 'The best at this job'], ['bar', 'The bar'])
   // A section still holding the template's <placeholder> lines counts as empty.
-  const placeholder = (text) =>
-    text
-      .split('\n')
-      .map((l) => l.replace(/^\s*[-*]\s+/, '').trim())
-      .filter(Boolean)
-      .every((l) => /^<.*>$/.test(l))
-  return want.filter(([k]) => !plan[k] || placeholder(plan[k])).map(([, label]) => label)
+  return want.filter(([k]) => !plan[k] || isPlaceholder(plan[k])).map(([, label]) => label)
+}
+
+/**
+ * True when the plan has a bar and no digit in it. "Fast" and "beautiful" cannot go red; "found in
+ * under 10 s" can. An empty bar is missingBrief's to name, not this.
+ */
+export function barHasNoNumber(plan) {
+  const bar = withoutPlaceholders(plan.bar || '')
+  return bar !== '' && !/\d/.test(bar)
 }
 
 export function loadPlan(planPath) {
