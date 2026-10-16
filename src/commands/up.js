@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync, existsSync, lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
-import { loadPlan, missingBrief, barHasNoNumber } from '../plan.js'
+import { loadPlan, missingBrief, barHasNoNumber, droppedNumbers } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
 import { briefFor, shareTaste } from '../brief.js'
 import { openSliceIssues } from '../issues.js'
@@ -36,6 +36,8 @@ export default function up(args) {
     console.log(
       YEL('the plan’s brief is missing: ') + gaps.join(', ') + '\n  Agents build what the brief says; every gap here is a round later.\n',
     )
+  for (const d of droppedNumbers(plan))
+    console.log(YEL(`read as a placeholder and left out of the briefs, though it has a number (## ${d.heading}): `) + d.line)
   if (barHasNoNumber(plan)) console.log(YEL('the bar has no number: nothing can measure it, so nothing can say it was missed.') + '\n')
 
   for (const agent of plan.agents) {

@@ -118,6 +118,19 @@ feeling and The best at this job) and the one yellow bar line.
   `.rig/TASTE.md` and the worktree copy is the new file. Red with be201ba's `bin/rig.js`.
 - DONE **Heading:** "The owner's taste, in ratings" (it's a public tool).
 
+## Fixes from fv2's re-check of ac1c2da (docs/recheck-fv1.md on rig/fv2 at 5ad61e9)
+
+- DONE **Comparisons with no spaces were still dropped** (`- x<3 and y>2`,
+  `- latency<200 ms and jank>1 frame` gave ""). A digit right inside `<` or `>` now means it isn't a
+  placeholder. Check red against ac1c2da (unpacked whole): both lines reach the slice, review and roll
+  briefs, and `<the one command whose run proves it>` is still dropped.
+- DONE **Nothing numeric disappears without a word.** `droppedNumbers(plan)` lists every line the
+  placeholder rule takes out that still has a digit outside the placeholder (a template line that is all
+  placeholder doesn't count, so a fresh template is quiet). `rig up` prints one yellow line for each,
+  naming the section. Check: a plan with `Ship by <the date we agree on together> or 2 weeks after.`
+  gets exactly one line naming `## Where we're starting from`, and the template and the full fixture
+  get none. Red with ac1c2da's `bin/rig.js`, which says nothing.
+
 ## Left / needs others
 
 - Cross-review: fv3 has `.rig/REVIEW-fv1.md` (per the lead). I reviewed fv2 (docs/review-fv2.md). The

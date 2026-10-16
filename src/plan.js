@@ -255,12 +255,13 @@ function splitAnti(body) {
   }
 }
 
-// A placeholder hugs its brackets: `<the one command>`, never `< 200 ms`. Bars are where `<` and `>`
-// turn up as comparisons ("answers in < 200 ms and fails > 1 time"), and reading one as a placeholder
-// once dropped the bar from every brief while nothing warned.
-const WHOLE_PLACEHOLDER = /^<(?!\s)[^<>]*[^<>\s]>$/
+// A placeholder hugs its brackets with words: `<the one command>`, never `< 200 ms` or `x<3 and y>2`.
+// Bars are where `<` and `>` turn up as comparisons ("answers in < 200 ms and fails > 1 time",
+// "latency<200 ms and jank>1 frame"), and reading one as a placeholder once dropped the bar from every
+// brief while nothing warned. So no space or digit right inside either bracket.
+const WHOLE_PLACEHOLDER = /^<(?![\s\d])[^<>]*[^<>\s\d]>$/
 // Inside a line, one counts as prose (and takes the line with it) when it is a phrase: three words.
-const PROSE_PLACEHOLDER = /<(?!\s)[^<>`\n]*\s[^<>`\n]*\s[^<>`\n]*[^<>`\s]>/
+const PROSE_PLACEHOLDER = /<(?![\s\d])[^<>`\n]*\s[^<>`\n]*\s[^<>`\n]*[^<>`\s\d]>/
 
 /**
  * A section body with the template's `<placeholder>` text taken out. A line that is wholly a
@@ -278,6 +279,27 @@ export function withoutPlaceholders(body) {
     })
     .join('\n')
     .trim()
+}
+
+/**
+ * Lines the placeholder rule takes out of the briefs that still hold a number outside the placeholder:
+ * [{ heading, line }]. A template line that is all placeholder is not one of them. Anything here is a
+ * line an agent will never see, so `rig up` names each one: nothing numeric disappears without a word.
+ */
+export function droppedNumbers(plan) {
+  const out = []
+  for (const { heading, body } of plan.sections || []) {
+    if (/^(agents|slices)\b/i.test(heading)) continue
+    const kept = new Set(withoutPlaceholders(body).split('\n'))
+    for (const l of body.split('\n')) {
+      if (kept.has(l)) continue
+      const t = l.replace(/^\s*[-*]\s+/, '').trim()
+      if (!t || WHOLE_PLACEHOLDER.test(t)) continue
+      const rest = t.replace(/`[^`]*`/g, '').replace(new RegExp(PROSE_PLACEHOLDER.source, 'g'), '')
+      if (/\d/.test(rest)) out.push({ heading, line: t })
+    }
+  }
+  return out
 }
 
 const isPlaceholder = (text) =>

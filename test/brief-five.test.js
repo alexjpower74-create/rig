@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { MINDSET } from '../src/mindset.js'
-import { parsePlan, bullets, briefFields, missingBrief, barHasNoNumber } from '../src/plan.js'
+import { parsePlan, bullets, briefFields, missingBrief, barHasNoNumber, droppedNumbers } from '../src/plan.js'
 import { briefFor } from '../src/brief.js'
 import { reviewBrief } from '../src/commands/review.js'
 import { parseRoll, tabBrief } from '../src/roll.js'
@@ -819,6 +819,70 @@ await suite('rig 5.0, the creative prompt in every brief', async (s) => {
       code = old
       return () => {
         code = live
+      }
+    },
+  })
+
+  // From fv2's re-check of ac1c2da: comparisons written without spaces were still read as
+  // placeholders. The control is ac1c2da, unpacked whole.
+  const ac = join(tmp, 'ac1c2da')
+  mkdirSync(ac)
+  git(['archive', '-o', join(tmp, 'ac.tar'), 'ac1c2da'], repoRoot)
+  execFileSync('tar', ['-xf', join(tmp, 'ac.tar'), '-C', ac])
+  const acCode = {
+    plan: await import(join(ac, 'src', 'plan.js')),
+    brief: await import(join(ac, 'src', 'brief.js')),
+    review: await import(join(ac, 'src', 'commands', 'review.js')),
+    roll: await import(join(ac, 'src', 'roll.js')),
+  }
+  const TIGHT = ['- x<3 and y>2', '- latency<200 ms and jank>1 frame']
+  code = live
+  await s.check('comparisons with no spaces (x<3 and y>2, latency<200 ms and jank>1 frame) reach every brief', {
+    assert: async () => {
+      if (code.plan.withoutPlaceholders(TIGHT.join('\n')) !== TIGHT.join('\n')) return false
+      const p = code.plan.parsePlan(FIVE.replace('A customer enters in at most 3 taps and under 30 s, at 390 px.', TIGHT.join('\n')))
+      const slice = code.brief.briefFor(p, p.agents[0], ctx())
+      const review = code.review.reviewBrief(p, p.agents[0], { root: tmp, base: 'main', branch: 'rig/s1' }).text
+      const tab = code.roll.tabBrief(
+        code.roll.parseRoll(ROLL.replace('Lint exits 0 with 0 new warnings in every repo.', TIGHT.join('\n'))),
+        'lint1',
+        [],
+        tabCtx,
+      )
+      return (
+        TIGHT.every((l) => slice.includes(l) && review.includes(l) && tab.includes(l)) &&
+        code.plan.withoutPlaceholders('<the one command whose run proves it>') === ''
+      )
+    },
+    breaks: async () => {
+      code = acCode
+      return () => {
+        code = live
+      }
+    },
+  })
+
+  // Belt and braces: a line still read as a placeholder that has a number outside it is named by
+  // rig up. Red with ac1c2da's rig up, which drops it without a word.
+  let upBin = join(repoRoot, 'bin', 'rig.js')
+  const DROPPED = 'Ship by <the date we agree on together> or 2 weeks after.'
+  const numbered = repoWith(
+    'numbered',
+    FIVE.replace('Nothing yet: a paper slip in a jar.', 'Nothing yet: a paper slip in a jar.\n' + DROPPED),
+  )
+  await s.check('rig up names a line with a number that the placeholder rule leaves out of the briefs (one line, none for a template)', {
+    assert: async () => {
+      const r = runRig(upBin, ['up', '--dry-run'], numbered)
+      if (r.status !== 0) throw new Error(r.stderr || r.stdout)
+      const out = r.stdout.replace(/\x1b\[[0-9;]*m/g, '')
+      const named = out.split('\n').filter((l) => /left out of the briefs/.test(l))
+      const quiet = droppedNumbers(parsePlan(template)).length === 0 && droppedNumbers(plan).length === 0
+      return named.length === 1 && named[0].includes("(## Where we're starting from)") && named[0].includes(DROPPED) && quiet
+    },
+    breaks: async () => {
+      upBin = join(ac, 'bin', 'rig.js')
+      return () => {
+        upBin = join(repoRoot, 'bin', 'rig.js')
       }
     },
   })
