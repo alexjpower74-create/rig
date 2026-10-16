@@ -3,8 +3,6 @@
 // screen allows, a 1-to-5 scale with anchors only at the ends (no leading words in the middle), and
 // a tap that saves and moves on. Number keys do the same on a desktop.
 
-import { publicState } from './store.js'
-
 const CSS = `
 :root{
   --bg:#f3f1eb;--paper:#fbfaf6;--ink:#1d1c19;--muted:#6f6b62;--line:#d9d5ca;--soft:#e9e6dd;
@@ -71,6 +69,8 @@ footer{padding:4px 16px max(12px,env(safe-area-inset-bottom));display:flex;flex-
 .comp .score{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
 .star{width:44px;height:44px;border-radius:22px;border:1px solid var(--line);background:var(--paper);font-size:20px;line-height:1;color:var(--muted);flex:none}
 .star[aria-pressed=true]{color:var(--star);border-color:var(--star)}
+.ended{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(560px,calc(100% - 24px));
+  background:var(--ink);color:var(--bg);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow);font-size:14px;z-index:10}
 .closed{display:grid;place-items:center;height:100dvh;text-align:center;padding:24px}
 .closed h1{font-family:ui-serif,Georgia,serif;font-weight:500;font-size:28px;margin:0 0 8px}
 .closed p{margin:0;color:var(--muted)}
@@ -103,24 +103,53 @@ var notes = {}
 function answerOf(kind, id){ return (kind === 'comp' ? S.compRatings : S.ratings)[id] || {} }
 function el(tag, cls, text){ var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e }
 
-// Saving. Every answer is POSTed at once; a failure keeps it queued and retries, and the header
-// says so, so a tap is never silently lost.
-var pending = 0, queue = [], retryTimer = null
+// Saving. Every answer is POSTed at once, with keepalive so a tab closed right after a tap still
+// delivers it. A network failure is queued and retried, and the header says so. A 4xx is never
+// retried: the server is up and has said no (the round ended or changed), so the page says that
+// plainly instead of showing "Not saved" forever.
+var pending = 0, queue = [], retryTimer = null, ended = false
 function setSave(s){
   var t = $('save'); t.className = s === 'failed' ? 'failed' : ''
   t.textContent = s === 'saving' ? 'Saving' : s === 'saved' ? 'Saved' : s === 'failed' ? 'Not saved' : ''
 }
+function send(path, body){
+  return fetch(path, { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json', 'x-taste-token': S.token }, body: JSON.stringify(body) })
+}
 function post(path, body){
+  if (ended) return Promise.resolve(false)
   pending++; setSave('saving')
-  return fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-    .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() })
-    .then(function(){ pending--; if (!pending) setSave(queue.length ? 'failed' : 'saved'); return true })
-    .catch(function(){ pending--; queue.push([path, body]); setSave('failed'); retrySoon(); return false })
+  return send(path, body)
+    .then(function(r){
+      pending--
+      if (r.status >= 400 && r.status < 500){ endRound(); return false }
+      if (!r.ok) throw new Error('HTTP ' + r.status)
+      if (!pending) setSave(queue.length ? 'failed' : 'saved')
+      return true
+    }, function(e){ pending--; throw e })
+    .catch(function(){ queue.push([path, body]); setSave('failed'); retrySoon(); return false })
 }
 function retrySoon(){
   if (retryTimer) return
   retryTimer = setTimeout(function(){ retryTimer = null; var q = queue; queue = []; q.forEach(function(p){ post(p[0], p[1]) }) }, 2000)
 }
+function endRound(){
+  if (ended) return
+  ended = true; queue = []
+  setSave('')
+  var b = el('div', 'ended'); b.id = 'ended'; b.setAttribute('role', 'alert')
+  b.appendChild(el('strong', null, 'This round has ended.'))
+  b.appendChild(el('span', null, ' Every answer it saved is on disk. Run rig taste again for a fresh link.'))
+  document.body.appendChild(b)
+}
+// The tab is going (closed, switched away, phone locked): send the note being typed and anything
+// still queued now, as keepalive requests the browser finishes after the page is gone.
+function flushAll(){
+  if (ended) return
+  if (noteTimer){ clearTimeout(noteTimer); noteTimer = null; var t = noteTarget(); if (t) send('/api/answer', { kind: t.kind, id: t.id, note: note.value }) }
+  var q = queue; queue = []; q.forEach(function(p){ send(p[0], p[1]) })
+}
+window.addEventListener('pagehide', flushAll)
+document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'hidden') flushAll() })
 
 function flushNote(){
   if (!noteTimer) return
@@ -138,8 +167,9 @@ note.addEventListener('input', function(){
   notes[t.kind + ':' + t.id] = note.value
   var a = answerOf(t.kind, t.id); a.note = note.value
   clearTimeout(noteTimer)
-  noteTimer = setTimeout(function(){ noteTimer = 1; flushNote() }, 600)
+  noteTimer = setTimeout(function(){ noteTimer = 1; flushNote() }, 250)
 })
+note.addEventListener('blur', flushNote)
 note.addEventListener('keydown', function(e){ if (e.key === 'Escape' || e.key === 'Enter') note.blur(); e.stopPropagation() })
 
 // Layout: make the shots as large as the stage allows. Two shots go side by side or stacked,
@@ -170,17 +200,20 @@ function bestCols(n, W, H, a, extraH, gap){
   return best
 }
 
+// The token rides on every image URL; v changes when the file does, so a reworked comp is never stale.
+function imgUrl(card, view){ return '/img/' + encodeURIComponent(card.id) + '/' + view + '?t=' + encodeURIComponent(S.token) + '&v=' + (card.v[view] || '') }
+
 var relayout = function(){}
 window.addEventListener('resize', function(){ relayout() })
 
 function shotFig(card, view, caption){
   var f = el('figure'); f.dataset.view = view
-  var s = el('div', 'shot'); var img = new Image(); img.alt = card.name + (caption ? ' — ' + caption : ''); img.src = '/img/' + encodeURIComponent(card.id) + '/' + view
+  var s = el('div', 'shot'); var img = new Image(); img.alt = card.name + (caption ? ' — ' + caption : ''); img.src = imgUrl(card, view)
   img.decoding = 'async'; s.appendChild(img); f.appendChild(s)
   if (caption) f.appendChild(el('figcaption', null, caption))
   return f
 }
-function preload(card){ if (card) card.views.forEach(function(v){ var i = new Image(); i.src = '/img/' + encodeURIComponent(card.id) + '/' + v }) }
+function preload(card){ if (card) card.views.forEach(function(v){ var i = new Image(); i.src = imgUrl(card, v) }) }
 
 function renderRef(i){
   var card = refs[i]
@@ -208,7 +241,7 @@ function renderComps(){
     var a = answerOf('comp', c.id)
     var card = el('div', 'comp' + (k === sel ? ' sel' : '')); card.dataset.id = c.id
     var pick = el('button', 'pick'); pick.type = 'button'; pick.setAttribute('aria-label', 'Select ' + c.name)
-    var img = new Image(); img.alt = c.name; img.src = '/img/' + encodeURIComponent(c.id) + '/' + c.views[0]; pick.appendChild(img)
+    var img = new Image(); img.alt = c.name; img.src = imgUrl(c, c.views[0]); pick.appendChild(img)
     pick.addEventListener('click', function(){ select(k) })
     var bar = el('div', 'bar')
     bar.appendChild(el('span', 'label', String.fromCharCode(65 + k) + '  ·  ' + c.name))
@@ -245,7 +278,7 @@ function renderEnd(){
   refs.forEach(function(r, k){
     var b = el('button', 'thumb'); b.type = 'button'; b.setAttribute('aria-label', 'Back to ' + r.name)
     var v = r.views.indexOf('desktop') >= 0 ? 'desktop' : r.views[0]
-    var img = new Image(); img.alt = ''; img.src = '/img/' + encodeURIComponent(r.id) + '/' + v
+    var img = new Image(); img.alt = ''; img.src = imgUrl(r, v)
     img.style.height = Math.round(th * 0.6) + 'px'; img.style.width = Math.round(th * 0.6 * 1.4) + 'px'
     b.appendChild(img)
     var a = answerOf('ref', r.id); b.appendChild(el('span', null, a.rating ? a.rating + ' / 5' : 'skipped'))
@@ -279,8 +312,13 @@ function go(p){
   updateDone()
 }
 
+// A tap while the last one is still moving the board on is queued, never dropped: it lands on the
+// card that comes up next. A tap that does nothing is the worst thing this page can do.
+var taps = []
+function settle(){ busy = false; if (taps.length) rate(taps.shift()) }
 function rate(r){
-  if (busy) return
+  if (ended) return
+  if (busy){ taps.push(r); return }
   var s = steps[pos]
   if (s.kind === 'ref'){
     var card = refs[s.i], a = S.ratings[card.id] = S.ratings[card.id] || {}
@@ -291,7 +329,7 @@ function rate(r){
     post('/api/answer', body)
     showRating(r); busy = true
     stage.classList.add('leaving')
-    setTimeout(function(){ busy = false; stage.classList.remove('leaving'); go(pos + 1) }, 160)
+    setTimeout(function(){ stage.classList.remove('leaving'); go(pos + 1); settle() }, 160)
   } else if (s.kind === 'comps' && comps[sel]){
     var c = comps[sel], ca = S.compRatings[c.id] = S.compRatings[c.id] || {}
     ca.rating = r
@@ -303,7 +341,7 @@ function rate(r){
     var next = -1
     for (var k = 1; k <= comps.length; k++){ var j = (sel + k) % comps.length; if (!answerOf('comp', comps[j].id).rating){ next = j; break } }
     busy = true; showRating(r)
-    setTimeout(function(){ busy = false; if (next >= 0) sel = next; renderComps() }, 160)
+    setTimeout(function(){ if (next >= 0) sel = next; renderComps(); settle() }, 160)
   }
   updateDone()
 }
@@ -314,21 +352,42 @@ function togglePick(k){
   renderComps()
 }
 
+// Done waits for every answer to land, for 6 seconds at most, and then says what went wrong
+// instead of hanging.
 var finished = false
 function done(){
-  if (finished) return
+  if (finished || ended) return
   flushNote()
   finished = true
-  var wait = function(){ return pending || queue.length ? new Promise(function(r){ setTimeout(r, 120) }).then(wait) : Promise.resolve() }
-  wait().then(function(){ return fetch('/api/done', { method: 'POST' }) })
-    .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() })
+  $('done').textContent = 'Saving…'
+  var until = Date.now() + 6000
+  var wait = function(){
+    if (!pending && !queue.length) return Promise.resolve()
+    if (Date.now() > until) return Promise.reject(new Error('unsaved'))
+    return new Promise(function(r){ setTimeout(r, 120) }).then(wait)
+  }
+  wait().then(function(){ return send('/api/done', {}) })
+    .then(function(r){
+      if (r.status >= 400 && r.status < 500){ endRound(); throw new Error('ended') }
+      if (!r.ok) throw new Error('HTTP ' + r.status)
+      return r.json()
+    })
     .then(function(j){
       document.body.innerHTML = ''
       var c = el('div', 'closed'); c.id = 'closed'; var d = el('div')
       d.appendChild(el('h1', null, 'Saved.')); d.appendChild(el('p', null, (j.path || 'docs/TASTE.md') + ' is written. You can close this tab.'))
       c.appendChild(d); document.body.appendChild(c)
     })
-    .catch(function(){ finished = false; setSave('failed') })
+    .catch(function(e){
+      finished = false
+      $('done').textContent = 'Done'
+      if (e.message === 'ended') return
+      setSave('failed')
+      var b = $('ended') || el('div', 'ended'); b.id = 'ended'; b.setAttribute('role', 'alert'); b.textContent = ''
+      b.appendChild(el('strong', null, 'The board is not answering.'))
+      b.appendChild(el('span', null, ' Answers marked Saved are on disk. Press Done again, or run rig taste --done in the terminal.'))
+      document.body.appendChild(b)
+    })
 }
 
 Array.prototype.forEach.call(document.querySelectorAll('.rate'), function(b){ b.addEventListener('click', function(){ rate(Number(b.dataset.rating)) }) })
@@ -336,7 +395,7 @@ $('back').addEventListener('click', function(){ go(pos - 1) })
 $('done').addEventListener('click', done)
 
 document.addEventListener('keydown', function(e){
-  if (e.metaKey || e.ctrlKey || e.altKey || finished) return
+  if (e.metaKey || e.ctrlKey || e.altKey || finished || ended) return
   var s = steps[pos]
   if (/^[1-5]$/.test(e.key) && s.kind !== 'end'){ e.preventDefault(); rate(Number(e.key)) }
   else if (e.key === 'ArrowLeft' || e.key === 'Backspace'){ e.preventDefault(); if (s.kind === 'comps' && sel > 0) select(sel - 1); else go(pos - 1) }
@@ -355,8 +414,9 @@ setSave('')
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
 
-export function pageHtml(state) {
-  const data = JSON.stringify(publicState(state)).replace(/</g, '\\u003c')
+/** The page for one round. `pub` is publicState(round, token): no file paths, the token inside. */
+export function pageHtml(pub) {
+  const data = JSON.stringify(pub).replace(/</g, '\\u003c')
   const rates = [1, 2, 3, 4, 5]
     .map((n) => `<button type="button" class="rate" data-rating="${n}" aria-label="Rate ${n} of 5" aria-pressed="false">${n}</button>`)
     .join('')
@@ -366,7 +426,7 @@ export function pageHtml(state) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<title>Taste${state.question ? ` — ${esc(state.question)}` : ''}</title>
+<title>Taste${pub.question ? ` — ${esc(pub.question)}` : ''}</title>
 <style>${CSS}</style>
 </head>
 <body>

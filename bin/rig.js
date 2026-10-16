@@ -19,7 +19,7 @@ const COMMANDS = {
   rule: 'add a learned rule to the project rulebook: rig rule "<rule>"',
   roll: 'a cross-repo crew from one brief: rig roll up <brief.md> | status | finish | down (tabs in this workspace, one list of repos each)',
   taste:
-    'a rating round you answer by tapping: references one at a time, 1 to 5, every tap saved; Done writes docs/TASTE.md (--from <dir>, --url <u>, --comps <dir> --ask "<q>", --no-open, --done)',
+    'a rating round you answer by tapping: references one at a time, 1 to 5, every tap saved; Done writes docs/TASTE.md (--from <dir>, --url <u>, --comps <dir> --ask "<q>", --lan, --no-open, --done)',
   down: 'close this build’s slice tabs, stop processes inside its worktrees, remove the worktrees; refuses over uncommitted work unless --force',
 }
 
@@ -46,12 +46,14 @@ const USAGE = {
 rig roll status [<rollDir>]   [--no-fetch]  newest roll by default; exit 1 while any repo is in progress
 rig roll finish [<rollDir>]   [--no-fetch]  every repo reported, clean and pushed; writes ROLL-FINISH.md; jots
 rig roll down   [<rollDir>]   [--force]  closes only this roll's tabs; makes and removes no worktrees`,
-  taste: `rig taste [--from <dir>] [--url <u>]... [--comps <dir> --ask "<question>"] [--port <n>] [--no-open] [--done]
+  taste: `rig taste [--from <dir>] [--url <u>]... [--comps <dir> --ask "<question>"] [--port <n>] [--lan] [--no-open] [--done]
   references: images in --from (name-desktop.png + name-phone.png pair up), each --url, and URLs under
   "## The best at this job" in the plan, captured headless at 1440×900 and 390×844 into .rig/taste/shots/;
   --comps <dir> --ask "<q>" adds one question over 2 to 4 comps, rated and starred side by side;
   --port defaults to tastePort in .rig/config.json, else 5391; --no-open prints the URL without opening it;
-  --done writes docs/TASTE.md from the saved ratings (and stops a board still running on that port)`,
+  --lan also listens on this machine's network address and prints a link for a phone (with the round's token);
+  --done writes docs/TASTE.md from the saved ratings (and stops a board still running in this repo).
+  Every round is kept in .rig/taste/ratings.json; the same sources again resume the newest round`,
   down: `rig down [--force] [--discard-reports]`,
 }
 
