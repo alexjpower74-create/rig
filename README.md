@@ -4,9 +4,13 @@
 
 Orchestration for builds where several Claude Code sessions work the same repo at once.
 
-**Rig 4.0 keeps machine state on the machine:** every write into `.rig/` makes git ignore it, so a
-sync or a careless `git add -A` can never publish the QA record and its paths, and state already
-committed is named with the command to untrack it. It builds on 3.0's desk: review before merge, a QA
+**Rig 5.0 aims every agent high and says how high.** Every brief the rig writes opens with a mindset
+block, and carries the parts of a brief an agent cannot guess: the feeling, the specialist, the best
+work to start from, and a bar with a hard number. The harness turns that number into a check that
+goes red when it is missed (`s.target`, `countInput`, `timeTo`). `rig taste` puts real examples in
+front of the owner to rate by tapping, and hands the agents the ratings in writing.
+
+Rig 4.0 keeps machine state on the machine: every write into `.rig/` makes git ignore it. It builds on 3.0's desk: review before merge, a QA
 worktree per project and per run, negative controls re-proved on the sha being called done, one
 GitHub issue per slice, the registry and decision log at the finish gate, and `rig roll` for one
 brief across many repos. See [CHANGELOG.md](CHANGELOG.md) for what changed and why.
@@ -27,7 +31,9 @@ rig review   rig review <id>: a read-only, fresh-eyes review brief for one slice
 rig finish   the done gate: reviewed, merged, clean, QA and negatives green on this sha; closes the
              issues, jots, touches the registry, writes docs/FINISH.md  (--no-review, --no-desk, --wrap "<msg>")
 rig rule     rig rule "<rule>": add a learned rule to the rulebook every agent reads
-rig brief    print an agent's briefing so you can hand it over deliberately
+rig brief    print an agent's briefing so you can hand it over deliberately (re-shares docs/TASTE.md)
+rig taste    a rating board: the owner taps 1-5 per reference, comps side by side; writes docs/TASTE.md
+             (--from <dir>, --url <u>, --comps <dir> --ask "<q>", --lan, --no-open, --done)
 rig roll     rig roll up <brief.md> | status | finish | down: one brief, many repos, one tab per list
 rig down     close this build's tabs, stop what its worktrees left running, remove them
 rig <cmd> --help   that command's usage; creates nothing
@@ -53,19 +59,36 @@ Visit a site and fill in a Measurement, exactly as src/contract.js defines it.
 
 ## A plan is a brief first
 
-`rig init` writes a plan that starts with the five things a good brief covers, then the slices:
+Agents left alone make the average of everything they have seen, sized to what a human team could
+ship. `rig init` writes a plan that starts with what an agent cannot guess, then the slices. The
+creative half comes from Steve Clarke's creative prompt:
 
 ```markdown
+## The feeling          or, for structural work, the one quality
+## The specialist       who does this for a living, and their method
+## The best at this job 4 to 6 real references, then Anti-references:
+## The bar              a hard number: "a volunteer accepts a Sunday in ≤ 3 taps"
 ## What it's for
 ## Who uses it, on what
+## Where we're starting from
 ## What done looks like
-## What must not happen
+## What must not happen (or change)
 - Never claim a refund amount it can't back up.
+## Freedom
+## Tools
+## Budget and autonomy  so nothing forces a question at 2am
+## What to hand back
 ## Where it lives
 ## Size and mode        small: one agent · medium: builder + reviewer · big: a crew
 ## Checks
 ## Agents
 ```
+
+Every brief the rig writes (slice, review, roll) opens with the same mindset block, word for word:
+the agent is capable of more than it knows, should never leave out something good because it seems
+like a lot of work, and is not done until the work is seen working where people use it. `rig up`
+warns when the feeling, the references or the bar are missing, when the bar has no number, and when
+it strips a line that holds one (`< 200 ms` is a comparison, not a placeholder).
 
 The stack, the file layout and the libraries are not in the brief; the plan's author chooses them.
 `rig up` names any part of the brief still empty before it creates anything, and every slice's
@@ -209,6 +232,26 @@ Only real input at real speed, hit-tested, finds the bug.
 
 On its first use against this project's own scoring tests, 6 of 14 checks came back VOID. They had
 been written by me, they looked reasonable, and they were watching nothing.
+
+## A bar is a number, and a number is a check
+
+"Make it faster" cannot be missed, so it cannot be met. A bar is a number with a bound, like a
+Lighthouse budget or a size-limit line, and `s.target` holds it to the same rule as `check`:
+
+```js
+const input = countInput(page)        // real taps, keys, gestures and ms, through Input.dispatch*
+await s.target('accept a Sunday', {
+  measure: async () => { await acceptShift(input); return input.counts().taps },
+  atMost: 3, unit: 'taps',
+  breaks: addAConfirmStep,            // the broken run must cross the bar
+})
+//  PASS  accept a Sunday — 2 taps (≤ 3) · broken: 4 taps
+```
+
+The number is printed beside its bar every time. A break that leaves the number inside the bar, or
+gives no number at all, is **VOID**. Every `countInput` counter is reset before each run, so the
+broken run never inherits the first run's taps. `timeTo(fn)` measures bars like "found in under
+10 s".
 
 ## Formatters un-anchor negative controls
 
@@ -371,6 +414,19 @@ hit? — via `document.elementFromPoint`. `whatIsAt(x, y)` names the thief.
 
 `isRendering(page)` is there because a backgrounded or occluded tab renders nothing, and a
 screenshot of one is a picture of a lie.
+
+## Taste rounds: recognition, not recall
+
+People know great when they see it and cannot describe it in advance. `rig taste` opens a board in
+the browser: one reference at a time, as large as the screen allows, five big rating buttons (or the
+number keys), an optional note, and nothing to scroll. Six references take seven taps. A comps round
+(`--comps <dir> --ask "Buttons: which do you like?"`) shows the owner's own screen done three or four
+ways, side by side on a desktop and one at a time with A-D chips on a phone.
+
+Every tap is saved the moment it is given, every round is kept, and every request carries the
+round's token. `docs/TASTE.md` gets a table per round and a `## Principles` section for the lead to
+fill before design starts. Slice briefs point at it, and the ratings outrank the agent's own taste.
+The board listens on 127.0.0.1 unless `--lan` is passed for a phone.
 
 ## Briefing agents
 

@@ -1,5 +1,69 @@
 # Changelog
 
+## 5.0.0 — briefs that aim high, bars you can measure, taste you can click
+
+Rig 5.0 builds Steve Clarke's creative prompt into the tool. He shared it with one line, "Take what's
+useful," and its argument is short: agents left alone make the average of everything they have seen,
+sized to what a human team could ship. Exceptional work needs three things: the best work in the
+world as the starting point, a brief packed with what the agent can't guess, and an agent that knows
+it can go further than it thinks. Rig 4 briefs carried the files, the task and the hard rules. They
+said nothing about the feeling, the references or the bar, and no check measured a number. It is a
+major version because every brief now opens differently and the plan template has new sections.
+
+### Every brief opens with the mindset block
+- **Now:** slice briefs (`rig up`, `rig brief`), review briefs (`rig review`) and roll briefs
+  (`rig roll up`) open with the same paragraph, word for word, once, before the first heading. It
+  lives in `src/mindset.js` and nowhere else in `src/`.
+- **Checked:** `test/brief-five.test.js`. Each control swaps the Rig 4 function back in.
+
+### The parts of a brief an agent can't guess
+- **Now:** the plan learns The feeling (or The one quality), The specialist, The best at this job
+  (with Anti-references), The bar, Where we're starting from, Freedom, Tools, Budget and autonomy,
+  and What to hand back. "What must not change" joins "What must not happen" as one list. Slice
+  briefs carry them in that order, and `templates/PLAN.md` has them.
+- `rig up` names a missing feeling, missing references or a missing bar, and says when the bar has no
+  number. Warn, never refuse.
+- **What went wrong on the way:** the placeholder rule took `answers in < 200 ms and fails > 1 time`
+  for a template placeholder and dropped the bar from every brief without a word. That's the one
+  line a bar is most likely to look like. A placeholder now hugs its brackets with words (`<the one
+  command>`). `rig up` also names any line it strips that still holds a number.
+- The review brief asks whether the bar is measured by a target check seen red, and how the work
+  looks beside the references.
+
+### A bar is a number, and a number is a check
+- **Now:** `Suite#target(name, { measure, atMost, atLeast, unit, breaks, timeout })` prints the
+  number beside its bar (`2 taps (≤ 3) · broken: 4 taps`). A broken run that stays inside the bar,
+  or gives no number, is VOID. `countInput(page)` counts real taps, keys, gestures and ms through
+  the harness's own input. `timeTo(fn)` times a bar like "found in under 10 s".
+- **What went wrong on the way:** a measure that forgot `reset()` let the broken run inherit the
+  first run's taps, so a break that changed nothing read as PASS. `target()` now resets every live
+  counter before each run.
+- **Checked:** `test/target.test.js`, with PASS, VOID, FAIL and a non-number each shown. The
+  forgetful-counter case goes red with the old `check.js`.
+
+### `rig taste`: recognition, not recall
+- **Now:** a local rating board. References come from a folder of screenshots, from `--url`, or from
+  the URLs under the plan's "The best at this job", captured headless at desktop and phone size; a
+  URL that fails or answers 4xx/5xx is named and skipped. One reference at a time, five big rating
+  buttons (or the number keys), an optional note, and no scrolling. A comps round shows the owner's
+  own screen done three or four ways: a grid on desktop, and one at a time with A-D chips (tap or
+  swipe) on a phone.
+- Every answer is saved at once, and every round is kept. Notes flush on pagehide with keepalive,
+  and fast taps are queued, never dropped. Every request carries the round's token behind Host,
+  Origin and content-type guards. `--lan` is opt-in.
+- `docs/TASTE.md` gets a table per round and a `## Principles` section. Slice briefs point at it.
+  `rig brief <id>` re-shares it with a crew that is already building. The rig never commits it.
+- **The bar, measured:** six references in 7 taps (≤ 7) at 1440×900 and 390×844, with real input
+  and hit-tested targets. The broken run (no auto-advance, plus a Next button) took 13.
+- **Checked:** `test/taste.test.js`, with every control seen red. The swipe test caught a swipe right
+  being taken as the browser's back gesture.
+
+### Smaller
+- `goto()` clears its navigation deadline. Every suite that used it sat idle for the full 30 s
+  timeout after its last check. `test/goto-timer.test.js` is a target: the process is gone within
+  1 s of the browser closing, and Rig 4's race line lingers past it.
+- Peers launch with `claude --model opus --effort medium`, as in 4.0.
+
 ## 4.0.0 — machine state stays on the machine
 
 Rig 4.0 comes out of the morning after a build finished clean. The crew had merged, the finish gate
