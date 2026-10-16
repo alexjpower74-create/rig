@@ -49,8 +49,15 @@ major version because every brief now opens differently and the plan template ha
   own screen done three or four ways: a grid on desktop, and one at a time with A-D chips (tap or
   swipe) on a phone.
 - Every answer is saved at once, and every round is kept. Notes flush on pagehide with keepalive,
-  and fast taps are queued, never dropped. Every request carries the round's token behind Host,
-  Origin and content-type guards. `--lan` is opt-in.
+  and fast taps are queued, never dropped. An answer leaves the queue only when the board has it,
+  and "Saved" shows only on an empty queue. Answers are ordered per tab by a counter, never by
+  clocks, so a late older answer can't overwrite a newer one, and a phone with a slow clock still
+  wins its re-rate. Every request carries the round's token behind Host, Origin and content-type
+  guards. `--lan` is opt-in.
+- **What went wrong on the way:** four rounds of review found a re-run wiping earlier ratings, a
+  note lost when the tab closed, a hidden tab dropping a queued answer, and (from the first fix for
+  ordering) a phone whose clock ran slow losing its re-rate under "Saved". Each one is now a test
+  that goes red on the code that had it.
 - `docs/TASTE.md` gets a table per round and a `## Principles` section. Slice briefs point at it.
   `rig brief <id>` re-shares it with a crew that is already building. The rig never commits it.
 - **The bar, measured:** six references in 7 taps (≤ 7) at 1440×900 and 390×844, with real input
