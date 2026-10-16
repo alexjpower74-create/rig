@@ -564,7 +564,8 @@ await suite('rig 5.0, the creative prompt in every brief', async (s) => {
         /\*\*The bar is a floor\.\*\* Put the work beside the references: screenshots side by side/.test(text) &&
         text.includes('**Hard numbers are checks.**') &&
         text.includes('`s.target(name, { measure, atMost, atLeast, unit, breaks, timeout })`') &&
-        text.includes('`countInput(page)`')
+        text.includes('`countInput(page)`') &&
+        /Call `reset\(\)` at the start of `measure`/.test(text)
       )
     },
     breaks: async () => {

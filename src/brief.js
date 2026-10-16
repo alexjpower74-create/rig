@@ -117,7 +117,8 @@ they win. In your report, name the principles behind them that you designed to.
 4. **Hard numbers are checks.** Write the bar as a target, not a sentence:
    \`s.target(name, { measure, atMost, atLeast, unit, breaks, timeout })\`, with
    \`countInput(page)\` counting the real taps, keys and gestures it takes. Both come from
-   \`harness/index.js\`. Make it fail once (break the thing, watch the number cross the bar) and
+   \`harness/index.js\`. Call \`reset()\` at the start of \`measure\`, or the broken run adds its
+   count to the first and the bar looks proven when it is not. Make it fail once (break the thing, watch the number cross the bar) and
    report the number beside its bar.
 5. **Never grade the shared tree.** Numbers come from the QA worktree pinned to a commit, on its
    own port: \`rig qa <sha> --run "<your test command>"\`. Report the sha and the exit line it
