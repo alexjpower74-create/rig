@@ -121,7 +121,7 @@ name it. Add a dead-URL case that answers 404 with a body, beside the existing o
 ## 9. Smaller
 
 - `src/taste/store.js:70`: the date line uses `toISOString()`, which is UTC. A round finished after
-  20:00 in the Toronto time zone (EDT) is dated tomorrow. Use the local date.
+  20:00 at UTC−4 (EDT) is dated tomorrow. Use the local date.
 - `src/taste/page.js:283, 294`: a second tap within 160 ms of the first is silently dropped
   (`busy`). The bar walk waits between taps, so it never sees this. A fast hand would see a tap that
   did nothing.
