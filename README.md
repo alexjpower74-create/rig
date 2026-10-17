@@ -431,6 +431,12 @@ number keys), an optional note, and nothing to scroll. Six references take seven
 (`--comps <dir> --ask "Buttons: which do you like?"`) shows the owner's own screen done three or four
 ways, side by side on a desktop and one at a time with A-D chips on a phone.
 
+Every picture opens full screen with one click: click a reference's shot, or a comp's **Enlarge**
+button (or the comp already selected; on a phone, tap it). The picture fills the window, with its
+name or letter in large type, big Back and Next buttons (or ← →, or a swipe) that step through the
+round, a Desktop/Phone switch when there are both, and the 1-5 buttons and the star, so you rate
+while you look. The number keys still rate there, and Esc or Close goes back to the board.
+
 Every tap is saved the moment it is given, every round is kept, and every request carries the
 round's token. `docs/TASTE.md` gets a table per round and a `## Principles` section for the lead to
 fill before design starts. Slice briefs point at it, and the ratings outrank the agent's own taste.

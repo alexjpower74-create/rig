@@ -1,5 +1,36 @@
 # Changelog
 
+## 5.0.3 — every picture on the taste board opens full screen
+
+- **What went wrong:** the owner rated four comps side by side on a 2560×1440 screen and could not
+  see them: "the pictures are too small for me to see. need a way to zoom all the options up." A
+  comp could only be selected, never enlarged, and a reference was only as big as the board left it.
+- **Now:** one click opens any picture full screen. A reference's shot is a button with an Enlarge
+  sign on it. Each comp has an **Enlarge** button under it, and clicking the comp already selected
+  opens it too (on a phone, the comp shown is tapped). The viewer is a modal dialog on a dark
+  neutral ground: the picture as large as the window allows (92% of 1440×900, 94% of the height at
+  2560×1440, sized to its own shape so there is no letterbox), its letter or name in large type,
+  big Back and Next buttons, ← → and a swipe to step through the comps or the references, a
+  Desktop/Phone switch when a card has both (desktop first), the 1-5 buttons and the star. A rating
+  there saves at once and moves on, as the board does: to the next reference, or the next comp
+  still unrated. The number keys still rate, S stars, F opens the viewer from the board, and Esc,
+  Close or the phone's back gesture returns to the board on the picture last shown. On a big
+  monitor the controls grow with it. Nothing changed on the server.
+- **Found on the way, fixed:** on a phone, a swipe to the next comp was also the browser's fling,
+  and a tap within half a second of it only stopped the fling. Swiping to comp B and tapping 4 at
+  once saved nothing (5.0.0 to 5.0.2). The board and the viewer now keep a one-finger swipe to
+  themselves (not while pinched in), so the next tap always counts.
+- **Checked:** `test/taste.test.js`, four new checks (36 in all), each with a control that must turn it red.
+  At 1440×900 a real click on comp A's Enlarge opens it and the picture spans 90% of the window by
+  elementFromPoint alone; → shows comp B, the 4 key saves 4 for B in ratings.json, the viewer moves
+  on to C, and Esc gives the board back with "4 / 5" under B. Its control swallows Enlarge's click.
+  On a phone a tap on a reference's shot opens it, the Phone switch, Next, a tap on 5 (saved), a
+  swipe back and Close all work by touch; its control swallows the shot's tap. On a phone every
+  viewer control is 44 px and in reach; its control keeps the controls on one row, which runs Next
+  off the edge. Swiping to comp B and tapping 4 at once saves 4; its control leaves the swipe to the
+  browser too, and nothing is saved. The existing reach and 44 px checks now include the Enlarge
+  button. The same walk passes in WebKit, on an iPhone 14 profile with touch and at 1440×900.
+  `docs/shots/` is regenerated, with `taste-viewer-desktop.png` and `taste-viewer-phone.png` added.
 ## 5.0.2 — a refused launch always says why, on every machine
 
 - **What went wrong:** GitHub's runner went red on 5.0.1's port checks, though the second suite was

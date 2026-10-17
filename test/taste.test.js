@@ -243,7 +243,7 @@ async function fitsWithoutScrolling(page) {
     if (app && app.scrollWidth > app.clientWidth + 1) return '#app overflows sideways: ' + app.scrollWidth + ' in ' + app.clientWidth
     if (app && app.getBoundingClientRect().right > innerWidth + 1) return '#app is wider than the screen: ' + Math.round(app.getBoundingClientRect().right)
     const footer = document.getElementById('footer')
-    const need = [...document.querySelectorAll('.rate, .comp .star, .comp .pick'), document.getElementById('note'), document.getElementById('done'), document.getElementById('back')]
+    const need = [...document.querySelectorAll('.rate, .comp .star, .comp .pick, .comp .enlarge'), document.getElementById('note'), document.getElementById('done'), document.getElementById('back')]
     for (const el of need) {
       if (getComputedStyle(footer).visibility === 'hidden' && footer.contains(el)) continue
       const r = el.getBoundingClientRect()
@@ -1246,7 +1246,191 @@ await suite('rig taste', async (s) => {
     timeout: 60_000,
   })
 
-  const TARGETS = ['.rate', '#note', '#done', '#back', '.comp .star', '.comp .pick', ...[0, 1, 2, 3].map((k) => `.chip[data-k="${k}"]`)]
+  // Found building 5.0.3: the swipe was also the browser's fling, and a tap within half a second of
+  // it only stopped the fling. Swiping to comp B and tapping 4 at once saved nothing.
+  await s.check('comps on a phone: a rating tapped straight after a swipe still counts', {
+    assert: async () => {
+      const { b, page, input, close } = await compsBoard()
+      const B = b.round.comps[1].id
+      try {
+        const box = await page.eval(
+          '(() => { const r = document.querySelector("#grid .comp .pick").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()',
+        )
+        await input.swipe({ x: box.x + 100, y: box.y, dx: -200, dy: 0 })
+        await waitFor(async () => (await shownComp(page)) === B, 1000)
+        await press(page, input, '.rate[data-rating="4"]', { touch: true })
+        const saved = await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4, 2000)
+        if (!saved)
+          console.log(
+            `        after the swipe the board shows ${await shownComp(page)}; B on disk: ${newest(ratingsJson(b.root)).compRatings?.[B]?.rating ?? 'nothing'}`,
+          )
+        return saved
+      } finally {
+        await close()
+      }
+    },
+    // The control: the swipe left to the browser as well, as in 5.0.2.
+    breaks: pageBreak(`window.addEventListener('touchmove', (e) => e.stopPropagation(), { capture: true })`),
+    timeout: 60_000,
+  })
+
+  // ── full screen ──
+  // 5.0.3: he rated four comps side by side on a 2560×1440 screen and could not see them ("the
+  // pictures are too small for me to see"). Every picture now opens full screen with one click.
+
+  /** A key with no text (Escape, the arrows), as a keyboard sends it. */
+  const KEY_CODES = { Escape: 27, ArrowLeft: 37, ArrowRight: 39 }
+  async function pressNamed(page, key) {
+    const ev = { key, code: key, windowsVirtualKeyCode: KEY_CODES[key], nativeVirtualKeyCode: KEY_CODES[key] }
+    await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...ev })
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...ev })
+  }
+
+  /**
+   * What the viewer shows: null when it is closed. `big` is decided by elementFromPoint alone: every
+   * point on a line from 5% to 95% of the window's width (across the middle), or of its height (down
+   * the middle), lands on the picture. The frame must be the picture's own shape, so a letterboxed
+   * frame cannot pass for picture, and fully faded in, since a hit-test cannot see opacity.
+   */
+  const viewer = (page) =>
+    page.eval(`(() => {
+      const d = document.getElementById('viewer'), img = document.getElementById('vimg')
+      if (!d || !d.open) return null
+      const ready = img.complete && img.naturalWidth > 0 && getComputedStyle(img).opacity === '1'
+      const ownShape = ready && Math.abs(img.clientWidth / img.clientHeight - img.naturalWidth / img.naturalHeight) < 0.02
+      const on = (x, y) => document.elementFromPoint(x, y) === img
+      const line = (f) => Array.from({ length: 19 }, (_, k) => 0.05 + (0.9 * k) / 18).every(f)
+      const wide = line((t) => on(innerWidth * t, innerHeight * 0.45))
+      const tall = line((t) => on(innerWidth * 0.5, innerHeight * t))
+      return { id: d.dataset.id, src: img.getAttribute('src') || '', ready, ownShape, wide, tall, big: ownShape && (wide || tall) }
+    })()`)
+  /** True once the viewer shows card `id` (in `view`, when given), at full size unless `big` is false. */
+  const shows = (page, id, { view = '', big = true } = {}) =>
+    waitFor(async () => {
+      const v = await viewer(page)
+      return !!v && v.id === id && v.src.includes(`/img/${encodeURIComponent(id)}/${view}`) && v.ready && (!big || v.big)
+    }, 3000)
+
+  await s.check('full screen: Enlarge opens a comp across 90% of the window, → steps to the next, a key rates it there, Esc closes', {
+    assert: async () => {
+      const { b, page, input, close } = await compsBoard('desktop')
+      const [A, B, C] = b.round.comps.map((c) => c.id)
+      try {
+        await press(page, input, '#grid .comp:nth-child(1) .enlarge', { touch: false })
+        const openA = await shows(page, A)
+        await pressNamed(page, 'ArrowRight')
+        const onB = await shows(page, B)
+        await pressKey(page, '4')
+        const saved = await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4, 3000)
+        // Rated, it moves on to the next comp still unrated, as the board does.
+        const onC = await shows(page, C)
+        await pressNamed(page, 'Escape')
+        const closed = await waitFor(async () => (await viewer(page)) === null, 2000)
+        // The board is in reach again, and shows what was given in the viewer.
+        const board = closed && !!(await pointOn(page, '.rate[data-rating="1"]'))
+        const score = await page.eval(`document.querySelector('.comp[data-id="${B}"] .score')?.textContent`)
+        const ok = openA && onB && saved && onC && closed && board && score === '4 / 5'
+        if (!ok) console.log(`        ${JSON.stringify({ openA, onB, saved, onC, closed, board, score, viewer: await viewer(page) })}`)
+        return ok
+      } finally {
+        await close()
+      }
+    },
+    // The control: an Enlarge button that takes the click and does nothing with it.
+    breaks: pageBreak(
+      `document.addEventListener('click', (e) => { if (e.target.closest('.enlarge')) e.stopImmediatePropagation() }, true)`,
+    ),
+    timeout: 60_000,
+  })
+
+  await s.check(
+    'full screen on a phone: a tap on a reference opens it, Phone shows its phone shot, a tap rates, a swipe goes back, Close returns',
+    {
+      assert: async () => {
+        const b = await board()
+        const page = await openBoard(browser, b.url, VIEWPORTS.phone)
+        const input = countInput(page)
+        const [r0, r1, r2] = b.round.refs.map((c) => c.id)
+        try {
+          await press(page, input, '#stage figure .shot', { touch: true })
+          const open0 = await shows(page, r0, { view: 'desktop' })
+          // A tall phone shot on a phone is height-bound under the controls: shown, not measured.
+          await press(page, input, '.vview[data-view="phone"]', { touch: true })
+          const phone0 = await shows(page, r0, { view: 'phone', big: false })
+          await press(page, input, '#vnext', { touch: true })
+          const on1 = await shows(page, r1, { view: 'phone', big: false })
+          await press(page, input, '.vrate[data-rating="5"]', { touch: true })
+          const saved = await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r1]?.rating === 5, 3000)
+          const on2 = await shows(page, r2, { view: 'phone', big: false })
+          await input.swipe({ x: 100, y: 380, dx: 200, dy: 0 })
+          const back1 = await shows(page, r1, { view: 'phone', big: false })
+          await press(page, input, '#vclose', { touch: true })
+          const closed = await waitFor(async () => (await viewer(page)) === null, 2000)
+          // Closed on the second reference: the board is there, with its 5 shown.
+          const where = await progress(page)
+          const given = await page.eval('document.querySelector(".rate[aria-pressed=true]")?.dataset.rating')
+          const ok = open0 && phone0 && on1 && saved && on2 && back1 && closed && where === '2 of 6' && given === '5'
+          if (!ok)
+            console.log(
+              `        ${JSON.stringify({ open0, phone0, on1, saved, on2, back1, closed, where, given, viewer: await viewer(page) })}`,
+            )
+          return ok
+        } finally {
+          await page.close()
+          await b.stop()
+        }
+      },
+      // The control: a shot that takes the tap and does nothing with it.
+      breaks: pageBreak(
+        `document.addEventListener('click', (e) => { if (e.target.closest('#stage .shot')) e.stopImmediatePropagation() }, true)`,
+      ),
+      timeout: 60_000,
+    },
+  )
+
+  /** Centre and mid-edges of `selector` land on it, inside the window (a rounded corner is not the button). */
+  const inReach = (page, selector) =>
+    page.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)})
+      if (!el) return false
+      const r = el.getBoundingClientRect(), my = r.top + r.height / 2, mx = r.left + r.width / 2
+      return [[r.left + 3, my], [r.right - 3, my], [mx, r.top + 3], [mx, r.bottom - 3], [mx, my]].every(([x, y]) => {
+        if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return false
+        const hit = document.elementFromPoint(x, y)
+        return !!hit && (hit === el || el.contains(hit))
+      })
+    })()`)
+  const VIEWER_TARGETS = ['#vclose', '#vprev', '#vnext', '#vstar', ...[1, 2, 3, 4, 5].map((n) => `.vrate[data-rating="${n}"]`)]
+
+  await s.check('full screen on a phone: a tap on the comp opens it, and every control in the viewer is 44 px and in reach', {
+    assert: async () => {
+      const { b, page, input, close } = await compsBoard()
+      try {
+        await press(page, input, '#grid .comp .pick', { touch: true })
+        const opened = await shows(page, b.round.comps[0].id)
+        const bad = []
+        for (const t of VIEWER_TARGETS) if (!(await meetsTouchTarget(page, t)) || !(await inReach(page, t))) bad.push(t)
+        if (!opened || bad.length) console.log(`        opened ${opened}; out of reach or under 44 px: ${bad.join(', ')}`)
+        return opened && !bad.length
+      } finally {
+        await close()
+      }
+    },
+    // The control: the controls kept on one row, as on a desktop: Next runs off a phone's edge.
+    breaks: pageBreak(`document.head.insertAdjacentHTML('beforeend', '<style>.vctl{flex-wrap:nowrap!important}</style>')`),
+    timeout: 60_000,
+  })
+
+  const TARGETS = [
+    '.rate',
+    '#note',
+    '#done',
+    '#back',
+    '.comp .star',
+    '.comp .pick',
+    '.comp .enlarge',
+    ...[0, 1, 2, 3].map((k) => `.chip[data-k="${k}"]`),
+  ]
   await s.check('comps at 390 wide: every target is at least 44 px', {
     assert: async () => {
       const { page, close } = await compsBoard()
@@ -1337,6 +1521,11 @@ await suite('rig taste', async (s) => {
         for (const r of [4, 2]) await press(page, input, `.rate[data-rating="${r}"]`, { touch: VIEWPORTS[vp].touch }).then(() => sleep(260))
         await press(page, input, '.comp .star', { touch: VIEWPORTS[vp].touch })
         await snap(page, `taste-comps-${vp}-${theme}`)
+        // The viewer is dark in either theme: one shot of it per screen.
+        if (!dark) {
+          await press(page, input, '#grid .comp .enlarge', { touch: VIEWPORTS[vp].touch })
+          await snap(page, `taste-viewer-${vp}`)
+        }
         await close()
       }
   }
