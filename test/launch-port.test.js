@@ -123,7 +123,7 @@ async function withChrome(bin, name, edits) {
 const lockedNew = await withChrome(lockedChrome, 'locked-new', [])
 const lockedOld = await withChrome(lockedChrome, 'locked-old', [
   [
-    / {4}\/\/ Chrome's helpers can still be writing into the profile[\s\S]*?cleanLater\(\[profile\]\)\n {4}\}\n/,
+    / {4}\/\/ Chrome's helpers can still be writing into the profile[\s\S]*?cleanLater\(\[profile\]\)\n/,
     '    rmSync(profile, { recursive: true, force: true })\n',
   ],
 ])
@@ -278,7 +278,8 @@ await suite('launch() owns its browser', async (s) => {
   // A profile that cannot be removed while Chrome's helpers write into it must not replace the reason.
   // Root can delete a read-only folder, so there the control could never go red: skipped, by name.
   const isRoot = process.getuid?.() === 0
-  if (isRoot) console.log('  skipped: running as root, a read-only folder cannot block the cleanup')
+  if (isRoot)
+    console.log('  skipped: "a profile that will not go away never hides why the launch was refused" (as root, nothing is read-only)')
   if (process.platform !== 'win32' && !isRoot) {
     let lib = lockedNew
     await s.check('a profile that will not go away never hides why the launch was refused', {

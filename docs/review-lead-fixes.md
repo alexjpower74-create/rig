@@ -112,7 +112,9 @@ cleaner.
 Reviewed by a fresh agent that wrote neither commit (d25c860, cef38be). **PASS, no defects.**
 - **The exit handling is sound:** no double settle, the timer always fires, no delay on success.
 - **Both stand-in controls go red for the right reason,** locally and on CI.
-- **macOS's sh** handles the stand-ins.
+- **On the Mac:** `node test/launch-port.test.js` passes 7 of 7, and both stand-in controls go red
+  for their own reason. macOS words the locked one as ENOTEMPTY, the runner's own error. This was
+  run by the lead after the review, which had only reasoned about macOS.
 - **d25c860 alone** was red on CI from ENOTEMPTY; the try/catch in cef38be is the real fix.
 
 Suggestions taken:
@@ -123,3 +125,9 @@ Suggestions taken:
 - The 300 ms exit timer is cleared in settle().
 
 Not taken: the up-to-1.5 s retry on a failure path, which is acceptable.
+
+Verification of the follow-ups (by the same reviewer): **PASS.** Both controls' regexes, applied to
+the current cdp.js, give exactly the old shape and pass `node --check`. Each still goes red for its
+own reason. One more note was taken: a profile came back after its removal (a helper wrote it
+back), so fail() now always hands the profile to the cleaner, not only when the removal throws. The
+root skip line now names the check.

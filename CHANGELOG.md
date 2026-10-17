@@ -11,9 +11,10 @@
   have blamed the install ("Chrome exited … Is it installed?") for a taken port. Real Chrome 155
   keeps running in that case, so this is guarded rather than seen.
 - **Now:** a failed cleanup never replaces the reason a launch was refused. The profile removal is
-  retried, then handed to the same detached cleaner the reaper uses. After 'exit', `launch()` lets the stderr already on its way arrive (the stream's end, or
-  300 ms) before it blames the install, so a taken port is named as one. The check accepts either
-  plain refusal; its control takes both guards out, so it is red with IPv6 loopback and without it.
+  retried, and the profile always goes to the same detached cleaner the reaper uses, since a helper
+  can write it back. After 'exit', `launch()` lets the stderr already on its way arrive (the
+  stream's end, or 300 ms) before it blames the install. The check accepts either plain refusal; its
+  control takes both guards out, so it is red with IPv6 loopback and without it.
   An unexpected refusal message is printed.
 - **Checked:** `test/launch-port.test.js`, seven checks, two of them new, each run against a
   stand-in Chrome. One leaves a read-only folder in its profile and says the port is taken: it is

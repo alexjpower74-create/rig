@@ -132,9 +132,10 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
     // "Port N is already in use".
     try {
       rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
-    } catch {
-      cleanLater([profile])
-    }
+    } catch {}
+    // A helper can write it back after the removal (seen in the 5.0.2 review), so the cleaner takes
+    // another pass either way.
+    cleanLater([profile])
     throw err
   }
   // Own the endpoint: read where this Chrome listens, then make sure 127.0.0.1 answers as this Chrome.
