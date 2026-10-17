@@ -1002,30 +1002,36 @@ await suite('rig taste', async (s) => {
     assert: async () => {
       const root = freshRepo()
       const child = spawn(process.execPath, [RIG, 'taste', ...ARGS], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] })
-      let out = ''
-      child.stdout.on('data', (d) => {
-        out += d
-      })
-      const exited = new Promise((r) => child.on('exit', r))
-      const m = await waitFor(async () => /http:\/\/127\.0\.0\.1:\d+\/\?t=\S+/.test(out), 30_000)
-      if (!m) {
-        child.kill()
-        return false
+      // A throw below (a fetch, a ratings file not there yet) must not leave the board running: its
+      // pipes would keep the suite alive, the shape of the 2026-10-16 hang (fv3, review of e4ac688).
+      try {
+        let out = ''
+        child.stdout.on('data', (d) => {
+          out += d
+        })
+        const exited = new Promise((r) => child.on('exit', r))
+        const m = await waitFor(async () => /http:\/\/127\.0\.0\.1:\d+\/\?t=\S+/.test(out), 30_000)
+        if (!m) {
+          child.kill()
+          return false
+        }
+        const url = out.match(/http:\/\/127\.0\.0\.1:(\d+)\/\?t=(\S+)/)
+        const id = newest(ratingsJson(root)).refs[0].id
+        const answer = await fetch(`http://127.0.0.1:${url[1]}/api/answer`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-taste-token': url[2] },
+          body: JSON.stringify({ kind: 'ref', id, rating: 4 }),
+        })
+        const done = spawnSync(process.execPath, [...cliPreload, RIG, 'taste', '--done'], { cwd: root, encoding: 'utf8' })
+        const code = await Promise.race([exited, sleep(5000).then(() => 'still running')])
+        if (code === 'still running') child.kill()
+        const md = read(join(root, 'docs', 'TASTE.md'))
+        const ok = answer.ok && done.status === 0 && code === 0 && /Wrote .*docs\/TASTE\.md/.test(out) && tableRows(md)[0]?.[1] === '4 / 5'
+        if (!ok) console.log(`        answer ${answer.status}, --done ${done.status}, board exit ${code}`)
+        return ok
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
       }
-      const url = out.match(/http:\/\/127\.0\.0\.1:(\d+)\/\?t=(\S+)/)
-      const id = newest(ratingsJson(root)).refs[0].id
-      const answer = await fetch(`http://127.0.0.1:${url[1]}/api/answer`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-taste-token': url[2] },
-        body: JSON.stringify({ kind: 'ref', id, rating: 4 }),
-      })
-      const done = spawnSync(process.execPath, [...cliPreload, RIG, 'taste', '--done'], { cwd: root, encoding: 'utf8' })
-      const code = await Promise.race([exited, sleep(5000).then(() => 'still running')])
-      if (code === 'still running') child.kill()
-      const md = read(join(root, 'docs', 'TASTE.md'))
-      const ok = answer.ok && done.status === 0 && code === 0 && /Wrote .*docs\/TASTE\.md/.test(out) && tableRows(md)[0]?.[1] === '4 / 5'
-      if (!ok) console.log(`        answer ${answer.status}, --done ${done.status}, board exit ${code}`)
-      return ok
     },
     // The control: a --done that cannot reach the running board (its fetch fails), as before it asked.
     breaks: () => {
