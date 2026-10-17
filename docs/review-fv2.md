@@ -66,3 +66,15 @@ Notes, not blockers:
   to count a whole session across checks. The JSDoc says so ("a count that must span a target() call
   belongs inside measure()"). Fine, and now on record.
 - The timeout note (finding 2) is now in the JSDoc. Finding 3 is unchanged by design.
+
+## After merge: lead commit e4ac688 (by fv2)
+
+e4ac688 touched one file this slice owns. `test/target.test.js` lost its fixed debugging port
+(`port: 9351`): the suite now lets Chrome pick a free one. That is the port the note above
+says made the reviewer hold back from running this suite beside another slice's.
+
+fv2 reviewed the whole of e4ac688 and the two rounds of fixes after it (c238a03, 0170f1b, 73f1bac,
+2e04a85). Findings and verifications are in `docs/review-lead-fixes.md`. Nothing in them concerns
+this file beyond the port. At 2e04a85, `test/target.test.js` passes 16 of 16 in the final QA.
+
+**Verdict: PASS** at 2e04a85.

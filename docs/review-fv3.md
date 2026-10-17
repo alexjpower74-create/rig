@@ -434,3 +434,36 @@ one that arrives last wins. That needs a reload and a re-rate inside one round t
 
 **Verdict: PASS** at b1a9ed7. D stays green, and E is red at c8f3088 and green at b1a9ed7. Clock skew
 in either direction, and in either order, is harmless.
+
+## After merge: lead commit e4ac688 (by fv3)
+
+e4ac688 changed two files this slice owns:
+
+- `test/taste.test.js`: no fixed CDP port. Every board goes into `boards` and is stopped at the end.
+  The site server drops its connections before it closes.
+- `src/taste/capture.js`: `freePort()` is gone, and the capture launches with no port.
+
+No blocking findings:
+
+- **Stopping every board at the end interferes with nothing.** Every check that stops its own board
+  does so before the teardown runs. stop() is cached (`stopping ||=`), so a second call does
+  nothing more. A board ended by Done has already stopped itself. In the 4xx check, b2 reuses
+  b.port, and the teardown's cached stop on b never touches b2. No check needs a board to outlive
+  it. The teardown order is right: boards, then the browser, then the site, then the squatter,
+  then the repos.
+- **No pinned ports are left.** The 5391 squatter is deliberate: it stands in for his own board.
+  The CLI's capture launches on a port Chrome picks, so it can't collide with the suite's browser.
+
+Optional, and not introduced by e4ac688: the CLI check's `rig taste` child was not in `boards`. A
+throw before `--done` would leave it running, its pipes holding the suite open: tonight's hang
+again. The lead put the body in try/finally, and the finally SIGKILLs the child if it is still
+running.
+
+**Verification of 0dc86b3 (by fv3): PASS.** The body only moved into try/finally. The assertions,
+the log line and the `breaks` control are unchanged, so the red seen for this check still holds.
+Every exit goes through the finally: the early `return false`, a throw, and the normal return. For
+a child that has already exited, the guard does nothing. A child killed while still capturing
+orphans its own headless Chrome. That Chrome is not piped to the suite, so it can't hold the run
+open, and the old path had the same gap. Not blocking.
+
+**Verdict: PASS** at 0dc86b3.
