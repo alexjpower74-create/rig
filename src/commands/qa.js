@@ -26,7 +26,7 @@ export const USAGE = `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--por
                      plan's "Negative controls:" line); recorded as kind "negative" on the same sha
   --port <n>         PORT for the command (default: qaPort, +1 per extra QA worktree in use)
   --timeout <min>    stop a command still running after this many minutes and record exit 124
-                     (default: qaTimeoutMinutes in the config, else 30; 0 = no limit)
+                     (default: qaTimeoutMinutes in the config, else 60; 0 = no limit)
   --fresh            clean ignored files too (git clean -fdx): node_modules is reinstalled
   --help, -h         this text
 
@@ -48,6 +48,17 @@ export default async function qa(args) {
   }
   const root = mainRoot()
   const cfg = loadConfig(root)
+  // A limit that does not parse must not quietly become no limit: `--timeout 10m`, a value of
+  // `--fresh` taken for the minutes, or a bad qaTimeoutMinutes all stop here instead.
+  const given = args.includes('--timeout')
+  const raw = given ? argOf(args, '--timeout') : (cfg.qaTimeoutMinutes ?? 60)
+  const minutes = typeof raw === 'number' ? raw : /^\d+(\.\d+)?$/.test(raw ?? '') ? Number(raw) : Number.NaN
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    const from = given ? '--timeout' : 'qaTimeoutMinutes in .rig/config.json'
+    console.error(`rig qa: ${from} takes a number of minutes (0 = no limit), not ${JSON.stringify(raw ?? null)}. Nothing was run.`)
+    process.exit(2)
+  }
+  const limitMs = minutes * 60_000
   const ref = resolveRef(args, currentBranch(root))
   const fresh = args.includes('--fresh')
 
@@ -79,8 +90,6 @@ export default async function qa(args) {
   }
 
   const env = { ...process.env, PORT: String(port), RIG_QA_SHA: sha }
-  const minutes = Number(argOf(args, '--timeout') ?? cfg.qaTimeoutMinutes ?? 30)
-  const limitMs = minutes > 0 ? minutes * 60_000 : 0
   let exit = 0
   const seen = new Set()
   const runs = [
@@ -155,25 +164,64 @@ function holdLock(wt) {
   ]) {
     process.on(sig, () => {
       const child = running
-      if (!child || child.exitCode !== null || child.signalCode !== null) {
+      if (!child) {
         wt.release()
         process.exit(code)
       }
-      child.once('exit', () => {
+      // The whole process group, not just the bash wrapper: bash does not pass SIGTERM on to a
+      // foreground child, so signalling bash alone left `npx playwright test` running in a tree the
+      // lock had just called free. And the lock waits for the whole group, not for bash.
+      groups.stop(child, sig).then(() => {
         wt.release()
         process.exit(code)
       })
-      // The whole process group, not just the bash wrapper: bash does not pass SIGTERM on to a
-      // foreground child, so signalling bash alone left `npx playwright test` running in a tree the
-      // lock had just called free.
-      signalGroup(child, sig)
-      setTimeout(() => signalGroup(child, 'SIGKILL'), 5000).unref()
     })
   }
 }
 
 /** The command currently running in the QA worktree, so a signal can reach it. */
 let running = null
+
+/** True while any process in the group led by `pid` is left. */
+function groupAlive(pid) {
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch (e) {
+    return e.code === 'EPERM'
+  }
+}
+
+/**
+ * Stop everything in the child's process group: `sig` now, SIGKILL after `graceMs`, and resolve only
+ * once none of it is left.
+ *
+ * bash dies on SIGTERM, but a command behind a pipe that ignores SIGTERM (`node x | cat`, the shape of
+ * `npm test | tail`) lives on. Resolving on bash's exit released the lock with that command still
+ * running in the worktree, and the SIGKILL meant for it was on an unref'd timer that never fired
+ * because rig qa exited first. Found by fv2's review of 8ac8712. Exported so a test can put the old
+ * behaviour back.
+ */
+export const groups = {
+  stop(child, sig, graceMs = 5000) {
+    if (process.platform === 'win32') {
+      try {
+        child.kill(sig)
+      } catch {}
+      return child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise((r) => child.once('exit', r))
+    }
+    signalGroup(child, sig)
+    return new Promise((resolve) => {
+      const kill = setTimeout(() => signalGroup(child, 'SIGKILL'), graceMs)
+      const poll = setInterval(() => {
+        if (groupAlive(child.pid)) return
+        clearTimeout(kill)
+        clearInterval(poll)
+        resolve()
+      }, 50)
+    })
+  },
+}
 
 /** Signal the child's process group (it is spawned as a group leader); fall back to the pid. */
 function signalGroup(child, sig) {
@@ -241,19 +289,24 @@ export function runShell(cmd, { cwd, env, shell, mapExit = exitCodeFor, limitMs 
     // Its own process group, so a signal can reach everything the command started, not just bash.
     const child = spawn(file, argv, { cwd, env, stdio: 'inherit', detached: process.platform !== 'win32' })
     running = child
-    let timedOut = false
+    let stopped = null
     const limit =
       limitMs > 0 &&
       setTimeout(() => {
-        timedOut = true
         console.error(`\nrig qa: still running after ${fmtLimit(limitMs)}; stopping it (exit 124). Raise it with --timeout <min>.`)
-        signalGroup(child, 'SIGTERM')
-        setTimeout(() => signalGroup(child, 'SIGKILL'), 5000).unref()
+        stopped = groups.stop(child, 'SIGTERM')
       }, limitMs)
     child.on('exit', (code, signal) => {
       clearTimeout(limit)
-      running = null
-      resolve(timedOut ? 124 : mapExit(code, signal))
+      if (!stopped) {
+        running = null
+        return resolve(mapExit(code, signal))
+      }
+      // bash is gone; the command behind it may not be. 124 only once the whole group is.
+      stopped.then(() => {
+        running = null
+        resolve(124)
+      })
     })
     child.on('error', () => resolve(127))
   })

@@ -4,7 +4,7 @@
 // no knowledge of which is which. It stops at the first failure and exits with that status, so a new
 // test file is picked up by `npm test` without editing package.json.
 //
-// Each file gets a time limit (RIG_TEST_TIMEOUT_MS, default 10 minutes). A suite that leaves a server
+// Each file gets a time limit (RIG_TEST_TIMEOUT_MS, default 20 minutes). A suite that leaves a server
 // listening after a failed check never exits; on 2026-10-16 one sat for three hours inside `rig qa`
 // with nothing on screen. Past the limit the file is stopped and named, and the run fails.
 import { readdirSync } from 'node:fs'
@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const LIMIT = Number(process.env.RIG_TEST_TIMEOUT_MS) || 10 * 60_000
+const LIMIT = Number(process.env.RIG_TEST_TIMEOUT_MS) || 20 * 60_000
 const files = readdirSync(here)
   .filter((f) => f.endsWith('.test.js'))
   .sort()

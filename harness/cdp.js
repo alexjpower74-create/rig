@@ -6,7 +6,7 @@
 // `Input.dispatchMouseEvent` goes in at the browser's input layer, the same door a real wheel uses.
 
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -101,11 +101,14 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
     try {
       proc.kill('SIGKILL')
     } catch {}
+    proc.stderr.destroy()
     rmSync(profile, { recursive: true, force: true })
     throw err
   }
   // Own the endpoint: read where this Chrome listens, then make sure 127.0.0.1 answers as this Chrome.
-  const endpoint = await listeningOn(proc, 10_000).catch(fail)
+  // Two guards. The address check gives the plain reason when the port is taken; the id check is the
+  // backstop for any other way a stranger ends up answering on the port this Chrome reported.
+  const endpoint = await listeningOn(proc, { profile, port, ms: 10_000 }).catch(fail)
   const where = new URL(endpoint)
   if (where.hostname !== '127.0.0.1')
     fail(
@@ -139,6 +142,8 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
       try {
         proc.kill('SIGKILL')
       } catch {}
+      // A helper Chrome started may hold the pipe's write end; don't let it keep this process alive.
+      proc.stderr.destroy()
       try {
         rmSync(profile, { recursive: true, force: true })
       } catch {}
@@ -148,21 +153,42 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
   return browser
 }
 
-/** The DevTools URL Chrome prints on stderr once it listens (ws://host:port/devtools/browser/<id>). */
-function listeningOn(proc, ms) {
+/**
+ * The DevTools URL this Chrome listens on (ws://host:port/devtools/browser/<id>).
+ *
+ * Chrome prints it on stderr. If no line has come after a second (a RIG_CHROME wrapper that swallows
+ * stderr), the DevToolsActivePort file Chrome writes into the profile (port, then path) answers
+ * instead; the id check in launch() still refuses a stranger. A port taken on 127.0.0.1 AND ::1 (a
+ * runner without IPv6) prints "Cannot start http server for devtools" and no URL: that is refused at
+ * once, by name, not after the full wait.
+ */
+function listeningOn(proc, { profile, port, ms }) {
   return new Promise((resolve, reject) => {
     let seen = ''
     const onData = (d) => {
       seen += d
       const m = seen.match(/DevTools listening on (ws:\/\/\S+)/)
       if (m) settle(null, m[1])
+      else if (/Cannot start http server for devtools/.test(seen))
+        settle(
+          new Error(`Port ${port} is already in use, so Chrome could not open DevTools. Leave out \`port\` and Chrome picks a free one.`),
+        )
     }
     const onExit = (code, signal) =>
       settle(new Error(`Chrome exited (${signal || code}) before it opened DevTools. Is it installed at ${CHROME}?`))
     const onError = (e) => settle(new Error(`Could not start Chrome at ${CHROME}: ${e.message}`))
     const timer = setTimeout(() => settle(new Error(`Chrome never opened DevTools within ${ms} ms. Is it installed at ${CHROME}?`)), ms)
+    const started = Date.now()
+    const poll = setInterval(() => {
+      if (Date.now() - started < 1000) return
+      try {
+        const [p, path] = readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')
+        if (Number(p) > 0 && path?.startsWith('/devtools/browser/')) settle(null, `ws://127.0.0.1:${p}${path.trim()}`)
+      } catch {}
+    }, 100)
     function settle(err, url) {
       clearTimeout(timer)
+      clearInterval(poll)
       proc.off('exit', onExit)
       proc.off('error', onError)
       proc.stderr.off('data', onData)

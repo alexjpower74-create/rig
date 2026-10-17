@@ -73,16 +73,26 @@ major version because every brief now opens differently and the plan template ha
   failed". Boards those checks had opened stayed listening, so the suite never exited, and `rig qa`
   sat silent for three hours.
 - **Now:** `launch()` defaults to port 0, so Chrome picks a free one. It reads the address Chrome
-  says it listens on, and it refuses a fixed port that is taken (`Port N is already in use on
-  127.0.0.1…`) instead of borrowing whatever answers there. No suite pins a port any more. The taste
-  suite stops every board it started, even after a failed check. `npm test` stops any file still
-  running after 10 minutes (`RIG_TEST_TIMEOUT_MS`) and names it. `rig qa` stops a command still
-  running after 30 minutes (`--timeout <min>`, `qaTimeoutMinutes`) and records exit 124, so a hang
-  is a red run instead of a silent one.
-- **Checked:** `test/launch-port.test.js`. Two suites launch together, the second opens a page, and
-  the first closes. Against a copy of the harness with the old `launch()` put back, the second
-  suite's page dies with the other run's browser, so both checks are seen red. `test/crew.test.js`
-  checks the `rig qa` limit: a command past it returns 124, and with the limit off it does not.
+  says it listens on, and it refuses a fixed port that is taken (`Port N is already in use…`)
+  instead of borrowing whatever answers there. That includes a runner without IPv6, where the
+  refusal comes at once instead of after a 10 s wait blamed on the Chrome install. No suite pins a
+  port any more. The taste suite stops every board it started, even after a failed check. `npm
+  test` stops any file still running after 20 minutes (`RIG_TEST_TIMEOUT_MS`) and names it. `rig
+  qa` stops a command still running after 60 minutes (`--timeout <min>`, `qaTimeoutMinutes`; a value
+  that is not a number of minutes is refused, never read as "no limit") and records exit 124. It
+  waits for the command's whole process group first, so nothing is still running in the worktree
+  when the lock comes off.
+- **What review caught in the fix:** fv2 found that a command behind a pipe that ignores SIGTERM
+  (`node x | cat`) outlived the first version of the limit: bash died, the run answered 124, and the
+  command kept running in a worktree the lock called free. fv2 also found `--timeout 10m` quietly
+  meant no limit, and that neither new port guard had been shown to fail on its own.
+- **Checked:** `test/launch-port.test.js`, four checks, each with its own control. Two suites
+  launch together, the second opens a page, and the first closes: with the old `launch()` the
+  second suite's page dies with the other run's browser. The address guard and the id guard are
+  each taken out alone. A port held on every address must be refused by name within 5 s.
+  `test/crew.test.js` runs the stubborn piped command against the limit, red with the first
+  version's stop. `test/qa-finish.test.js` checks exit 124, the freed lock, nothing left running,
+  and five bad `--timeout` values refused.
 
 ### Smaller
 - `goto()` clears its navigation deadline. Every suite that used it sat idle for the full 30 s

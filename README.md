@@ -145,10 +145,12 @@ was reset is printed by path. `--fresh` also removes ignored files (`git clean -
 refuse is to reset a tree that is not a detached QA worktree: a branch checkout sitting in a slot is
 left alone and the run takes the next one.
 
-A command still running after 30 minutes (`--timeout <min>`, or `qaTimeoutMinutes` in the config; 0
-turns it off) is stopped and recorded as exit 124. A suite that hangs is a red run with a reason,
-not a silent one that someone has to notice. `npm test` in this repo also stops any one test file
-after 10 minutes (`RIG_TEST_TIMEOUT_MS`).
+A command still running after 60 minutes (`--timeout <min>`, or `qaTimeoutMinutes` in the config; 0
+turns it off, and a value that is not a number of minutes is refused) is stopped and recorded as
+exit 124. The stop waits for the command's whole process group, so nothing it started is still
+writing in the worktree when the lock comes off. A suite that hangs is a red run with a reason, not
+a silent one that someone has to notice. `npm test` in this repo also stops any one test file after
+20 minutes (`RIG_TEST_TIMEOUT_MS`).
 
 Worktrees themselves are per project too: the default is `../.rig-worktrees/<repo dir name>`, written
 into `.rig/config.json` by `rig init`. A `.rig/config.json` written by rig 2.0 holds `../.rig-worktrees`;

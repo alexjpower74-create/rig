@@ -7,7 +7,7 @@
 // of state (a repo, a directory), the comment says so.
 
 import { suite } from '../harness/check.js'
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync, spawn } from 'node:child_process'
@@ -32,7 +32,7 @@ const commit = (repo, file, msg) => {
 
 await suite('rig 2.0, crew fixes', async (s) => {
   const { selectSliceTabs } = await import('../src/herdr.js')
-  const { resolveRef, exitCodeFor, runShell } = await import('../src/commands/qa.js')
+  const { resolveRef, exitCodeFor, runShell, groups } = await import('../src/commands/qa.js')
   const { ensureWorktree, ensureDetachedWorktree, divergence, shouldMoveLeftover } = await import('../src/worktrees.js')
   const { processesIn, insideDir } = await import('../src/procs.js')
   const { depsWarning } = await import('../src/commands/up.js')
@@ -181,6 +181,42 @@ await suite('rig 2.0, crew fixes', async (s) => {
         limitMs = 400
       }
     },
+  })
+
+  // fv2's review of 8ac8712: behind a pipe, bash dies on SIGTERM while a command that ignores it lives
+  // on. runShell must not answer 124 until the whole group is gone. The control is 8ac8712's stop:
+  // signal the group, SIGKILL on an unref'd timer, and settle as soon as bash exits.
+  const realStop = groups.stop
+  const stubbornPid = join(tmp, 'stubborn.pid')
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  let stubborn = 0
+  await s.check('a command behind a pipe that ignores SIGTERM is gone before the limit answers 124', {
+    assert: async () => {
+      rmSync(stubbornPid, { force: true })
+      const cmd = `node -e "require('fs').writeFileSync(process.argv[1], String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)" '${stubbornPid}' | cat`
+      const code = await runShell(cmd, { cwd: tmp, env: process.env, limitMs: 600 })
+      stubborn = Number(readFileSync(stubbornPid, 'utf8'))
+      return code === 124 && stubborn > 0 && !alive(stubborn)
+    },
+    breaks: () => {
+      groups.stop = (child, sig) => {
+        process.kill(-child.pid, sig)
+        setTimeout(() => process.kill(-child.pid, 'SIGKILL'), 5000).unref()
+        return Promise.resolve()
+      }
+      return () => {
+        groups.stop = realStop
+        if (stubborn && alive(stubborn)) process.kill(stubborn, 'SIGKILL')
+      }
+    },
+    timeout: 15_000,
   })
 
   // ---------------------------------------------------------------------------------------------

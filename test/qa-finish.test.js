@@ -227,6 +227,29 @@ test('a signal reaches the command running in the worktree; the lock is released
   assert.ok(!existsSync(marker), 'the orphaned command must not keep writing into a tree the lock says is free')
 })
 
+test('--timeout: a hang ends as exit 124 with the lock free and nothing left running; a bad value runs nothing', async () => {
+  const repo = repoAt('timeout')
+  const pidFile = join(repo, '.worktrees', 'qa', 'stubborn.pid')
+  // Behind a pipe, ignoring SIGTERM: the shape that outlived rig qa in fv2's review of 8ac8712.
+  const stubborn = `node -e "require('fs').writeFileSync('stubborn.pid', String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)" | cat`
+  const r = rig('qa', repo, ['HEAD', '--run', stubborn, '--timeout', '0.01'])
+  assert.equal(r.status, 124, r.out)
+  assert.match(r.out, /still running after 600 ms; stopping it \(exit 124\)/)
+  assert.ok(!existsSync(qaLockPath(join(repo, '.worktrees', 'qa'))), 'the lock is released')
+  const pid = Number(readFileSync(pidFile, 'utf8'))
+  assert.throws(() => process.kill(pid, 0), /ESRCH/, 'the command behind the pipe is gone, not orphaned in the tree')
+  assert.equal(lastQaOn(repo, git(['rev-parse', 'HEAD'], repo)).exit, 124)
+  // A limit that does not parse is refused, never read as "no limit".
+  for (const bad of [['--timeout', 'abc'], ['--timeout', '10m'], ['--timeout', '-5'], ['--timeout', '--fresh'], ['--timeout']]) {
+    const b = rig('qa', repoAt(`timeout-bad-${bad.join('').replace(/\W/g, '')}`), ['HEAD', '--run', 'true', ...bad])
+    assert.equal(b.status, 2, `${bad.join(' ')} → ${b.out}`)
+    assert.match(b.out, /takes a number of minutes/)
+  }
+  // Known-good beside them: 0 is "no limit", and a plain number is minutes.
+  assert.equal(rig('qa', repoAt('timeout-zero'), ['HEAD', '--run', 'true', '--timeout', '0']).status, 0)
+  assert.equal(rig('qa', repoAt('timeout-five'), ['HEAD', '--run', 'true', '--timeout', '5']).status, 0)
+})
+
 const twoAtOnce = (repo) =>
   Promise.all(
     [0, 1].map(
