@@ -59,6 +59,10 @@ const noGuards = await variant('no-guards', [
   [addressGuard, '\n'],
   [idGuard, '\n'],
 ])
+const noAddressNorTaken = await variant('no-address-nor-taken', [
+  [addressGuard, '\n'],
+  [/\n {6}else if \(\/Cannot start http server for devtools\/[\s\S]*?\n {8}\)\n/, '\n'],
+])
 const noTakenLine = await variant('no-taken-line', [[/\n {6}else if \(\/Cannot start http server for devtools\/[\s\S]*?\n {8}\)\n/, '\n']])
 // Only written to disk: the check below runs it in a child process.
 await variant('keeps-ref', [['  if (!keepAlive) {\n    proc.unref()\n    proc.stderr?.unref?.()\n  }\n', '']])
@@ -106,7 +110,9 @@ async function secondOutlivesFirst(opts, refusal = null) {
     try {
       b = await cdp.launch({ headless: true, ...opts })
     } catch (e) {
-      return refusal ? refusal.test(e.message) : false
+      const ok = refusal ? refusal.test(e.message) : false
+      if (!ok) console.log(`        refused with: ${e.message}`)
+      return ok
     }
     page = await b.newPage('data:text/html,<p>mine')
     await a.close()
@@ -127,11 +133,15 @@ await suite('launch() owns its browser', async (s) => {
     timeout: 30_000,
   })
 
-  // The address guard: Chrome said [::1], so the port is taken on 127.0.0.1. Without the guard the
-  // id check still refuses, but with a reason that names a stranger instead of the port.
+  // Told by name, whichever way the machine fails it: where Chrome falls back to [::1] the address
+  // guard names the port, and where it cannot (a runner without IPv6 loopback) the "Cannot start"
+  // line does. Requiring the [::1] wording went red on a GitHub runner on 2026-10-17 while the
+  // second suite was in fact refused. The control takes both out: then the id check refuses with
+  // "Another browser answers" (IPv6) or the launch waits out its 10 s (no IPv6), and neither says
+  // "in use". The address guard on its own is check 3's control; the "Cannot start" line, check 4's.
   await s.check('two suites asking for one port: the second is told plainly that the port is taken', {
-    assert: async () => secondOutlivesFirst({ port: await freePort() }, /already in use on 127\.0\.0\.1/),
-    breaks: use(noAddressGuard),
+    assert: async () => secondOutlivesFirst({ port: await freePort() }, /already in use/),
+    breaks: use(noAddressNorTaken),
     timeout: 30_000,
   })
 

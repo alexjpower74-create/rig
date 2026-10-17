@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `test/launch-port.test.js`: the "told plainly that the port is taken" check accepts either plain
+  refusal. On a GitHub runner on 2026-10-17 it went red although the second suite was refused: it
+  required the [::1] wording, and that machine refused with the other one. Its control now takes
+  both guards out, so it goes red with IPv6 loopback and without it. A refusal it doesn't expect is
+  printed. Tests only; 5.0.1's code is unchanged.
+
 ## 5.0.1 — the rating board fits a phone, whatever the reference is called
 
 - **What went wrong:** on the Mac, the night 5.0.0 shipped, `rig taste` at 390×844 laid out 409 px
