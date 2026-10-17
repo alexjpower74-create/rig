@@ -123,7 +123,7 @@ async function withChrome(bin, name, edits) {
 const lockedNew = await withChrome(lockedChrome, 'locked-new', [])
 const lockedOld = await withChrome(lockedChrome, 'locked-old', [
   [
-    / {4}\/\/ Chrome's helpers can still be writing into the profile[\s\S]*?\} catch \{\}\n/,
+    / {4}\/\/ Chrome's helpers can still be writing into the profile[\s\S]*?cleanLater\(\[profile\]\)\n {4}\}\n/,
     '    rmSync(profile, { recursive: true, force: true })\n',
   ],
 ])
@@ -250,7 +250,8 @@ await suite('launch() owns its browser', async (s) => {
     timeout: 20_000,
   })
 
-  // Chrome that exits before its last stderr line is read: the line still names the port.
+  // Chrome that exits before its last stderr line is read: the line still names the port. Hardening;
+  // real Chrome 155 keeps running when its port is taken (the 5.0.2 review).
   if (process.platform !== 'win32') {
     let lib = fakeNew
     await s.check('a Chrome that quits before its last line is read is still refused for the port, not the install', {
@@ -275,7 +276,10 @@ await suite('launch() owns its browser', async (s) => {
   }
 
   // A profile that cannot be removed while Chrome's helpers write into it must not replace the reason.
-  if (process.platform !== 'win32') {
+  // Root can delete a read-only folder, so there the control could never go red: skipped, by name.
+  const isRoot = process.getuid?.() === 0
+  if (isRoot) console.log('  skipped: running as root, a read-only folder cannot block the cleanup')
+  if (process.platform !== 'win32' && !isRoot) {
     let lib = lockedNew
     await s.check('a profile that will not go away never hides why the launch was refused', {
       assert: async () => {

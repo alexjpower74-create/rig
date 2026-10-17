@@ -54,19 +54,7 @@ function installReaper() {
     // Chrome's helpers write into the profile for a moment after the browser is killed, and 'exit'
     // cannot wait, so a detached process removes the profiles once they are done. Without it every
     // reaped browser left a rig-chrome-* folder in tmp (fv2).
-    if (profiles.length)
-      try {
-        spawn(
-          process.execPath,
-          [
-            '-e',
-            // One profile that will not go (a helper still writing on macOS, a file Windows holds open)
-            // must not leave the others: each is tried on its own, with retries (fv2).
-            `setTimeout(() => { for (const p of ${JSON.stringify(profiles)}) try { require('fs').rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }) } catch {} }, 1500)`,
-          ],
-          { detached: true, stdio: 'ignore' },
-        ).unref()
-      } catch {}
+    cleanLater(profiles)
   }
   process.on('exit', reap)
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -79,6 +67,25 @@ function installReaper() {
     reap()
     throw err
   })
+}
+
+/**
+ * Remove these folders from a detached process, 1.5 s from now, once Chrome's helpers have stopped
+ * writing into them. One that will not go (a helper still writing on macOS, a file Windows holds
+ * open) must not leave the others: each is tried on its own, with retries (fv2).
+ */
+function cleanLater(paths) {
+  if (!paths.length) return
+  try {
+    spawn(
+      process.execPath,
+      [
+        '-e',
+        `setTimeout(() => { for (const p of ${JSON.stringify(paths)}) try { require('fs').rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }) } catch {} }, 1500)`,
+      ],
+      { detached: true, stdio: 'ignore' },
+    ).unref()
+  } catch {}
 }
 
 /** How many browsers this process still has open. Exported so a suite can assert it cleaned up. */
@@ -125,7 +132,9 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
     // "Port N is already in use".
     try {
       rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
-    } catch {}
+    } catch {
+      cleanLater([profile])
+    }
     throw err
   }
   // Own the endpoint: read where this Chrome listens, then make sure 127.0.0.1 answers as this Chrome.
@@ -198,6 +207,7 @@ function listeningOn(proc, { profile, port, ms }) {
   return new Promise((resolve, reject) => {
     let seen = ''
     let settled = false
+    let exitTimer
     const onData = (d) => {
       seen += d
       const m = seen.match(/DevTools listening on (ws:\/\/\S+)/)
@@ -207,13 +217,13 @@ function listeningOn(proc, { profile, port, ms }) {
           new Error(`Port ${port} is already in use, so Chrome could not open DevTools. Leave out \`port\` and Chrome picks a free one.`),
         )
     }
-    // 'exit' can arrive before Chrome's last stderr lines are read. Blaming the install at once
-    // turned "the port is taken" into "Chrome exited" on a GitHub runner, so the stderr already on its
-    // way gets a moment (or the stream's end) to name the real reason first.
+    // 'exit' can arrive before Chrome's last stderr lines are read, and blaming the install at once
+    // would then hide the real reason. Hardening: Chrome 155 keeps running when its port is taken,
+    // so this has not been seen with real Chrome; the stand-in check proves the ordering is handled.
     const onExit = (code, signal) => {
       const blame = () => settle(new Error(`Chrome exited (${signal || code}) before it opened DevTools. Is it installed at ${CHROME}?`))
       proc.stderr.once('end', () => setImmediate(blame))
-      setTimeout(blame, 300)
+      exitTimer = setTimeout(blame, 300)
     }
     const onError = (e) => settle(new Error(`Could not start Chrome at ${CHROME}: ${e.message}`))
     const timer = setTimeout(() => settle(new Error(`Chrome never opened DevTools within ${ms} ms. Is it installed at ${CHROME}?`)), ms)
@@ -229,6 +239,7 @@ function listeningOn(proc, { profile, port, ms }) {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      clearTimeout(exitTimer)
       clearInterval(poll)
       proc.off('exit', onExit)
       proc.off('error', onError)

@@ -100,3 +100,26 @@ Two nice-to-haves:
 The lead made the cleaner try each profile on its own, with retries. Before and after, with the
 first profile made unremovable (a 0555 subfolder): the old cleaner exits 1 and leaves the second
 profile; the new one exits 0 and removes it. (b) is a line in the README.
+
+## 5.0.2: a refused launch always says why (fresh-eyes review)
+
+GitHub's runner went red on 5.0.1's port checks, though the second suite was refused each time. A
+printout added to the check showed the cause. fail() removed the profile while Chrome's helpers were
+still writing into it. rmSync threw "ENOTEMPTY … rig-chrome-…", and that error replaced "Port N is
+already in use". The fix: wrap the removal in try, retry it, and hand anything left to the detached
+cleaner.
+
+Reviewed by a fresh agent that wrote neither commit (d25c860, cef38be). **PASS, no defects.**
+- **The exit handling is sound:** no double settle, the timer always fires, no delay on success.
+- **Both stand-in controls go red for the right reason,** locally and on CI.
+- **macOS's sh** handles the stand-ins.
+- **d25c860 alone** was red on CI from ENOTEMPTY; the try/catch in cef38be is the real fix.
+
+Suggestions taken:
+- The exit ordering is hardening, not a cause: Chrome 155 keeps running when its port is taken. The
+  CHANGELOG and a comment now say so.
+- A profile left after the retries goes to the detached cleaner.
+- The read-only check is skipped, by name, under root, where its control could never go red.
+- The 300 ms exit timer is cleared in settle().
+
+Not taken: the up-to-1.5 s retry on a failure path, which is acceptable.

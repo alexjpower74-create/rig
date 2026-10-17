@@ -6,11 +6,12 @@
   refused every time. (1) When a launch is refused, `launch()` removes the profile it made. Chrome's
   helpers were still writing into it, so the removal threw "ENOTEMPTY … rig-chrome-…", and that
   error replaced the reason ("Port N is already in use"). A printout added to the check showed it.
-  (2) Chrome can also exit before its last stderr line is read, and `launch()` then blamed the
-  install ("Chrome exited … Is it installed?") for what was really a taken port. (3) The "told
-  plainly" check required the [::1] wording, and that machine refused with the other.
-- **Now:** a failed cleanup never replaces the reason a launch was refused; the profile removal is
-  retried, then left. After 'exit', `launch()` lets the stderr already on its way arrive (the stream's end, or
+  (2) The "told plainly" check required the [::1] wording, and that machine refused with the other.
+  Hardening besides: if Chrome ever exits before its last stderr line is read, `launch()` would
+  have blamed the install ("Chrome exited … Is it installed?") for a taken port. Real Chrome 155
+  keeps running in that case, so this is guarded rather than seen.
+- **Now:** a failed cleanup never replaces the reason a launch was refused. The profile removal is
+  retried, then handed to the same detached cleaner the reaper uses. After 'exit', `launch()` lets the stderr already on its way arrive (the stream's end, or
   300 ms) before it blames the install, so a taken port is named as one. The check accepts either
   plain refusal; its control takes both guards out, so it is red with IPv6 loopback and without it.
   An unexpected refusal message is printed.
@@ -19,7 +20,9 @@
   refused for the port, and with the old cleanup put back it is red ("EACCES, Permission denied").
   The other exits at once and prints "Cannot start http server for devtools" 100 ms later from a
   child: it is refused for the port, and with the old exit handler put back it is red ("Chrome
-  exited (1)").
+  exited (1)"). The read-only check is skipped by name when run as root, where it could not go red.
+  A fresh-eyes review: PASS, no defects; its five suggestions were taken except one (a 1.5 s retry on
+  a failure path is fine).
 
 ## 5.0.1 — the rating board fits a phone, whatever the reference is called
 
