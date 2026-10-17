@@ -19,7 +19,7 @@ html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;backgrou
   font:15px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 button,input{font:inherit;color:inherit}
 button{touch-action:manipulation;-webkit-tap-highlight-color:transparent;cursor:pointer}
-#app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;max-width:1600px;margin:0 auto}
+#app{height:100dvh;display:grid;grid-template-rows:auto 1fr auto;grid-template-columns:minmax(0,1fr);max-width:1600px;margin:0 auto}
 header{display:flex;align-items:center;gap:8px;padding:8px max(12px,env(safe-area-inset-left)) 4px}
 .icon{min-width:44px;height:44px;border:0;background:transparent;border-radius:22px;font-size:26px;line-height:1;display:grid;place-items:center}
 .icon:disabled{opacity:.25;cursor:default;background:transparent}

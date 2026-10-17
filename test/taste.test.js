@@ -238,6 +238,10 @@ async function fitsWithoutScrolling(page) {
     if (d.scrollWidth > innerWidth || d.scrollHeight > innerHeight) return 'the page overflows: ' + d.scrollWidth + '×' + d.scrollHeight
     const app = document.getElementById('app')
     if (app && app.scrollHeight > app.clientHeight + 1) return '#app overflows'
+    // Sideways too: body's overflow:hidden clips a too-wide #app, so the document never reports it
+    // (5.0.0 on the Mac: scrollWidth 390, the board 409). Found by the 5.0.1 review.
+    if (app && app.scrollWidth > app.clientWidth + 1) return '#app overflows sideways: ' + app.scrollWidth + ' in ' + app.clientWidth
+    if (app && app.getBoundingClientRect().right > innerWidth + 1) return '#app is wider than the screen: ' + Math.round(app.getBoundingClientRect().right)
     const footer = document.getElementById('footer')
     const need = [...document.querySelectorAll('.rate, .comp .star, .comp .pick'), document.getElementById('note'), document.getElementById('done'), document.getElementById('back')]
     for (const el of need) {
@@ -793,6 +797,47 @@ await suite('rig taste', async (s) => {
       }
     },
     breaks: pageBreak(`(() => { const b = document.getElementById('back'); b.replaceWith(b.cloneNode(true)) })()`),
+  })
+
+  // On the Mac the phone board was 409 px wide on a 390 px screen: #app's one grid column took the
+  // reference's whole name as its minimum width (Apple's serif is wider than Linux's), and the 5 and
+  // Done went off the edge. A name long enough does it on any machine. Found by the Mac run of 5.0.0.
+  await s.check('a long reference name or question never widens the board past a phone screen', {
+    assert: async () => {
+      const dir = join(work, 'long-name-refs')
+      mkdirSync(dir, { recursive: true })
+      const name = 'a-reference-with-a-very-long-file-name-that-will-never-fit-across-a-phone-screen.png'
+      writeFileSync(join(dir, name), bandsPng(800, 500, [52, 58, 64], [92, 99, 106]))
+      const w = VIEWPORTS.phone.width
+      // The same header carries a comps round's question: a long --ask did it too (985 px on 5.0.0).
+      const ask = 'Which of these headers feels calm enough to read at the counter on a busy Saturday morning?'
+      const rounds = [
+        [['--from', dir, '--port', '0', '--no-open'], 'the long name'],
+        [['--comps', fx.comps, '--ask', ask, '--port', '0', '--no-open'], 'the long question'],
+      ]
+      for (const [args, what] of rounds) {
+        const b = await board(args)
+        const page = await openBoard(browser, b.url, VIEWPORTS.phone)
+        try {
+          const fit = await fitsWithoutScrolling(page)
+          const edge = await page.eval('Math.round(document.querySelector("header").getBoundingClientRect().right)')
+          // The name is cut, not just narrow: its ellipsis is on.
+          const cut =
+            what === 'the long name'
+              ? await page.eval('(() => { const n = document.getElementById("name"); return n.scrollWidth > n.clientWidth })()')
+              : true
+          if (fit !== true || edge > w || !cut)
+            console.log(`        ${what}: ${fit}; the header ends at ${edge} px on a ${w} px screen; cut ${cut}`)
+          if (fit !== true || edge > w || !cut) return false
+        } finally {
+          await page.close()
+          await b.stop()
+        }
+      }
+      return true
+    },
+    // The control: #app's column back to auto, as in 5.0.0.
+    breaks: pageBreak(`document.getElementById('app').style.gridTemplateColumns = 'auto'`),
   })
 
   await s.check('a re-run keeps every round: a comps-only round after round 1 loses none of its ratings', {

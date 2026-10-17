@@ -467,3 +467,28 @@ orphans its own headless Chrome. That Chrome is not piped to the suite, so it ca
 open, and the old path had the same gap. Not blocking.
 
 **Verdict: PASS** at 0dc86b3.
+
+## 5.0.1: the board on a phone with a long name (fresh-eyes review)
+
+Found after 5.0.0 shipped, by the Mac's run of the suite. At 390×844 the board laid out 409 px wide
+(Apple's serif is wider than Linux's), and the 5 and Done went off the edge. `#app`'s single `auto`
+grid column took the reference's whole file name as its minimum width, before the ellipsis could
+apply. Fix: `grid-template-columns: minmax(0, 1fr)`.
+
+Reviewed by a fresh agent that had not written the fix. **PASS.**
+- **Probe against true 5.0.0.** With a long name the header is 721 px wide, against 390 with the
+  fix. Every rectangle is identical for normal names across the reference view, the desktop comps
+  grid, the phone comps chips and the end screen, at 390, 1440, 1800 and 2560 wide. Above 1600 px,
+  `#app` is still 1600 wide and centred. No other container in page.js has the same trap.
+- **The new check is sound.** Its control logs "rate is off screen; the header ends at 721 px". The
+  full suite gave 32 passed and exit 0.
+
+Its three suggestions were taken. The fit check now also catches sideways overflow, which body's
+`overflow: hidden` used to hide. A long `--ask` question is covered too: it was 985 px on 5.0.0.
+The check also asserts the name is actually cut, and reads the width from the viewport.
+
+Also checked by the lead:
+- On the Mac with the fix, the header and footer end at 390, and Done and 5 are on screen.
+- In WebKit at iPhone 13 size, with a long name, the header ends at 390 and the name ends in "…".
+
+**Verdict: PASS.**

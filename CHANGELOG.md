@@ -1,5 +1,22 @@
 # Changelog
 
+## 5.0.1 — the rating board fits a phone, whatever the reference is called
+
+- **What went wrong:** on the Mac, the night 5.0.0 shipped, `rig taste` at 390×844 laid out 409 px
+  wide: the 5 and Done went off the right edge. `#app` is a grid with no column template, so its one
+  `auto` column took the reference's whole file name as its minimum width before the name's ellipsis
+  could apply. Apple's serif is wider than Linux's, so the Mac crossed 390 and Linux did not; a name
+  long enough does it anywhere, an iPhone included.
+- **Now:** `#app` has `grid-template-columns: minmax(0, 1fr)`. A long name ends in "…", and the board
+  is exactly as wide as the screen on the Mac, on Linux, and in WebKit at iPhone 13 size.
+  A long `--ask` question had the same bug (985 px on 5.0.0) and is fixed by the same line.
+- **Checked:** `test/taste.test.js` opens a board whose reference has an 85-character name, then a
+  comps round with a long question, at 390×844. Each must fit with nothing off screen, the header
+  must end within the screen, and the name must actually be cut. The control puts the `auto` column
+  back and goes red. Every fit check in the suite now also catches sideways overflow: before, the
+  body's `overflow: hidden` clipped a too-wide board, so the page still measured 390. A fresh-eyes
+  review measured every other view, at 390, 1440, 1800 and 2560 wide, and found them unchanged.
+
 ## 5.0.0 — briefs that aim high, bars you can measure, taste you can click
 
 Rig 5.0 builds Steve Clarke's creative prompt into the tool. He shared it with one line, "Take what's
