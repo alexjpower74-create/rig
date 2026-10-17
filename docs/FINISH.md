@@ -1,6 +1,6 @@
 # Rig 5.0 — briefs that aim high, bars you can measure, taste you can click — finished report
 
-Commit: `51038d5`
+Commit: `5878bd1`
 
 ## What changed
 - `rig up` writes slice briefs that open with the mindset block and carry the new sections, in this
@@ -14,7 +14,7 @@ Commit: `51038d5`
 - The version is 5.0.0. The lead writes the README and the CHANGELOG from the build reports.
 
 ## The proof
-- `npm ci --silent && npm run check` exited **0** on `51038d5` (2026-10-17T01:11:38.128Z)
+- `npm ci --silent && npm run check` exited **0** on `5878bd1` (2026-10-17T01:35:42.960Z)
 - ✓ fv1 merged
 - ✓ fv2 merged
 - ✓ fv3 merged
@@ -22,8 +22,8 @@ Commit: `51038d5`
 - ✓ fv2 reviewed — docs/review-fv2.md
 - ✓ fv3 reviewed — docs/review-fv3.md
 - ✓ no uncommitted work
-- ✓ QA green on 51038d5 — npm ci --silent && npm run check
-- ✓ negative controls red on 51038d5 — npm run demo
+- ✓ QA green on 5878bd1 — npm ci --silent && npm run check
+- ✓ negative controls red on 5878bd1 — npm run demo
 - ✓ QA left the tree clean
 - ✓ fv1 report — docs/build-report-fv1.md
 - ✓ fv2 report — docs/build-report-fv2.md
@@ -34,12 +34,12 @@ Commit: `51038d5`
 - ✓ README
 
 ## Desk
-- ✓ close fv1 issue #8
-- ✓ close fv2 issue #9
-- ✓ close fv3 issue #10
-- ✓ jot "[rig] Rig 5.0 — briefs that aim high, bars you can measure, taste you can click: finished at 51038d5; npm ci --silent && npm run check exit 0; 3 slices"
+- – close fv1 issue #8 — #8 is already closed
+- – close fv2 issue #9 — #9 is already closed
+- – close fv3 issue #10 — #10 is already closed
+- ✓ jot "[rig] Rig 5.0 — briefs that aim high, bars you can measure, taste you can click: finished at 5878bd1; npm ci --silent && npm run check exit 0; 3 slices"
 - ✓ apps touch rig
-- next: `wrap rig "Rig 5.0 — briefs that aim high, bars you can measure, taste you can click: finished at 51038d5; npm ci --silent && npm run check exit 0; 3 slices"`
+- next: `wrap rig "Rig 5.0 — briefs that aim high, bars you can measure, taste you can click: finished at 5878bd1; npm ci --silent && npm run check exit 0; 3 slices"`
 
 ## The pictures
 - `docs/shots/taste-comps-desktop-dark.png`
