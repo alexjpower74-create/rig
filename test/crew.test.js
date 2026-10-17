@@ -172,6 +172,17 @@ await suite('rig 2.0, crew fixes', async (s) => {
     },
   })
 
+  let limitMs = 400
+  await s.check('a command still running past --timeout is stopped and reported as 124, not waited on', {
+    assert: async () => (await runShell('sleep 3', { cwd: tmp, env: process.env, limitMs })) === 124,
+    breaks: async () => {
+      limitMs = 0
+      return () => {
+        limitMs = 400
+      }
+    },
+  })
+
   // ---------------------------------------------------------------------------------------------
   // Leftover branches: merged ones move up to base; unmerged ones never move, even behind a tag.
   const repo = repoAt('repo')

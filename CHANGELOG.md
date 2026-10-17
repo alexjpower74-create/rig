@@ -76,10 +76,13 @@ major version because every brief now opens differently and the plan template ha
   says it listens on, and it refuses a fixed port that is taken (`Port N is already in use on
   127.0.0.1…`) instead of borrowing whatever answers there. No suite pins a port any more. The taste
   suite stops every board it started, even after a failed check. `npm test` stops any file still
-  running after 10 minutes (`RIG_TEST_TIMEOUT_MS`) and names it.
+  running after 10 minutes (`RIG_TEST_TIMEOUT_MS`) and names it. `rig qa` stops a command still
+  running after 30 minutes (`--timeout <min>`, `qaTimeoutMinutes`) and records exit 124, so a hang
+  is a red run instead of a silent one.
 - **Checked:** `test/launch-port.test.js`. Two suites launch together, the second opens a page, and
   the first closes. Against a copy of the harness with the old `launch()` put back, the second
-  suite's page dies with the other run's browser, so both checks are seen red.
+  suite's page dies with the other run's browser, so both checks are seen red. `test/crew.test.js`
+  checks the `rig qa` limit: a command past it returns 124, and with the limit off it does not.
 
 ### Smaller
 - `goto()` clears its navigation deadline. Every suite that used it sat idle for the full 30 s

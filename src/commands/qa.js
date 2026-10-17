@@ -16,7 +16,7 @@ import { recordQa } from '../qalog.js'
 // the tests left behind, is printed by path and recorded: a tree that is not clean right after
 // `npm test` is a defect, and `rig finish` will say so.
 
-export const USAGE = `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--port <n>] [--fresh]
+export const USAGE = `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--port <n>] [--timeout <min>] [--fresh]
 
   <ref>              the commit to pin (a sha, a branch, a tag); defaults to the current branch of
                      the MAIN checkout. Give the sha: "rig qa" alone grades main, not your slice.
@@ -25,6 +25,8 @@ export const USAGE = `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--por
   --negative "<cmd>" the negative-control command (default: negativeCommand in the config or the
                      plan's "Negative controls:" line); recorded as kind "negative" on the same sha
   --port <n>         PORT for the command (default: qaPort, +1 per extra QA worktree in use)
+  --timeout <min>    stop a command still running after this many minutes and record exit 124
+                     (default: qaTimeoutMinutes in the config, else 30; 0 = no limit)
   --fresh            clean ignored files too (git clean -fdx): node_modules is reinstalled
   --help, -h         this text
 
@@ -77,6 +79,8 @@ export default async function qa(args) {
   }
 
   const env = { ...process.env, PORT: String(port), RIG_QA_SHA: sha }
+  const minutes = Number(argOf(args, '--timeout') ?? cfg.qaTimeoutMinutes ?? 30)
+  const limitMs = minutes > 0 ? minutes * 60_000 : 0
   let exit = 0
   const seen = new Set()
   const runs = [
@@ -85,7 +89,7 @@ export default async function qa(args) {
   ].filter(([, c]) => c)
   for (const [kind, c] of runs) {
     console.log(`\n$ ${c}   (PORT=${port}${kind === 'negative' ? ', negative control' : ''})\n`)
-    const code = await runShell(c, { cwd: wt.path, env })
+    const code = await runShell(c, { cwd: wt.path, env, limitMs })
     const left = dirtiedBy(wt.path)
     const dirtied = left.tracked.filter((p) => !seen.has(p))
     const untracked = left.untracked.filter((p) => !seen.has(p))
@@ -182,7 +186,7 @@ function signalGroup(child, sig) {
   }
 }
 
-const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative'])
+const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative', '--timeout'])
 
 /**
  * The commit to pin. `--ref` and `--branch` win; otherwise the first bare argument; otherwise the
@@ -224,8 +228,12 @@ export function exitCodeFor(code, signal) {
  * Run a command line and resolve with its exit status. Uses bash with `pipefail` when bash exists,
  * so `npm test | tail -20` fails when the tests fail instead of reporting tail's success — the
  * other way a red QA run came back 0.
+ *
+ * `limitMs` stops a command still running past it and resolves 124, as GNU timeout does. On
+ * 2026-10-16 a suite left a server listening after a failed check, never exited, and a lead waiting
+ * on `rig qa` sat silent for three hours: a hang has to end as a failure with a name.
  */
-export function runShell(cmd, { cwd, env, shell, mapExit = exitCodeFor } = {}) {
+export function runShell(cmd, { cwd, env, shell, mapExit = exitCodeFor, limitMs = 0 } = {}) {
   const bash = shell ?? findBash()
   if (!bash) console.error('rig qa: bash not found — running under sh without pipefail; a failure inside a pipe can read as exit 0.')
   const [file, argv] = bash ? [bash, bash.endsWith('bash') ? ['-o', 'pipefail', '-c', cmd] : ['-c', cmd]] : ['/bin/sh', ['-c', cmd]]
@@ -233,13 +241,25 @@ export function runShell(cmd, { cwd, env, shell, mapExit = exitCodeFor } = {}) {
     // Its own process group, so a signal can reach everything the command started, not just bash.
     const child = spawn(file, argv, { cwd, env, stdio: 'inherit', detached: process.platform !== 'win32' })
     running = child
+    let timedOut = false
+    const limit =
+      limitMs > 0 &&
+      setTimeout(() => {
+        timedOut = true
+        console.error(`\nrig qa: still running after ${fmtLimit(limitMs)}; stopping it (exit 124). Raise it with --timeout <min>.`)
+        signalGroup(child, 'SIGTERM')
+        setTimeout(() => signalGroup(child, 'SIGKILL'), 5000).unref()
+      }, limitMs)
     child.on('exit', (code, signal) => {
+      clearTimeout(limit)
       running = null
-      resolve(mapExit(code, signal))
+      resolve(timedOut ? 124 : mapExit(code, signal))
     })
     child.on('error', () => resolve(127))
   })
 }
+
+const fmtLimit = (ms) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${ms} ms`)
 
 /** bash from /bin, or anywhere on PATH (NixOS and some containers have no /bin/bash). */
 function findBash() {
