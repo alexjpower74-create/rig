@@ -10,7 +10,7 @@
 // Each guard has its own control: a copy of the harness with just that guard taken out (or, for the
 // default port, the old launch() put back) must turn its check red.
 
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -61,7 +61,7 @@ const noGuards = await variant('no-guards', [
 ])
 const noTakenLine = await variant('no-taken-line', [[/\n {6}else if \(\/Cannot start http server for devtools\/[\s\S]*?\n {8}\)\n/, '\n']])
 // Only written to disk: the check below runs it in a child process.
-await variant('keeps-ref', [['  proc.unref()\n  proc.stderr?.unref?.()\n', '']])
+await variant('keeps-ref', [['  if (!keepAlive) {\n    proc.unref()\n    proc.stderr?.unref?.()\n  }\n', '']])
 
 const fixed = await import(pathToFileURL(join(harness, 'cdp.js')).href)
 let cdp = fixed
@@ -177,14 +177,15 @@ await suite('launch() owns its browser', async (s) => {
     timeout: 20_000,
   })
 
-  // A suite that never closes its browser still ends, and takes its Chrome with it.
+  // A suite that never closes its browser (with no page left open) still ends, and takes its Chrome
+  // and its profile with it. A page left open holds its WebSocket, and so the suite, as in Rig 4.
   let lib = join(harness, 'cdp.js')
-  await s.check('a browser left open does not keep the suite alive; it is gone when the suite ends', {
+  await s.check('a browser left open, with no page, does not keep the suite alive; it and its profile are gone at the end', {
     assert: async () => {
       const script = join(tmp, 'left-open.mjs')
       writeFileSync(
         script,
-        `const { launch } = await import(${JSON.stringify(pathToFileURL(lib).href)})\nconst b = await launch({ headless: true })\nconsole.log('pid ' + b.proc.pid)\n`,
+        `const { launch } = await import(${JSON.stringify(pathToFileURL(lib).href)})\nconst b = await launch({ headless: true })\nconsole.log('pid ' + b.proc.pid + ' profile ' + b.profile)\n`,
       )
       const child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'inherit'] })
       let out = ''
@@ -193,6 +194,7 @@ await suite('launch() owns its browser', async (s) => {
       })
       const exited = await Promise.race([new Promise((r) => child.on('exit', () => r(true))), sleep(4000).then(() => false)])
       const pid = Number(out.match(/pid (\d+)/)?.[1])
+      const profile = out.match(/profile (\S+)/)?.[1]
       if (!exited) child.kill('SIGKILL')
       await sleep(200)
       let chromeGone = true
@@ -201,7 +203,11 @@ await suite('launch() owns its browser', async (s) => {
         chromeGone = false
         process.kill(pid, 'SIGKILL')
       } catch {}
-      return exited && pid > 0 && chromeGone
+      // The reaper's cleaner removes the profile 1.5 s after exit, once Chrome's helpers are done with it.
+      for (let i = 0; i < 40 && profile && existsSync(profile); i++) await sleep(100)
+      const profileGone = Boolean(profile) && !existsSync(profile)
+      if (profile) rmSync(profile, { recursive: true, force: true })
+      return exited && pid > 0 && chromeGone && profileGone
     },
     breaks: () => {
       lib = join(tmp, 'keeps-ref', 'cdp.js')

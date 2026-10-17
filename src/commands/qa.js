@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, currentBranch } from '../config.js'
 import { acquireQaWorktree, porcelainLines } from '../worktrees.js'
@@ -53,9 +53,13 @@ export default async function qa(args) {
   const given = args.includes('--timeout')
   const raw = given ? argOf(args, '--timeout') : (cfg.qaTimeoutMinutes ?? 60)
   const minutes = typeof raw === 'number' ? raw : /^\d+(\.\d+)?$/.test(raw ?? '') ? Number(raw) : Number.NaN
-  if (!Number.isFinite(minutes) || minutes < 0) {
+  // setTimeout holds at most 2^31 - 1 ms; past that Node fires after 1 ms, so "99999" meant to be
+  // generous stopped every run at once (fv2). Refuse it and point at 0.
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > MAX_MINUTES) {
     const from = given ? '--timeout' : 'qaTimeoutMinutes in .rig/config.json'
-    console.error(`rig qa: ${from} takes a number of minutes (0 = no limit), not ${JSON.stringify(raw ?? null)}. Nothing was run.`)
+    console.error(
+      `rig qa: ${from} takes a number of minutes up to ${MAX_MINUTES} (0 = no limit), not ${JSON.stringify(raw ?? null)}. Nothing was run.`,
+    )
     process.exit(2)
   }
   const limitMs = minutes * 60_000
@@ -182,19 +186,39 @@ function holdLock(wt) {
 /** The command currently running in the QA worktree, so a signal can reach it. */
 let running = null
 
-/** True while any process in the group led by `pid` is left. */
-function groupAlive(pid) {
+/**
+ * The processes still in the group led by `pgid`, as [pid, state], zombies left out: a zombie has
+ * finished and only waits for its parent's wait(). Under PID 1 (a container started as `node
+ * bin/rig.js qa …` without an init) the orphans of the group are reparented to rig qa itself, which
+ * never reaps what it did not spawn, so kill(-pgid, 0) kept answering "alive" for ever: the
+ * three-hour hang again, in the shape CI uses (fv2's verification of c238a03). On Linux this reads
+ * /proc; elsewhere it falls back to kill(-pgid, 0), and the ceiling in stop() bounds the wait.
+ */
+function groupLeft(pgid) {
+  if (process.platform === 'linux' && existsSync('/proc/self/stat')) {
+    const left = []
+    for (const d of readdirSync('/proc')) {
+      if (!/^\d+$/.test(d)) continue
+      try {
+        const stat = readFileSync(`/proc/${d}/stat`, 'utf8')
+        // "pid (comm) state ppid pgrp …": comm may hold spaces and parentheses, so split after the last ")".
+        const [state, , pgrp] = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+        if (Number(pgrp) === pgid && state !== 'Z' && state !== 'X') left.push([Number(d), state])
+      } catch {}
+    }
+    return left
+  }
   try {
-    process.kill(-pid, 0)
-    return true
+    process.kill(-pgid, 0)
+    return [[pgid, '?']]
   } catch (e) {
-    return e.code === 'EPERM'
+    return e.code === 'EPERM' ? [[pgid, '?']] : []
   }
 }
 
 /**
- * Stop everything in the child's process group: `sig` now, SIGKILL after `graceMs`, and resolve only
- * once none of it is left.
+ * Stop everything in the child's process group: `sig` now, SIGKILL after `graceMs`, and resolve once
+ * none of it is left, or at the latest `graceMs` + 5 s, naming whatever is still listed.
  *
  * bash dies on SIGTERM, but a command behind a pipe that ignores SIGTERM (`node x | cat`, the shape of
  * `npm test | tail`) lives on. Resolving on bash's exit released the lock with that command still
@@ -203,6 +227,7 @@ function groupAlive(pid) {
  * behaviour back.
  */
 export const groups = {
+  left: groupLeft,
   stop(child, sig, graceMs = 5000) {
     if (process.platform === 'win32') {
       try {
@@ -212,13 +237,20 @@ export const groups = {
     }
     signalGroup(child, sig)
     return new Promise((resolve) => {
+      const started = Date.now()
       const kill = setTimeout(() => signalGroup(child, 'SIGKILL'), graceMs)
       const poll = setInterval(() => {
-        if (groupAlive(child.pid)) return
+        const left = groups.left(child.pid)
+        const out = Date.now() - started >= graceMs + 5000
+        if (left.length && !out) return
+        if (left.length)
+          console.error(
+            `rig qa: still listed in the command's group after SIGKILL, not waited on any longer: ${left.map(([p, st]) => `${p} (${st})`).join(', ')}`,
+          )
         clearTimeout(kill)
         clearInterval(poll)
         resolve()
-      }, 50)
+      }, 100)
     })
   },
 }
@@ -311,6 +343,8 @@ export function runShell(cmd, { cwd, env, shell, mapExit = exitCodeFor, limitMs 
     child.on('error', () => resolve(127))
   })
 }
+
+const MAX_MINUTES = Math.floor((2 ** 31 - 1) / 60_000)
 
 const fmtLimit = (ms) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${ms} ms`)
 

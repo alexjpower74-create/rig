@@ -240,7 +240,14 @@ test('--timeout: a hang ends as exit 124 with the lock free and nothing left run
   assert.throws(() => process.kill(pid, 0), /ESRCH/, 'the command behind the pipe is gone, not orphaned in the tree')
   assert.equal(lastQaOn(repo, git(['rev-parse', 'HEAD'], repo)).exit, 124)
   // A limit that does not parse is refused, never read as "no limit".
-  for (const bad of [['--timeout', 'abc'], ['--timeout', '10m'], ['--timeout', '-5'], ['--timeout', '--fresh'], ['--timeout']]) {
+  for (const bad of [
+    ['--timeout', 'abc'],
+    ['--timeout', '10m'],
+    ['--timeout', '-5'],
+    ['--timeout', '--fresh'],
+    ['--timeout'],
+    ['--timeout', '99999'],
+  ]) {
     const b = rig('qa', repoAt(`timeout-bad-${bad.join('').replace(/\W/g, '')}`), ['HEAD', '--run', 'true', ...bad])
     assert.equal(b.status, 2, `${bad.join(' ')} → ${b.out}`)
     assert.match(b.out, /takes a number of minutes/)
@@ -248,6 +255,8 @@ test('--timeout: a hang ends as exit 124 with the lock free and nothing left run
   // Known-good beside them: 0 is "no limit", and a plain number is minutes.
   assert.equal(rig('qa', repoAt('timeout-zero'), ['HEAD', '--run', 'true', '--timeout', '0']).status, 0)
   assert.equal(rig('qa', repoAt('timeout-five'), ['HEAD', '--run', 'true', '--timeout', '5']).status, 0)
+  // The largest limit setTimeout can hold still runs normally; one minute more is refused above.
+  assert.equal(rig('qa', repoAt('timeout-max'), ['HEAD', '--run', 'true', '--timeout', '35791']).status, 0)
 })
 
 const twoAtOnce = (repo) =>

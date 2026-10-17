@@ -8,10 +8,12 @@
 
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 
+const here = dirname(fileURLToPath(import.meta.url))
 const git = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'rig-crew-')))
 
@@ -208,7 +210,11 @@ await suite('rig 2.0, crew fixes', async (s) => {
     breaks: () => {
       groups.stop = (child, sig) => {
         process.kill(-child.pid, sig)
-        setTimeout(() => process.kill(-child.pid, 'SIGKILL'), 5000).unref()
+        setTimeout(() => {
+          try {
+            process.kill(-child.pid, 'SIGKILL')
+          } catch {}
+        }, 5000).unref()
         return Promise.resolve()
       }
       return () => {
@@ -218,6 +224,52 @@ await suite('rig 2.0, crew fixes', async (s) => {
     },
     timeout: 15_000,
   })
+
+  // fv2's verification of c238a03: run as PID 1 (a container without an init), rig qa inherits the
+  // group's orphans as zombies it never reaps, and kill(-pgid, 0) answered "alive" for ever. Zombies
+  // count as gone. The control is that kill-based test; it may only end at the ceiling, past the bar.
+  // Linux only, in an unprivileged PID namespace; skipped by name where there is none.
+  const pidOne = spawnSync('unshare', ['-Urpf', '--mount-proc', 'true']).status === 0
+  if (!pidOne) console.log('  skipped: no unprivileged PID namespace here (unshare -Urpf), so the PID 1 case is not checked')
+  else {
+    const asPidOne = join(tmp, 'as-pid-one.mjs')
+    writeFileSync(
+      asPidOne,
+      `import { runShell, groups } from ${JSON.stringify(pathToFileURL(join(here, '..', 'src', 'commands', 'qa.js')).href)}
+if (process.argv[2] === 'old')
+  groups.left = (pgid) => {
+    try {
+      process.kill(-pgid, 0)
+      return [[pgid, '?']]
+    } catch (e) {
+      return e.code === 'EPERM' ? [[pgid, '?']] : []
+    }
+  }
+const t = Date.now()
+const code = await runShell(\`node -e "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)" | cat\`, { cwd: process.cwd(), env: process.env, limitMs: 500 })
+console.log(JSON.stringify({ pid: process.pid, code, ms: Date.now() - t }))
+process.exit(0)
+`,
+    )
+    let variant = 'new'
+    await s.check('as PID 1, the stop ends once only zombies are left: 124 in under 8 s, not a wait for ever', {
+      assert: async () => {
+        const r = spawnSync('unshare', ['-Urpf', '--mount-proc', process.execPath, asPidOne, variant], {
+          encoding: 'utf8',
+          timeout: 30_000,
+        })
+        const out = JSON.parse(r.stdout.trim().split('\n').pop() || '{}')
+        return out.pid === 1 && out.code === 124 && out.ms < 8000
+      },
+      breaks: () => {
+        variant = 'old'
+        return () => {
+          variant = 'new'
+        }
+      },
+      timeout: 40_000,
+    })
+  }
 
   // ---------------------------------------------------------------------------------------------
   // Leftover branches: merged ones move up to base; unmerged ones never move, even behind a tag.

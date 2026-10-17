@@ -81,18 +81,29 @@ major version because every brief now opens differently and the plan template ha
   qa` stops a command still running after 60 minutes (`--timeout <min>`, `qaTimeoutMinutes`; a value
   that is not a number of minutes is refused, never read as "no limit") and records exit 124. It
   waits for the command's whole process group first, so nothing is still running in the worktree
-  when the lock comes off.
+  when the lock comes off. Zombies count as gone, so `rig qa` running as PID 1 in a container
+  without an init stops in seconds, and the wait has a ceiling of 10 s that names anything still
+  listed. Limits above 35791 minutes, which setTimeout cannot hold, are refused.
+- **The harness, for callers:** a browser that a suite never closes no longer keeps the suite alive.
+  The reaper kills it at exit and removes its profile. A page left open still holds the suite, as in
+  Rig 4. `launch({ keepAlive: true })` keeps Rig 4's behaviour, for a script that leaves a window
+  up for a person to look at.
 - **What review caught in the fix:** fv2 found that a command behind a pipe that ignores SIGTERM
   (`node x | cat`) outlived the first version of the limit: bash died, the run answered 124, and the
   command kept running in a worktree the lock called free. fv2 also found `--timeout 10m` quietly
-  meant no limit, and that neither new port guard had been shown to fail on its own.
-- **Checked:** `test/launch-port.test.js`, four checks, each with its own control. Two suites
+  meant no limit, and that neither new port guard had been shown to fail on its own. Its check of
+  those fixes found the PID 1 hang, the setTimeout overflow (`--timeout 99999` stopped every run at
+  once), and the profiles the reaper left behind. The lead's own deadline watch caught one more: a
+  test of the fix whose cleanup threw, which left a browser holding the suite open.
+- **Checked:** `test/launch-port.test.js`, five checks, each with its own control. Two suites
   launch together, the second opens a page, and the first closes: with the old `launch()` the
   second suite's page dies with the other run's browser. The address guard and the id guard are
-  each taken out alone. A port held on every address must be refused by name within 5 s.
+  each taken out alone. A port held on every address must be refused by name within 5 s. A suite
+  that never closes its browser must end, with that Chrome and its profile gone.
   `test/crew.test.js` runs the stubborn piped command against the limit, red with the first
-  version's stop. `test/qa-finish.test.js` checks exit 124, the freed lock, nothing left running,
-  and five bad `--timeout` values refused.
+  version's stop, and as PID 1 in an unprivileged PID namespace, where the kill-based wait lasts
+  until the ceiling. `test/qa-finish.test.js` checks exit 124, the freed lock, nothing left running,
+  six bad `--timeout` values refused, and 35791 accepted.
 
 ### Smaller
 - `goto()` clears its navigation deadline. Every suite that used it sat idle for the full 30 s

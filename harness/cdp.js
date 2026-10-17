@@ -43,12 +43,28 @@ function installReaper() {
   if (reaperInstalled) return
   reaperInstalled = true
   const reap = () => {
+    const profiles = []
     for (const b of live) {
       try {
         b.proc.kill('SIGKILL')
       } catch {}
+      profiles.push(b.profile)
     }
     live.clear()
+    // Chrome's helpers write into the profile for a moment after the browser is killed, and 'exit'
+    // cannot wait, so a detached process removes the profiles once they are done. Without it every
+    // reaped browser left a rig-chrome-* folder in tmp (fv2).
+    if (profiles.length)
+      try {
+        spawn(
+          process.execPath,
+          [
+            '-e',
+            `setTimeout(() => { for (const p of ${JSON.stringify(profiles)}) require('fs').rmSync(p, { recursive: true, force: true }) }, 1500)`,
+          ],
+          { detached: true, stdio: 'ignore' },
+        ).unref()
+      } catch {}
   }
   process.on('exit', reap)
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -76,7 +92,7 @@ export const liveBrowsers = () => live.size
  * after that failed with "fetch failed". Chrome prints where it really listens; that line, not the
  * port asked for, is the endpoint, and a browser that answers there with another id is refused.
  */
-export async function launch({ headless = true, port = 0, width = 1440, height = 900, args: extraArgs = [] } = {}) {
+export async function launch({ headless = true, port = 0, width = 1440, height = 900, args: extraArgs = [], keepAlive = false } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'rig-chrome-'))
   const args = [
     `--remote-debugging-port=${port}`,
@@ -126,9 +142,13 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
   installReaper()
   // A browser a suite forgot, or failed, to close must not keep the suite alive: the final QA of 5.0
   // sat for minutes on one whose close() was skipped by a throw. Nothing here holds the event loop
-  // open for Chrome; the reaper kills whatever is still in `live` when the process exits.
-  proc.unref()
-  proc.stderr?.unref?.()
+  // open for Chrome; the reaper kills whatever is still in `live` when the process exits. A page
+  // left open still does (its WebSocket), and test/run.js's limit is the backstop for that.
+  // keepAlive: true keeps Rig 4's behaviour, for a script that leaves a window up for a person.
+  if (!keepAlive) {
+    proc.unref()
+    proc.stderr?.unref?.()
+  }
   const browser = {
     proc,
     port: bound,
