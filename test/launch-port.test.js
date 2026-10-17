@@ -10,7 +10,7 @@
 // Each guard has its own control: a copy of the harness with just that guard taken out (or, for the
 // default port, the old launch() put back) must turn its check red.
 
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -94,6 +94,39 @@ const oldExit = [
   '',
 ].join('\n')
 const fakeOld = await withFakeChrome('fake-old', [[/ {4}\/\/ 'exit' can arrive before[\s\S]*?setTimeout\(blame, 300\)\n {4}\}\n/, oldExit]])
+
+// A stand-in Chrome whose profile cannot be removed (a read-only folder inside it), and which then
+// says the port is taken: the refusal must survive the failed cleanup. It notes its profile so the
+// test can clear it afterwards.
+const lockedLog = join(tmp, 'locked-profile.txt')
+const lockedChrome = join(tmp, 'locked-chrome.sh')
+writeFileSync(
+  lockedChrome,
+  `#!/bin/sh
+for a in "$@"; do case "$a" in --user-data-dir=*) d="\${a#*=}" ;; esac; done
+mkdir -p "$d/locked" && touch "$d/locked/f" && chmod 555 "$d/locked" && echo "$d" > '${lockedLog}'
+echo "[0:0:ERROR:devtools_http_handler.cc] Cannot start http server for devtools." >&2
+sleep 1
+`,
+  { mode: 0o755 },
+)
+async function withChrome(bin, name, edits) {
+  const was = process.env.RIG_CHROME
+  process.env.RIG_CHROME = bin
+  try {
+    return await variant(name, edits)
+  } finally {
+    if (was === undefined) delete process.env.RIG_CHROME
+    else process.env.RIG_CHROME = was
+  }
+}
+const lockedNew = await withChrome(lockedChrome, 'locked-new', [])
+const lockedOld = await withChrome(lockedChrome, 'locked-old', [
+  [
+    / {4}\/\/ Chrome's helpers can still be writing into the profile[\s\S]*?\} catch \{\}\n/,
+    '    rmSync(profile, { recursive: true, force: true })\n',
+  ],
+])
 
 const fixed = await import(pathToFileURL(join(harness, 'cdp.js')).href)
 let cdp = fixed
@@ -236,6 +269,37 @@ await suite('launch() owns its browser', async (s) => {
         lib = fakeOld
         return () => {
           lib = fakeNew
+        }
+      },
+    })
+  }
+
+  // A profile that cannot be removed while Chrome's helpers write into it must not replace the reason.
+  if (process.platform !== 'win32') {
+    let lib = lockedNew
+    await s.check('a profile that will not go away never hides why the launch was refused', {
+      assert: async () => {
+        try {
+          const b = await lib.launch({ headless: true, port: 9 })
+          await b.close()
+          return false
+        } catch (e) {
+          const ok = /already in use/.test(e.message)
+          if (!ok) console.log(`        refused with: ${e.message}`)
+          return ok
+        } finally {
+          const d = existsSync(lockedLog) ? readFileSync(lockedLog, 'utf8').trim() : ''
+          if (d) {
+            chmodSync(join(d, 'locked'), 0o755)
+            rmSync(d, { recursive: true, force: true })
+          }
+          rmSync(lockedLog, { force: true })
+        }
+      },
+      breaks: () => {
+        lib = lockedOld
+        return () => {
+          lib = lockedNew
         }
       },
     })

@@ -1,19 +1,25 @@
 # Changelog
 
-## 5.0.2 — Chrome is refused for the right reason on every machine
+## 5.0.2 — a refused launch always says why, on every machine
 
-- **What went wrong:** GitHub's runner went red twice on 5.0.1's port checks, though the second
-  suite was refused both times. (1) Chrome can exit before its last stderr line is read. When 'exit'
-  came first, `launch()` blamed the install ("Chrome exited … Is it installed?") for what was really
-  a taken port ("Cannot start http server for devtools"). (2) The "told plainly" check required the
-  [::1] wording, and that machine refused with the other.
-- **Now:** after 'exit', `launch()` lets the stderr already on its way arrive (the stream's end, or
+- **What went wrong:** GitHub's runner went red on 5.0.1's port checks, though the second suite was
+  refused every time. (1) When a launch is refused, `launch()` removes the profile it made. Chrome's
+  helpers were still writing into it, so the removal threw "ENOTEMPTY … rig-chrome-…", and that
+  error replaced the reason ("Port N is already in use"). A printout added to the check showed it.
+  (2) Chrome can also exit before its last stderr line is read, and `launch()` then blamed the
+  install ("Chrome exited … Is it installed?") for what was really a taken port. (3) The "told
+  plainly" check required the [::1] wording, and that machine refused with the other.
+- **Now:** a failed cleanup never replaces the reason a launch was refused; the profile removal is
+  retried, then left. After 'exit', `launch()` lets the stderr already on its way arrive (the stream's end, or
   300 ms) before it blames the install, so a taken port is named as one. The check accepts either
   plain refusal; its control takes both guards out, so it is red with IPv6 loopback and without it.
   An unexpected refusal message is printed.
-- **Checked:** `test/launch-port.test.js`, six checks. The new one runs a stand-in Chrome that exits
-  at once and prints "Cannot start http server for devtools" 100 ms later from a child. It is
-  refused for the port, and with the old exit handler put back it is red ("Chrome exited (1)").
+- **Checked:** `test/launch-port.test.js`, seven checks, two of them new, each run against a
+  stand-in Chrome. One leaves a read-only folder in its profile and says the port is taken: it is
+  refused for the port, and with the old cleanup put back it is red ("EACCES, Permission denied").
+  The other exits at once and prints "Cannot start http server for devtools" 100 ms later from a
+  child: it is refused for the port, and with the old exit handler put back it is red ("Chrome
+  exited (1)").
 
 ## 5.0.1 — the rating board fits a phone, whatever the reference is called
 

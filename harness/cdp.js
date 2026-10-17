@@ -120,7 +120,12 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
       proc.kill('SIGKILL')
     } catch {}
     proc.stderr?.destroy()
-    rmSync(profile, { recursive: true, force: true })
+    // Chrome's helpers can still be writing into the profile. A cleanup error must never stand in
+    // for the reason the launch failed: on a GitHub runner, "ENOTEMPTY … rig-chrome-…" replaced
+    // "Port N is already in use".
+    try {
+      rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    } catch {}
     throw err
   }
   // Own the endpoint: read where this Chrome listens, then make sure 127.0.0.1 answers as this Chrome.
