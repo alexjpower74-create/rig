@@ -60,7 +60,9 @@ function installReaper() {
           process.execPath,
           [
             '-e',
-            `setTimeout(() => { for (const p of ${JSON.stringify(profiles)}) require('fs').rmSync(p, { recursive: true, force: true }) }, 1500)`,
+            // One profile that will not go (a helper still writing on macOS, a file Windows holds open)
+            // must not leave the others: each is tried on its own, with retries (fv2).
+            `setTimeout(() => { for (const p of ${JSON.stringify(profiles)}) try { require('fs').rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }) } catch {} }, 1500)`,
           ],
           { detached: true, stdio: 'ignore' },
         ).unref()

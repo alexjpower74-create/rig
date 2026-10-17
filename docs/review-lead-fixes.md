@@ -78,3 +78,25 @@ stderr in the old-harness copy, the throw skipped the second close(), and that C
 - Check 5 is named for its scope. `launch({ keepAlive: true })` keeps the ref. The reaper hands the
   profiles to a detached process that removes them 1.5 s after exit, once Chrome's helpers have
   stopped writing (an rmSync in 'exit' was rewritten by them at once).
+
+## Verification of 73f1bac (by fv2)
+
+Pass, no release-blocking defects. launch-port 5 PASS (34 s), crew 17 PASS (27 s) including the
+PID 1 check, qa-finish exit 0 (99999 refused, 35791 run). Its own pipe probe as PID 1 under
+`unshare -Urpf --mount-proc` resolves 124 at 6.0 s. At c238a03 it was still waiting after 2 min.
+
+- **The /proc parse.** It held against comm names built to fool it: `a) Z 1 1 (b`,
+  `z) X 0 0 ) )` and `p q) Z`. Each was listed with its true state.
+- **keepAlive.** Behaves as documented.
+- **The profile cleaner.** Removed every profile after a normal exit and after SIGTERM.
+- **spawn() in 'exit'.** Safe: the child exists before the handler returns.
+
+Two nice-to-haves:
+
+- (a) One profile the cleaner cannot remove stopped it before the rest.
+- (b) A process that leaves the group (`setsid`, `detached`) is neither stopped nor waited for. Not
+  new in 5.0.
+
+The lead made the cleaner try each profile on its own, with retries. Before and after, with the
+first profile made unremovable (a 0555 subfolder): the old cleaner exits 1 and leaves the second
+profile; the new one exits 0 and removes it. (b) is a line in the README.

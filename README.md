@@ -148,7 +148,8 @@ left alone and the run takes the next one.
 A command still running after 60 minutes (`--timeout <min>`, or `qaTimeoutMinutes` in the config; 0
 turns it off; at most 35791, and a value that is not a number of minutes is refused) is stopped and recorded as
 exit 124. The stop waits for the command's whole process group, so nothing it started is still
-writing in the worktree when the lock comes off. A suite that hangs is a red run with a reason, not
+writing in the worktree when the lock comes off. A process that leaves the group (`setsid`, or a
+server spawned `detached`) is neither stopped nor waited for; that was true in 4.0 too. A suite that hangs is a red run with a reason, not
 a silent one that someone has to notice. `npm test` in this repo also stops any one test file after
 20 minutes (`RIG_TEST_TIMEOUT_MS`).
 
