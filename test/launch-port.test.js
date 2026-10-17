@@ -11,6 +11,7 @@
 // default port, the old launch() put back) must turn its check red.
 
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -59,6 +60,8 @@ const noGuards = await variant('no-guards', [
   [idGuard, '\n'],
 ])
 const noTakenLine = await variant('no-taken-line', [[/\n {6}else if \(\/Cannot start http server for devtools\/[\s\S]*?\n {8}\)\n/, '\n']])
+// Only written to disk: the check below runs it in a child process.
+await variant('keeps-ref', [['  proc.unref()\n  proc.stderr?.unref?.()\n', '']])
 
 const fixed = await import(pathToFileURL(join(harness, 'cdp.js')).href)
 let cdp = fixed
@@ -112,8 +115,8 @@ async function secondOutlivesFirst(opts, refusal = null) {
     return text === 'mine'
   } finally {
     await page?.close().catch(() => {})
-    await a.close()
-    await b?.close()
+    // Each on its own: one close() that throws must not leave the other browser running.
+    await Promise.allSettled([a.close(), b?.close()])
   }
 }
 
@@ -172,6 +175,41 @@ await suite('launch() owns its browser', async (s) => {
     },
     breaks: use(noTakenLine),
     timeout: 20_000,
+  })
+
+  // A suite that never closes its browser still ends, and takes its Chrome with it.
+  let lib = join(harness, 'cdp.js')
+  await s.check('a browser left open does not keep the suite alive; it is gone when the suite ends', {
+    assert: async () => {
+      const script = join(tmp, 'left-open.mjs')
+      writeFileSync(
+        script,
+        `const { launch } = await import(${JSON.stringify(pathToFileURL(lib).href)})\nconst b = await launch({ headless: true })\nconsole.log('pid ' + b.proc.pid)\n`,
+      )
+      const child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'inherit'] })
+      let out = ''
+      child.stdout.on('data', (d) => {
+        out += d
+      })
+      const exited = await Promise.race([new Promise((r) => child.on('exit', () => r(true))), sleep(4000).then(() => false)])
+      const pid = Number(out.match(/pid (\d+)/)?.[1])
+      if (!exited) child.kill('SIGKILL')
+      await sleep(200)
+      let chromeGone = true
+      try {
+        process.kill(pid, 0)
+        chromeGone = false
+        process.kill(pid, 'SIGKILL')
+      } catch {}
+      return exited && pid > 0 && chromeGone
+    },
+    breaks: () => {
+      lib = join(tmp, 'keeps-ref', 'cdp.js')
+      return () => {
+        lib = join(harness, 'cdp.js')
+      }
+    },
+    timeout: 15_000,
   })
 })
 

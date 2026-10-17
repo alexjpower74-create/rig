@@ -101,7 +101,7 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
     try {
       proc.kill('SIGKILL')
     } catch {}
-    proc.stderr.destroy()
+    proc.stderr?.destroy()
     rmSync(profile, { recursive: true, force: true })
     throw err
   }
@@ -124,6 +124,11 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
     )
 
   installReaper()
+  // A browser a suite forgot, or failed, to close must not keep the suite alive: the final QA of 5.0
+  // sat for minutes on one whose close() was skipped by a throw. Nothing here holds the event loop
+  // open for Chrome; the reaper kills whatever is still in `live` when the process exits.
+  proc.unref()
+  proc.stderr?.unref?.()
   const browser = {
     proc,
     port: bound,
@@ -143,7 +148,7 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
         proc.kill('SIGKILL')
       } catch {}
       // A helper Chrome started may hold the pipe's write end; don't let it keep this process alive.
-      proc.stderr.destroy()
+      proc.stderr?.destroy()
       try {
         rmSync(profile, { recursive: true, force: true })
       } catch {}
