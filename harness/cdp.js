@@ -192,6 +192,7 @@ export async function launch({ headless = true, port = 0, width = 1440, height =
 function listeningOn(proc, { profile, port, ms }) {
   return new Promise((resolve, reject) => {
     let seen = ''
+    let settled = false
     const onData = (d) => {
       seen += d
       const m = seen.match(/DevTools listening on (ws:\/\/\S+)/)
@@ -201,8 +202,14 @@ function listeningOn(proc, { profile, port, ms }) {
           new Error(`Port ${port} is already in use, so Chrome could not open DevTools. Leave out \`port\` and Chrome picks a free one.`),
         )
     }
-    const onExit = (code, signal) =>
-      settle(new Error(`Chrome exited (${signal || code}) before it opened DevTools. Is it installed at ${CHROME}?`))
+    // 'exit' can arrive before Chrome's last stderr lines are read. Blaming the install at once
+    // turned "the port is taken" into "Chrome exited" on a GitHub runner, so the stderr already on its
+    // way gets a moment (or the stream's end) to name the real reason first.
+    const onExit = (code, signal) => {
+      const blame = () => settle(new Error(`Chrome exited (${signal || code}) before it opened DevTools. Is it installed at ${CHROME}?`))
+      proc.stderr.once('end', () => setImmediate(blame))
+      setTimeout(blame, 300)
+    }
     const onError = (e) => settle(new Error(`Could not start Chrome at ${CHROME}: ${e.message}`))
     const timer = setTimeout(() => settle(new Error(`Chrome never opened DevTools within ${ms} ms. Is it installed at ${CHROME}?`)), ms)
     const started = Date.now()
@@ -214,6 +221,8 @@ function listeningOn(proc, { profile, port, ms }) {
       } catch {}
     }, 100)
     function settle(err, url) {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
       clearInterval(poll)
       proc.off('exit', onExit)

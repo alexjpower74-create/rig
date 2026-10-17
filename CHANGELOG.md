@@ -1,12 +1,19 @@
 # Changelog
 
-## Unreleased
+## 5.0.2 — Chrome is refused for the right reason on every machine
 
-- `test/launch-port.test.js`: the "told plainly that the port is taken" check accepts either plain
-  refusal. On a GitHub runner on 2026-10-17 it went red although the second suite was refused: it
-  required the [::1] wording, and that machine refused with the other one. Its control now takes
-  both guards out, so it goes red with IPv6 loopback and without it. A refusal it doesn't expect is
-  printed. Tests only; 5.0.1's code is unchanged.
+- **What went wrong:** GitHub's runner went red twice on 5.0.1's port checks, though the second
+  suite was refused both times. (1) Chrome can exit before its last stderr line is read. When 'exit'
+  came first, `launch()` blamed the install ("Chrome exited … Is it installed?") for what was really
+  a taken port ("Cannot start http server for devtools"). (2) The "told plainly" check required the
+  [::1] wording, and that machine refused with the other.
+- **Now:** after 'exit', `launch()` lets the stderr already on its way arrive (the stream's end, or
+  300 ms) before it blames the install, so a taken port is named as one. The check accepts either
+  plain refusal; its control takes both guards out, so it is red with IPv6 loopback and without it.
+  An unexpected refusal message is printed.
+- **Checked:** `test/launch-port.test.js`, six checks. The new one runs a stand-in Chrome that exits
+  at once and prints "Cannot start http server for devtools" 100 ms later from a child. It is
+  refused for the port, and with the old exit handler put back it is red ("Chrome exited (1)").
 
 ## 5.0.1 — the rating board fits a phone, whatever the reference is called
 

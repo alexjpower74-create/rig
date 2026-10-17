@@ -67,6 +67,34 @@ const noTakenLine = await variant('no-taken-line', [[/\n {6}else if \(\/Cannot s
 // Only written to disk: the check below runs it in a child process.
 await variant('keeps-ref', [['  if (!keepAlive) {\n    proc.unref()\n    proc.stderr?.unref?.()\n  }\n', '']])
 
+// A stand-in Chrome that exits at once and says "Cannot start http server for devtools" 100 ms later,
+// from a child that outlives it: the order a GitHub runner produced, where 'exit' beat the last line.
+const fakeChrome = join(tmp, 'fake-chrome.sh')
+writeFileSync(
+  fakeChrome,
+  '#!/bin/sh\n( sleep 0.1; echo "[0:0:ERROR:devtools_http_handler.cc] Cannot start http server for devtools." >&2 ) &\nexit 1\n',
+  { mode: 0o755 },
+)
+/** A harness copy that launches the stand-in (RIG_CHROME is read when cdp.js loads). */
+async function withFakeChrome(name, edits) {
+  const was = process.env.RIG_CHROME
+  process.env.RIG_CHROME = fakeChrome
+  try {
+    return await variant(name, edits)
+  } finally {
+    if (was === undefined) delete process.env.RIG_CHROME
+    else process.env.RIG_CHROME = was
+  }
+}
+const fakeNew = await withFakeChrome('fake-new', [])
+const oldExit = [
+  '    const onExit = (code, signal) =>',
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: the old source line, copied as text
+  '      settle(new Error(`Chrome exited (${signal || code}) before it opened DevTools. Is it installed at ${CHROME}?`))',
+  '',
+].join('\n')
+const fakeOld = await withFakeChrome('fake-old', [[/ {4}\/\/ 'exit' can arrive before[\s\S]*?setTimeout\(blame, 300\)\n {4}\}\n/, oldExit]])
+
 const fixed = await import(pathToFileURL(join(harness, 'cdp.js')).href)
 let cdp = fixed
 /** A `breaks` that runs the check against another copy of the harness, and a restore that puts it back. */
@@ -178,7 +206,9 @@ await suite('launch() owns its browser', async (s) => {
         await b.close()
         return false
       } catch (e) {
-        return /already in use/.test(e.message) && Date.now() - t < 5000
+        const ok = /already in use/.test(e.message) && Date.now() - t < 5000
+        if (!ok) console.log(`        after ${Date.now() - t} ms: ${e.message}`)
+        return ok
       } finally {
         await held.release()
       }
@@ -186,6 +216,30 @@ await suite('launch() owns its browser', async (s) => {
     breaks: use(noTakenLine),
     timeout: 20_000,
   })
+
+  // Chrome that exits before its last stderr line is read: the line still names the port.
+  if (process.platform !== 'win32') {
+    let lib = fakeNew
+    await s.check('a Chrome that quits before its last line is read is still refused for the port, not the install', {
+      assert: async () => {
+        try {
+          const b = await lib.launch({ headless: true, port: 9 })
+          await b.close()
+          return false
+        } catch (e) {
+          const ok = /already in use/.test(e.message)
+          if (!ok) console.log(`        refused with: ${e.message}`)
+          return ok
+        }
+      },
+      breaks: () => {
+        lib = fakeOld
+        return () => {
+          lib = fakeNew
+        }
+      },
+    })
+  }
 
   // A suite that never closes its browser (with no page left open) still ends, and takes its Chrome
   // and its profile with it. A page left open holds its WebSocket, and so the suite, as in Rig 4.
