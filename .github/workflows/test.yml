@@ -10,6 +10,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        # Full history: brief-five and target put Rig 4's code back from its commit with `git archive`
+        # as their controls. A shallow clone has no such commit, so the control cannot run.
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
