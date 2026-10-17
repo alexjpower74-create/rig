@@ -65,6 +65,22 @@ major version because every brief now opens differently and the plan template ha
 - **Checked:** `test/taste.test.js`, with every control seen red. The swipe test caught a swipe right
   being taken as the browser's back gesture.
 
+### Two runs at once, each with a browser of its own
+- **What went wrong:** the final QA of this release ran while a slice ran the same suite, and both
+  asked the harness for debugging port 9352. The second Chrome found 127.0.0.1:9352 taken and took
+  [::1]:9352 instead. `launch()` only checked that something answered on 127.0.0.1, so it drove the
+  other run's browser. When the other run finished and closed it, eleven checks failed with "fetch
+  failed". Boards those checks had opened stayed listening, so the suite never exited, and `rig qa`
+  sat silent for three hours.
+- **Now:** `launch()` defaults to port 0, so Chrome picks a free one. It reads the address Chrome
+  says it listens on, and it refuses a fixed port that is taken (`Port N is already in use on
+  127.0.0.1…`) instead of borrowing whatever answers there. No suite pins a port any more. The taste
+  suite stops every board it started, even after a failed check. `npm test` stops any file still
+  running after 10 minutes (`RIG_TEST_TIMEOUT_MS`) and names it.
+- **Checked:** `test/launch-port.test.js`. Two suites launch together, the second opens a page, and
+  the first closes. Against a copy of the harness with the old `launch()` put back, the second
+  suite's page dies with the other run's browser, so both checks are seen red.
+
 ### Smaller
 - `goto()` clears its navigation deadline. Every suite that used it sat idle for the full 30 s
   timeout after its last check. `test/goto-timer.test.js` is a target: the process is gone within

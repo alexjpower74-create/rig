@@ -46,7 +46,7 @@ let input
 let query = ''
 
 before(async () => {
-  browser = await launch({ headless: true, port: 9351, width: 390, height: 844 })
+  browser = await launch({ headless: true, width: 390, height: 844 })
   page = await browser.newPage('about:blank')
   page.on('Page.loadEventFired', () => loaded?.())
   input = countInput(page)

@@ -66,7 +66,17 @@ function installReaper() {
 /** How many browsers this process still has open. Exported so a suite can assert it cleaned up. */
 export const liveBrowsers = () => live.size
 
-export async function launch({ headless = true, port = 9333, width = 1440, height = 900, args: extraArgs = [] } = {}) {
+/**
+ * Start a Chrome of this process's own and wait until it can be driven.
+ *
+ * `port` defaults to 0: Chrome picks a free one. A fixed port is a resource shared with everything
+ * else on the machine. When two suites asked for the same one at once (`rig qa` beside a slice's own
+ * run), the second Chrome found 127.0.0.1 taken, opened DevTools on [::1] instead, and this client,
+ * which talks to 127.0.0.1, drove the first suite's browser until that suite closed it. Every check
+ * after that failed with "fetch failed". Chrome prints where it really listens; that line, not the
+ * port asked for, is the endpoint, and a browser that answers there with another id is refused.
+ */
+export async function launch({ headless = true, port = 0, width = 1440, height = 900, args: extraArgs = [] } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'rig-chrome-'))
   const args = [
     `--remote-debugging-port=${port}`,
@@ -86,17 +96,38 @@ export async function launch({ headless = true, port = 9333, width = 1440, heigh
   args.push(...extraArgs)
   args.push('about:blank')
 
-  const proc = spawn(CHROME, args, { stdio: 'ignore', detached: false })
-  const version = await waitForEndpoint(`http://127.0.0.1:${port}/json/version`, 10_000)
+  const proc = spawn(CHROME, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: false })
+  const fail = (err) => {
+    try {
+      proc.kill('SIGKILL')
+    } catch {}
+    rmSync(profile, { recursive: true, force: true })
+    throw err
+  }
+  // Own the endpoint: read where this Chrome listens, then make sure 127.0.0.1 answers as this Chrome.
+  const endpoint = await listeningOn(proc, 10_000).catch(fail)
+  const where = new URL(endpoint)
+  if (where.hostname !== '127.0.0.1')
+    fail(
+      new Error(
+        `Port ${where.port} is already in use on 127.0.0.1, so Chrome opened it on ${where.hostname}. Leave out \`port\` and Chrome picks a free one.`,
+      ),
+    )
+  const bound = Number(where.port)
+  const version = await waitForEndpoint(`http://127.0.0.1:${bound}/json/version`, 10_000).catch(fail)
+  if (version.webSocketDebuggerUrl !== endpoint)
+    fail(
+      new Error(`Another browser answers on 127.0.0.1:${bound}, not the one just started. Leave out \`port\` and Chrome picks a free one.`),
+    )
 
   installReaper()
   const browser = {
     proc,
-    port,
+    port: bound,
     profile,
     version,
     async newPage(url, opts = {}) {
-      return newPage(port, url, { width, height, ...opts })
+      return newPage(bound, url, { width, height, ...opts })
     },
     async close() {
       live.delete(browser)
@@ -115,6 +146,35 @@ export async function launch({ headless = true, port = 9333, width = 1440, heigh
   }
   live.add(browser)
   return browser
+}
+
+/** The DevTools URL Chrome prints on stderr once it listens (ws://host:port/devtools/browser/<id>). */
+function listeningOn(proc, ms) {
+  return new Promise((resolve, reject) => {
+    let seen = ''
+    const onData = (d) => {
+      seen += d
+      const m = seen.match(/DevTools listening on (ws:\/\/\S+)/)
+      if (m) settle(null, m[1])
+    }
+    const onExit = (code, signal) =>
+      settle(new Error(`Chrome exited (${signal || code}) before it opened DevTools. Is it installed at ${CHROME}?`))
+    const onError = (e) => settle(new Error(`Could not start Chrome at ${CHROME}: ${e.message}`))
+    const timer = setTimeout(() => settle(new Error(`Chrome never opened DevTools within ${ms} ms. Is it installed at ${CHROME}?`)), ms)
+    function settle(err, url) {
+      clearTimeout(timer)
+      proc.off('exit', onExit)
+      proc.off('error', onError)
+      proc.stderr.off('data', onData)
+      // Keep draining stderr: a full pipe stalls Chrome mid-run.
+      proc.stderr.resume()
+      if (err) reject(err)
+      else resolve(url)
+    }
+    proc.stderr.on('data', onData)
+    proc.once('exit', onExit)
+    proc.once('error', onError)
+  })
 }
 
 async function waitForEndpoint(url, ms) {

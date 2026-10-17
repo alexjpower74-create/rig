@@ -16,7 +16,7 @@ const url = pathToFileURL(join(here, 'fixture.html')).href
 const PACE = Number(process.env.PACE || 1)
 const beat = (ms) => sleep(ms * PACE)
 
-const browser = await launch({ headless: false, width: 1180, height: 900, port: 9444 })
+const browser = await launch({ headless: false, width: 1180, height: 900 })
 const page = await browser.newPage(url, { emulate: false })
 
 // An on-page caption, so the window explains itself without anyone narrating.

@@ -1,8 +1,8 @@
 // rig taste, driven the way he uses it: real taps and clicks through the harness, at points checked
 // with elementFromPoint, against the real server writing real files.
 //
-// Headless Chrome on debugging port 9352, every board on a free port (--port 0, never 5391: that is
-// the default his real board listens on), always --no-open: no window ever opens
+// Headless Chrome on a debugging port it picks itself, every board on a free port (--port 0, never
+// 5391: that is the default his real board listens on), always --no-open: no window ever opens
 // on anyone's screen. Every image is generated here; none is anyone's real work.
 //
 // The bar from the plan: 6 references in at most 7 taps (one per reference plus Done), with no typing
@@ -33,7 +33,6 @@ import { localDay, tasteMarkdown } from '../src/taste/store.js'
 const { suite, launch, countInput, meetsTouchTarget, sleep } = H
 const here = dirname(fileURLToPath(import.meta.url))
 const RIG = join(here, '..', 'bin', 'rig.js')
-const CDP_PORT = 9352
 const SHOTS = process.env.RIG_TASTE_SHOTS || null
 
 // ── fixtures ────────────────────────────────────────────────────────────────────────────────────
@@ -343,13 +342,15 @@ const site = await siteServer()
 const STUDIO = `${site.base}/studio`
 const DEAD = `${site.base}/dead`
 const MISSING = `${site.base}/missing`
-const browser = await launch({ headless: true, port: CDP_PORT })
+const browser = await launch({ headless: true })
 const ARGS = ['--from', fx.refs, '--url', STUDIO, '--url', DEAD, '--url', MISSING, '--port', '0', '--no-open']
 const COMPS_ARGS = [...ARGS, '--comps', fx.comps, '--ask', 'Which header feels calm?']
 const RATINGS = [5, 2, 4, 1, 3, 5]
 const NAMES = ['ember', 'harbor', 'meadow', 'slate.png', 'tide.svg', STUDIO]
 const NOTE = 'calm, but the type is too small'
 const roots = []
+// Every board started, so a check that fails before its own stop() cannot keep the run alive.
+const boards = []
 let cliPreload = []
 let keepStamp = null
 const quiet = { log: () => {}, warn: () => {} }
@@ -367,6 +368,7 @@ function freshRepo() {
 async function board(args = ARGS, root = freshRepo(), sink = quiet) {
   const b = await runTaste(args, { root, ...sink })
   b.root = root
+  boards.push(b)
   return b
 }
 
@@ -1289,7 +1291,9 @@ await suite('rig taste', async (s) => {
   }
 })
 
+for (const b of boards) await b.stop()
 await browser.close()
+site.server.closeAllConnections?.()
 site.server.close()
 squatter.close()
 for (const r of roots) rmSync(r, { recursive: true, force: true })

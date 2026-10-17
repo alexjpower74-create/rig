@@ -21,7 +21,7 @@ const server = createServer((req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const base = `http://127.0.0.1:${server.address().port}`
 
-const browser = await launch({ headless: true, port: 9800 + Math.floor(Math.random() * 150) })
+const browser = await launch({ headless: true })
 
 // The navigation budget must sit INSIDE the check's budget, not outside it.
 //
@@ -101,7 +101,7 @@ await suite('browsers do not leak', async (t) => {
     // already leaking, which is exactly the state this check exists to notice — and it marked
     // itself VOID for saying so.
     assert: async () => {
-      const b = await launch({ headless: true, port: 9860 + Math.floor(Math.random() * 60) })
+      const b = await launch({ headless: true })
       const during = liveBrowsers()
       await b.close()
       return during >= 1 && liveBrowsers() === 0
@@ -110,7 +110,7 @@ await suite('browsers do not leak', async (t) => {
     // by leaving one open — and clean it up in the restore, because this suite must not be the
     // thing that leaks.
     breaks: async () => {
-      const b = await launch({ headless: true, port: 9930 + Math.floor(Math.random() * 60) })
+      const b = await launch({ headless: true })
       return async () => {
         await b.close()
       }

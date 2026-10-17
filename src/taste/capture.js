@@ -4,25 +4,12 @@
 // nothing.
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { launch } from '../../harness/cdp.js'
 
 export const VIEWS = {
   desktop: { width: 1440, height: 900, dpr: 1, mobile: false },
   phone: { width: 390, height: 844, dpr: 2, mobile: true },
-}
-
-/** A free TCP port on 127.0.0.1, so a capture never collides with a debugging port in use. */
-export function freePort() {
-  return new Promise((res, rej) => {
-    const s = createServer()
-    s.once('error', rej)
-    s.listen(0, '127.0.0.1', () => {
-      const { port } = s.address()
-      s.close(() => res(port))
-    })
-  })
 }
 
 /**
@@ -42,7 +29,7 @@ export async function captureAll(cards, shotsDir, { log = console.error, settleM
   }
   if (!todo.length) return { ok, failed }
 
-  const browser = await launch({ headless: true, port: await freePort(), width: 1440, height: 900 })
+  const browser = await launch({ headless: true, width: 1440, height: 900 })
   try {
     for (const card of todo) {
       log(`  capturing ${card.url}`)

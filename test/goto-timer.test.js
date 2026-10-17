@@ -22,7 +22,7 @@ const tmp = mkdtempSync(join(tmpdir(), 'rig-goto-timer-'))
 // Whatever keeps the event loop alive after that line is what the bar measures.
 const walk = (dir) => `
 import { launch } from ${JSON.stringify(pathToFileURL(join(dir, 'cdp.js')).href)}
-const b = await launch({ headless: true, port: ${9700 + Math.floor(Math.random() * 80)} })
+const b = await launch({ headless: true })
 const p = await b.newPage(null)
 await p.goto('data:text/html,<title>t</title><p>hi', { timeout: 4000 })
 await p.close()
