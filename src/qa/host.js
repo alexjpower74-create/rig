@@ -10,7 +10,9 @@
 
 import { acquire, holderOf, release } from '../lease.js'
 import { runOnHost } from '../remote.js'
-import { parseFailures, tally } from './failures.js'
+import { lastSpecIn, parseFailures, tally } from './failures.js'
+import { parseCiStatus } from './ci.js'
+import { fmtMs } from './watch.js'
 import { needsStub } from './desktop.js'
 
 export const remote = { acquire, release, holderOf, runOnHost }
@@ -99,19 +101,79 @@ export function linePrefixer(prefix, write) {
  * Run `cmd` at `sha` on `host`. Never throws: a transport failure is exit 255 with the reason.
  * @returns {Promise<{ host, exit, ms, log, dir, db, failures: string[], tally, error: string|null }>}
  */
-export async function runHost({ root, host, sha, cmd, session, env = {}, limitMs = 0, pattern = null, echo = true, desktop = false }) {
+export async function runHost({
+  root,
+  host,
+  sha,
+  cmd,
+  session,
+  env = {},
+  limitMs = 0,
+  stallMs = 0,
+  pattern = null,
+  echo = true,
+  desktop = false,
+  ci = false,
+}) {
   const started = Date.now()
   const out = linePrefixer(`[${host}] `, (s) => echo && process.stdout.write(s))
+  let seen = ''
+  let last = started
+  const abort = new AbortController()
   let r
   let error = null
+  let stalled = null
   inFlight++
+  // Called now, not on a later tick: a signal that lands at once must find the run in flight.
+  const running = (async () =>
+    remote.runOnHost({
+      root,
+      host,
+      sha,
+      cmd,
+      session,
+      env,
+      limitMs,
+      desktop,
+      signal: abort.signal,
+      onOutput: (c) => {
+        last = Date.now()
+        seen = (seen + String(c)).slice(-16 * 1024)
+        out.push(String(c))
+      },
+    }))()
+    // The run is "in flight" until runOnHost itself comes back, not until rig qa stops waiting on
+    // it: a run abandoned on a stall may still be going, and its lease must not be given back.
+    .finally(() => {
+      inFlight--
+    })
+  // The same watchdog as a local run, on the output the host streams back. runOnHost is asked to
+  // stop through the signal (r55m review, finding 1); rig qa stops waiting either way.
+  const watchdog =
+    stallMs > 0 &&
+    new Promise((resolve) => {
+      const timer = setInterval(
+        () => {
+          const quiet = Date.now() - last
+          if (quiet < stallMs) return
+          clearInterval(timer)
+          stalled = { worker: host, spec: lastSpecIn(seen), quietMs: quiet }
+          console.error(
+            `\n[${host}] rig qa: STALLED — nothing from ${host} for ${fmtMs(quiet)} (window ${fmtMs(stallMs)}). ` +
+              `Last spec: ${stalled.spec ?? 'none named'}. Stopping the wait (exit 124).`,
+          )
+          abort.abort()
+          resolve({ host, exit: 124, ms: Date.now() - started, dir: null, db: null, log: seen })
+        },
+        Math.max(50, Math.min(1000, Math.floor(stallMs / 10))),
+      )
+      running.finally(() => clearInterval(timer)).catch(() => {})
+    })
   try {
-    r = await remote.runOnHost({ root, host, sha, cmd, session, env, limitMs, desktop, onOutput: (c) => out.push(String(c)) })
+    r = await (watchdog ? Promise.race([running, watchdog]) : running)
   } catch (e) {
     error = e.message
     r = { host, exit: 255, ms: Date.now() - started, dir: null, db: null, log: '' }
-  } finally {
-    inFlight--
   }
   out.end()
   if (error) console.error(`[${host}] rig qa: the run on ${host} did not start: ${error}`)
@@ -126,6 +188,7 @@ export async function runHost({ root, host, sha, cmd, session, env = {}, limitMs
     stubbed.map((tool) => ({ t: Number.NaN, tool })),
     { pattern },
   ).map((x) => x.name)
+  const posted = ci ? [...log.matchAll(/^rig-qa-ci-status: (.*)$/gm)].pop()?.[1] : null
   return {
     host,
     exit: r.exit,
@@ -136,6 +199,22 @@ export async function runHost({ root, host, sha, cmd, session, env = {}, limitMs
     failures,
     needsStub: stub,
     tally: tally(log, failures),
+    stalled,
+    ciStatus: posted ? parseCiStatus(posted) : null,
     error,
   }
+}
+
+/**
+ * The CI command as it runs on the host: RIG_CI_STATUS points into the host checkout's .git, and
+ * what the command wrote there comes back as one marked line, "rig-qa-ci-status: <text>", printed
+ * after it with its exit kept. Nothing beyond the command line runOnHost already sends.
+ */
+export function ciOnHost(cmd) {
+  return [
+    'RIG_CI_STATUS="$(git rev-parse --absolute-git-dir)/rig-ci-status"; export RIG_CI_STATUS; rm -f "$RIG_CI_STATUS"',
+    `( ${cmd} )`,
+    // No backslashes: the command crosses ssh and a login shell (fish reads them differently).
+    `c=$?; [ -s "$RIG_CI_STATUS" ] && echo "rig-qa-ci-status: $(head -c 500 "$RIG_CI_STATUS" | tr -s '[:space:]' ' ')"; exit $c`,
+  ].join('; ')
 }

@@ -180,9 +180,9 @@ await suite('rig 5.5, r55q: baselines, local CI, repeats, the second machine', a
 
   // ---------------------------------------------------------------------------------------------
   // The repo's own local CI.
-  const CI = `const { writeFileSync } = require('node:fs')
+  const CI = `const { readFileSync, writeFileSync } = require('node:fs')
 console.log('ci: lint ok, unit ok, build ok')
-writeFileSync(process.env.RIG_CI_STATUS, 'success 3 of 3 steps')
+writeFileSync(process.env.RIG_CI_STATUS, process.env.CI_POSTS ? readFileSync(process.env.CI_POSTS, 'utf8') : 'success 3 of 3 steps')
 `
   const ciRepo = repoAt('ci', { 'ci.js': CI, 'package.json': JSON.stringify({ name: 'fixture', scripts: { ci: 'node ci.js' } }) })
   await s.check('scripts.ci is found and run as kind "ci", with the status it posted', {
@@ -204,6 +204,22 @@ writeFileSync(process.env.RIG_CI_STATUS, 'success 3 of 3 steps')
     breaks: () => {
       setConfig(ciRepo, { ciCommand: null })
       return () => setConfig(ciRepo, {})
+    },
+    timeout: 60_000,
+  })
+
+  let posted = 'failure lint found 2'
+  await s.check('a CI that exits 0 but posts "failure" is not green (r55g review 2)', {
+    assert: async () => {
+      writeFileSync(join(ciRepo, '.rig', 'posted'), posted)
+      const r = rigQa(ciRepo, ['HEAD', '--ci', '--run', 'true'], { env: { CI_POSTS: join(ciRepo, '.rig', 'posted') } })
+      return r.status === 1 && /NOT green: the CI exited 0 but posted failure/.test(r.out) && last(ciRepo, 'ci').exit === 0
+    },
+    breaks: () => {
+      posted = 'success'
+      return () => {
+        posted = 'failure lint found 2'
+      }
     },
     timeout: 60_000,
   })

@@ -13,7 +13,7 @@ import { exitCodeFor, fmtMs, runWatched } from '../qa/watch.js'
 import { compareBaseline, parseFailures, tally } from '../qa/failures.js'
 import { desktopFreeEnv, makeShims, needsStub, readShimCalls } from '../qa/desktop.js'
 import { detectCi, planSeeds, readCiStatus, withSeed } from '../qa/ci.js'
-import { holderId, leaseHost, runHost } from '../qa/host.js'
+import { ciOnHost, holderId, leaseHost, runHost } from '../qa/host.js'
 
 export { exitCodeFor, groups }
 
@@ -170,7 +170,9 @@ export default async function qa(args) {
   }
 
   let exit = 0
-  const fail = (code) => {
+  // A CI that exits 0 but posted "failure" is not green (r55g review 2): the posted verdict counts.
+  const fail = (r) => {
+    const code = r.exit !== 0 ? r.exit : r.ciStatus?.state === 'failure' ? 1 : 0
     if (exit === 0 && code !== 0) exit = code
   }
   ctx.seen = new Set()
@@ -183,16 +185,16 @@ export default async function qa(args) {
       localStage(ctx, both ? ['test', 'ci'] : ['test'], cmd, { ci: both ? ci : null }),
       host ? hostStage(ctx, both ? ['test', 'ci'] : ['test'], cmd) : null,
     ])
-    fail(here.exit)
-    if (there) fail(there.exit)
+    fail(here)
+    if (there) fail(there)
     heads.push({ here, there })
     if (there) sideBySide(here, there, host)
   }
   if (ci && ci.cmd !== cmd) {
     console.log(`\nlocal CI: ${ci.cmd}   (${ci.from})`)
     const [here, there] = await Promise.all([localStage(ctx, ['ci'], ci.cmd, { ci }), host ? hostStage(ctx, ['ci'], ci.cmd) : null])
-    fail(here.exit)
-    if (there) fail(there.exit)
+    fail(here)
+    if (there) fail(there)
     if (there) sideBySide(here, there, host)
     if (!cmd) heads.push({ here, there })
   }
@@ -206,7 +208,7 @@ export default async function qa(args) {
 
   if (negative) {
     const r = await localStage(ctx, ['negative'], negative)
-    fail(r.exit)
+    fail(r)
   }
   lease?.release()
   process.exit(exit)
@@ -346,28 +348,35 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
     console.log(
       `rig qa: clipboard tools were called ${calls.length}× (${[...new Set(calls.map((c) => c.tool))].join(', ')}) and failed fast; no failing spec matched them`,
     )
-  if (kinds.includes('ci'))
-    console.log(
-      `rig qa: CI status ${ciStatus ? `${ciStatus.state}${ciStatus.text ? ` (${ciStatus.text})` : ''}` : 'not posted (RIG_CI_STATUS left empty)'}`,
-    )
+  if (kinds.includes('ci')) printCiStatus(ciStatus, r.exit, '')
   if (dirtied.length || untracked.length) console.log(dirtyMessage(dirtied, untracked))
-  return { ...r, cmd, failures, needsStub: stub.map((s) => s.name), tally: t, label: `${kind} here` }
+  return { ...r, cmd, failures, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
+}
+
+function printCiStatus(status, exit, where) {
+  const said = status ? `${status.state}${status.text ? ` (${status.text})` : ''}` : 'not posted (RIG_CI_STATUS left empty)'
+  console.log(`rig qa: CI status${where} ${said}`)
+  if (exit === 0 && status?.state === 'failure')
+    console.log(`rig qa: NOT green${where}: the CI exited 0 but posted failure, and the posted verdict counts`)
 }
 
 /** The same run on the host, recorded with host: '<ssh-host>'. */
 async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
   const { root, host, full, sha, ref, by } = ctx
   const env = { RIG_QA_SHA: sha, ...(seed ? { RIG_SEED: seed } : {}) }
+  const ci = kinds.includes('ci')
   const r = await runHost({
     root,
     host,
     sha: full,
-    cmd,
+    cmd: ci ? ciOnHost(cmd) : cmd,
     session: by,
     env,
     limitMs: ctx.limitMs,
+    stallMs: ctx.stallMs,
     pattern: ctx.pattern,
     desktop: ctx.desktop,
+    ci,
   })
   if (record)
     for (const k of kinds) {
@@ -386,11 +395,17 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
         passed: r.tally.passed,
         failed: r.tally.failed,
         needsStub: r.needsStub,
+        stalled: r.stalled,
         error: r.error,
+        ...(k === 'ci' ? { ciStatus: r.ciStatus } : {}),
       })
       timing(root, 'qa:host', r.ms, full, host, r.exit === 0)
     }
-  if (record) console.log(`\nrig qa: ${kinds.join(' + ')} on ${host} exit ${r.exit} at ${sha}  ${fmtMs(r.ms)}`)
+  if (record) {
+    console.log(`\nrig qa: ${kinds.join(' + ')} on ${host} exit ${r.exit} at ${sha}  ${fmtMs(r.ms)}`)
+    if (r.stalled) console.log(`rig qa: stalled on ${host}, last spec ${r.stalled.spec ?? 'none named'}, quiet ${fmtMs(r.stalled.quietMs)}`)
+    if (ci) printCiStatus(r.ciStatus, r.exit, ` on ${host}`)
+  }
   return { ...r, label: `${kinds[0]} on ${host}` }
 }
 
@@ -484,7 +499,7 @@ async function baselineStage(ctx, args, here, there) {
     there: there?.failures ?? null,
     base: baseFailures,
     needsStub: [...new Set([...(here.needsStub ?? []), ...(there?.needsStub ?? [])])],
-    runs: [...runs, { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures }],
+    runs: [...runs, { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures, stalled: r.stalled }],
   })
   record({ base, baseSha, baseExit: r.exit, baseFailed: baseFailures.length, baseLog: log.path, stalled: r.stalled, ...cmp })
 }

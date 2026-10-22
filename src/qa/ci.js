@@ -50,7 +50,12 @@ function executable(p) {
  */
 export function readCiStatus(file) {
   if (!file || !existsSync(file)) return null
-  const raw = readFileSync(file, 'utf8').trim()
+  return parseCiStatus(readFileSync(file, 'utf8'))
+}
+
+/** A posted status's text, as readCiStatus reads it; null when empty. */
+export function parseCiStatus(posted) {
+  const raw = String(posted ?? '').trim()
   if (!raw) return null
   let state = null
   let text = null

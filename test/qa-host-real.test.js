@@ -32,6 +32,8 @@ const { dir: repo } = fixtureRepo(w.root, 'app', [{ 'test/a.test.js': SPEC, '.gi
 mkdirSync(join(repo, '.rig'), { recursive: true })
 writeFileSync(join(repo, '.rig', 'config.json'), JSON.stringify({ worktreeDir: '.worktrees', qaPort: 5499 }))
 const sha = git(repo, 'rev-parse', 'HEAD')
+// The CI command is set in the config, so it runs the same here and there; what it posts is fixed per check.
+let writeCi = () => {}
 
 const rig = (args, env = {}) => {
   const r = spawnSync(process.execPath, [RIG, ...args], { cwd: repo, encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000 })
@@ -96,6 +98,47 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
       holder = 'r55q'
       return () => {
         holder = 'r55x'
+      }
+    },
+    timeout: 90_000,
+  })
+
+  let quiet = 'sleep 30'
+  await s.check('a host run that stops writing is caught by the stall watchdog and named (r55g review 1)', {
+    assert: async () => {
+      const t = Date.now()
+      rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--stall', '0.05', '--run', `echo running tests/slow.spec.js; ${quiet}`])
+      const st = lastOn('box').stalled
+      return st?.worker === 'box' && st.spec === 'tests/slow.spec.js' && Date.now() - t < 25_000
+    },
+    breaks: () => {
+      quiet = 'for i in 1 2 3 4 5 6; do sleep 1; echo tick; done'
+      return () => {
+        quiet = 'sleep 30'
+      }
+    },
+    timeout: 90_000,
+  })
+
+  let hostPost = 'failure lint found 2'
+  writeCi = () =>
+    writeFileSync(
+      join(repo, '.rig', 'config.json'),
+      JSON.stringify({ worktreeDir: '.worktrees', qaPort: 5499, ciCommand: `echo ci ok; printf '%s' '${hostPost}' > "$RIG_CI_STATUS"` }),
+    )
+  writeCi()
+  await s.check('the CI status posted on the host is recorded, and a posted failure is not green (r55g review 3)', {
+    assert: async () => {
+      const q = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--ci', '--run', 'true'], {})
+      const rec = lastOn('box', 'ci')
+      return q.status === 1 && rec?.ciStatus?.state === 'failure' && rec.ciStatus.text === 'lint found 2'
+    },
+    breaks: () => {
+      hostPost = 'success'
+      writeCi()
+      return () => {
+        hostPost = 'failure lint found 2'
+        writeCi()
       }
     },
     timeout: 90_000,

@@ -145,7 +145,10 @@ export function compareBaseline({ here, there = null, base, runs, needsStub = []
     ['here', here],
     ['there', there],
   ].filter(([, f]) => f)
-  const unread = (runs ?? []).filter((r) => r.exit !== 0 && r.failures.length === 0)
+  // A run that did not finish (a hard limit, a signal, the watchdog) may have more failures it never
+  // reached, so its names are not the whole list either (r55g review 5).
+  const cut = (r) => r.stalled || r.exit === 124 || r.exit >= 128
+  const unread = (runs ?? []).filter((r) => cut(r) || (r.exit !== 0 && r.failures.length === 0))
   const all = [...new Set(heads.flatMap(([, f]) => f))]
   const where = (n) => {
     const w = heads.filter(([, f]) => f.includes(n)).map(([k]) => k)
@@ -157,7 +160,17 @@ export function compareBaseline({ here, there = null, base, runs, needsStub = []
     known: all.filter((n) => baseSet.has(n)).map((name) => ({ name, where: where(name) })),
     fixed: base.filter((n) => !all.includes(n)),
     complete: unread.length === 0,
-    why: unread.length ? unread.map((r) => `${r.label} exited ${r.exit} with no failure rig qa could name`).join('; ') : null,
+    why: unread.length
+      ? unread
+          .map((r) =>
+            r.stalled
+              ? `${r.label} stalled (exit ${r.exit})`
+              : cut(r)
+                ? `${r.label} did not finish (exit ${r.exit})`
+                : `${r.label} exited ${r.exit} with no failure rig qa could name`,
+          )
+          .join('; ')
+      : null,
   }
 }
 

@@ -104,7 +104,7 @@ test('compareBaseline: new, known by where, fixed; needs-a-stub is not new; an u
   assert.equal(b.complete, true)
   const crash = compareBaseline({ here: [], base: [], runs: [{ label: 'test here', exit: 134, failures: [] }] })
   assert.equal(crash.complete, false)
-  assert.match(crash.why, /exited 134/)
+  assert.match(crash.why, /did not finish \(exit 134\)/)
 })
 
 test('needsStub: a failure whose block names the shimmed tool, or that a call landed inside', () => {
@@ -226,5 +226,66 @@ test('the host lease is not given back while a run there may still be going', as
     assert.deepEqual(released, ['host:box'])
   } finally {
     Object.assign(remote, saved)
+  }
+})
+
+test('a run killed by a limit, a signal or the watchdog never makes "0 new" complete, even with names (r55g review 5)', () => {
+  for (const run of [
+    { label: 'test here', exit: 124, failures: ['a'] },
+    { label: 'test here', exit: 137, failures: ['a'] },
+    { label: 'test here', exit: 1, failures: ['a'], stalled: { worker: 'output', spec: null, quietMs: 1 } },
+  ]) {
+    const b = compareBaseline({ here: ['a'], base: ['a'], runs: [run] })
+    assert.equal(b.complete, false, JSON.stringify(run))
+    assert.match(b.why, /did not finish|stalled/)
+  }
+  assert.equal(compareBaseline({ here: ['a'], base: ['a'], runs: [{ exit: 1, failures: ['a'] }] }).complete, true)
+})
+
+test('a host run that stops writing is stopped waiting on, named, and its lease kept (r55g review 1)', async () => {
+  const { remote, runHost, leaseHost } = await import('../src/qa/host.js')
+  const saved = { ...remote }
+  const released = []
+  let aborted = false
+  remote.acquire = () => ({ ok: true, holder: null, why: null })
+  remote.release = (_r, res) => released.push(res)
+  remote.runOnHost = (o) => {
+    o.onOutput('running tests/payment.spec.js\n')
+    o.signal?.addEventListener('abort', () => {
+      aborted = true
+    })
+    return new Promise(() => {}) // the host never comes back
+  }
+  try {
+    const lease = leaseHost(tmp, 'box', 'r55q')
+    const t = Date.now()
+    const r = await runHost({ root: tmp, host: 'box', sha: 'abc', cmd: 'x', session: 's', echo: false, stallMs: 300 })
+    assert.equal(r.exit, 124)
+    assert.deepEqual({ worker: r.stalled.worker, spec: r.stalled.spec }, { worker: 'box', spec: 'tests/payment.spec.js' })
+    assert.ok(Date.now() - t < 2000, `took ${Date.now() - t} ms`)
+    assert.ok(aborted, 'the abort signal reached runOnHost')
+    lease.release()
+    assert.deepEqual(released, [], 'the lease is kept: the run on the host was never seen to end')
+  } finally {
+    Object.assign(remote, saved)
+  }
+})
+
+test('the CI status a host run posts is read from its marked line (r55g review 3)', async () => {
+  const { remote, runHost, ciOnHost } = await import('../src/qa/host.js')
+  const saved = remote.runOnHost
+  let sent = null
+  remote.runOnHost = async (o) => {
+    sent = o.cmd
+    const log = 'ci: lint ok\nrig-qa-ci-status: failure lint found 2\n'
+    return { host: o.host, exit: 0, ms: 1, log }
+  }
+  try {
+    const r = await runHost({ root: tmp, host: 'box', sha: 'abc', cmd: ciOnHost('npm run ci'), session: 's', echo: false, ci: true })
+    assert.match(sent, /RIG_CI_STATUS=/)
+    assert.match(sent, /npm run ci/)
+    assert.deepEqual(r.ciStatus, { state: 'failure', text: 'lint found 2' })
+  } finally {
+    remote.runOnHost = saved
   }
 })
