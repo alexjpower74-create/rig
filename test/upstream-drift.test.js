@@ -6,24 +6,26 @@
 // that skips the fetch and so compares against a stale copy of the base.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { suite } from '../harness/check.js'
-import { drift, liveBase, mergeTree } from '../src/drift.js'
-import { duration, formatEta, roundStages } from '../src/commands/status.js'
+import { drift, fetchEnv, liveBase, mergeTree } from '../src/drift.js'
+import { duration, formatEta, roundEstimate, roundStages, roundTotal } from '../src/commands/status.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const RIG = join(here, '..', 'bin', 'rig.js')
 // The scaffold commit r55u started from: its status.js is 5.0's, with no drift and no --eta.
 const START = '14a1ad6'
+// The tip r55m's review (docs/review-r55u.md on rig/r55m) was answered from: the code before its fixes.
+const REVIEWED = '7d6e987'
 const git = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
 const made = []
 const etaBlock = (out) => out.slice(out.indexOf('eta for a final round'), out.indexOf('\n\n', out.indexOf('eta for a final round')))
 let rig = RIG
-let old = null
+const unpacked = new Map()
 
 const PLAN = `# Fixture plan
 
@@ -316,8 +318,9 @@ await suite('upstream: drift is known before the round', async (s) => {
       )
     },
     // A formatter that fills the gap with the stages it has: the guess the bar forbids.
-    breaks: () => {
-      fmt = (est) => formatEta({ ...est, totalMs: est.stages.reduce((t, x) => t + (x.medianMs || 0), 0) })
+    breaks: async () => {
+      const was = (await before('src/commands/status.js')).formatEta
+      fmt = (est) => was({ ...est, totalMs: est.stages.reduce((t, x) => t + (x.medianMs || 0), 0) })
       return () => {
         fmt = formatEta
       }
@@ -340,19 +343,198 @@ await suite('upstream: drift is known before the round', async (s) => {
       }
     },
   })
+
+  // ── r55m's review of 7d6e987, findings 1, 3 and the lead's decision on 6 ──────────────────────
+
+  let driftNow = drift
+  await s.check('review 1: the fetch uses the repo’s own core.sshCommand, with BatchMode and ConnectTimeout added', {
+    assert: () => {
+      const fx = fixture()
+      const log = join(fx.top, 'ssh.log')
+      const bin = join(fx.top, 'bin')
+      mkdirSync(bin, { recursive: true })
+      // The repo's own ssh: logs its arguments, then runs the remote command here, as a host would.
+      const own = join(fx.top, 'own-ssh')
+      writeFileSync(own, `#!/bin/sh\necho "own $*" >> "${log}"\nfor last; do :; done\nexec sh -c "$last"\n`)
+      // Plain ssh on PATH: what a fetch that ignores core.sshCommand reaches. It fails at once.
+      writeFileSync(join(bin, 'ssh'), `#!/bin/sh\necho "plain $*" >> "${log}"\nexit 255\n`)
+      chmodSync(own, 0o755)
+      chmodSync(join(bin, 'ssh'), 0o755)
+      git(['remote', 'set-url', 'origin', `fakehost:${join(fx.top, 'upstream.git')}`], fx.lead)
+      git(['config', 'core.sshCommand', own], fx.lead)
+      land(fx, { 'src/b.js': 'export const b = 7\n' }, 'upstream: b is 7')
+      const path = process.env.PATH
+      const ssh = process.env.GIT_SSH_COMMAND
+      delete process.env.GIT_SSH_COMMAND
+      process.env.PATH = `${bin}:${path}`
+      try {
+        const d = driftNow(fx.lead, { base: 'origin/main', head: 'rig/s1', slices: SLICES })
+        const said = existsSync(log) ? readFileSync(log, 'utf8') : ''
+        if (!d.fetched || !d.moved) throw new Error(`fetched ${d.fetched}, moved ${d.moved}, error ${d.error}; ssh log: ${said}`)
+        return /^own .*-o BatchMode=yes -o ConnectTimeout=10 fakehost /m.test(said) && !/^plain/m.test(said)
+      } finally {
+        process.env.PATH = path
+        if (ssh !== undefined) process.env.GIT_SSH_COMMAND = ssh
+      }
+    },
+    // drift as reviewed: GIT_SSH_COMMAND='ssh -o BatchMode=yes' outranks the repo's own command.
+    breaks: async () => {
+      driftNow = (await before('src/drift.js')).drift
+      return () => {
+        driftNow = drift
+      }
+    },
+    timeout: 20_000,
+  })
+
+  let env = fetchEnv
+  await s.check('review 1: GIT_SSH_COMMAND is kept and extended; a GIT_SSH program is left alone; plain ssh otherwise', {
+    assert: () => {
+      const fx = fixture()
+      const a = env(fx.lead, { GIT_SSH_COMMAND: 'ssh -i k' })
+      const b = env(fx.lead, { GIT_SSH: '/usr/local/bin/my-ssh' })
+      const c = env(fx.lead, {})
+      return (
+        a.GIT_SSH_COMMAND === 'ssh -i k -o BatchMode=yes -o ConnectTimeout=10' &&
+        b.GIT_SSH_COMMAND === undefined &&
+        c.GIT_SSH_COMMAND === 'ssh -o BatchMode=yes -o ConnectTimeout=10' &&
+        [a, b, c].every((e) => e.GIT_TERMINAL_PROMPT === '0')
+      )
+    },
+    // The reviewed line: GIT_SSH_COMMAND || 'ssh -o BatchMode=yes', set for everyone.
+    breaks: () => {
+      env = (_root, e) => ({ ...e, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: e.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes' })
+      return () => {
+        env = fetchEnv
+      }
+    },
+  })
+
+  await s.check('review 3: rig status names the fetch before it waits on it', {
+    assert: () => {
+      const fx = fixture()
+      statusSetup(fx)
+      const out = rigStatus(fx, [])
+      const at = out.indexOf('fetching origin/main…')
+      return at >= 0 && at < out.indexOf('drift vs origin/main')
+    },
+    breaks: () => oldRig(REVIEWED),
+    timeout: 30_000,
+  })
+
+  // The lead's decision on 6: qa:test and qa:host run side by side, so the round takes the longer;
+  // repeat runs (qa:repeat, qa:host:repeat) are not a stage of the round.
+  const timings = [
+    { stage: 'qa:test', ms: 600_000, host: 'local' },
+    { stage: 'qa:host', ms: 720_000, host: 'box' },
+    { stage: 'qa:negative', ms: 30_000, host: 'local' },
+    { stage: 'qa:baseline', ms: 300_000, host: 'local' },
+    { stage: 'qa:ci', ms: 180_000, host: 'local' },
+    { stage: 'qa:ci', ms: 240_000, host: 'box' },
+    { stage: 'review', ms: 900_000, host: 'local' },
+    { stage: 'fold', ms: 60_000, host: 'local' },
+    { stage: 'qa:repeat', ms: 3_600_000, host: 'local' },
+    { stage: 'qa:host:repeat', ms: 3_600_000, host: 'box' },
+  ]
+  // r55m's estimate(), restated: the median per stage of finished runs, narrowed to a host when asked.
+  const fakeEstimate = (_root, stages, { host } = {}) => {
+    const rows = stages.map((stage) => {
+      const ms = timings.filter((t) => t.stage === stage && (host === undefined || t.host === host)).map((t) => t.ms)
+      return { stage, medianMs: ms.length ? ms.sort((x, y) => x - y)[ms.length >> 1] : null, n: ms.length }
+    })
+    return { stages: rows, totalMs: null, note: null }
+  }
+  const deps = { estimate: fakeEstimate, readTimings: () => timings }
+
+  let round = roundEstimate
+  await s.check('decision 6: qa:test and qa:host count once at the longer, and so do qa:ci here and there', {
+    assert: () => {
+      const est = round('/nowhere', { qaHost: 'box', ciCommand: 'npm run ci' }, deps)
+      const names = est.stages.map((r) => r.stage).join()
+      // 12 min (host beats 10 min here) + 30 s + 5 min + 4 min (ci there beats 3 min here) + 15 min + 1 min
+      const want = 720_000 + 30_000 + 300_000 + 240_000 + 900_000 + 60_000
+      const out = plain(formatEta(est).join('\n'))
+      return (
+        names === 'qa:test,qa:negative,qa:baseline,qa:ci,qa:ci@box,qa:host,review,fold' &&
+        est.totalMs === want &&
+        /total\s+37 min 30 s/.test(out) &&
+        /qa:test and qa:host run side by side: the longer counts/.test(out) &&
+        /qa:ci and qa:ci@box run side by side/.test(out)
+      )
+    },
+    // The reviewed total: every median summed, the two machines added together.
+    breaks: async () => {
+      const old = await before('src/commands/status.js')
+      round = (root, cfg, d) => {
+        const stages = old.roundStages(cfg, d.readTimings(root))
+        const rows = d.estimate(root, stages).stages
+        return { stages: rows, totalMs: rows.reduce((t, r) => t + r.medianMs, 0) }
+      }
+      return () => {
+        round = roundEstimate
+      }
+    },
+  })
+
+  await s.check('decision 6: repeat runs never enter the round, however long they were', {
+    assert: () => {
+      const est = round('/nowhere', { qaHost: 'box' }, deps)
+      return (
+        !est.stages.some((r) => /repeat/.test(r.stage)) &&
+        !roundStages({}, timings).some((x) => /repeat/.test(x)) &&
+        est.totalMs === 720_000 + 30_000 + 300_000 + 240_000 + 900_000 + 60_000
+      )
+    },
+    // estimate() with no stage list: every recorded stage, repeats included.
+    breaks: () => {
+      round = (root, _cfg, d) => {
+        const rows = d.estimate(root, [...new Set(d.readTimings(root).map((t) => t.stage))]).stages
+        return { stages: rows, ...roundTotal(rows) }
+      }
+      return () => {
+        round = roundEstimate
+      }
+    },
+  })
+
+  let total = roundTotal
+  await s.check('roundTotal: a missing stage leaves no total, and the floor counts a side-by-side pair once', {
+    assert: () => {
+      const t = total([
+        { stage: 'qa:test', medianMs: 600_000, group: 'suite' },
+        { stage: 'qa:host', medianMs: 720_000, group: 'suite' },
+        { stage: 'fold', medianMs: null, group: 'fold' },
+      ])
+      return t.totalMs === null && t.floorMs === 720_000
+    },
+    breaks: () => {
+      total = (rows) => ({ totalMs: null, floorMs: rows.reduce((x, r) => x + (r.medianMs || 0), 0) })
+      return () => {
+        total = roundTotal
+      }
+    },
+  })
 })
 
-// The Rig this build started from, unpacked once, for the status checks' red run.
-function oldRig() {
-  if (!old) {
-    old = realpathSync(mkdtempSync(join(tmpdir(), 'rig-old-')))
-    made.push(old)
-    execFileSync('sh', ['-c', `git -C "${join(here, '..')}" archive ${START} | tar -x -C "${old}"`])
+// A Rig as it stood at an older commit, unpacked once per sha, for red runs.
+function unpack(sha) {
+  if (!unpacked.has(sha)) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'rig-old-')))
+    made.push(dir)
+    execFileSync('sh', ['-c', `git -C "${join(here, '..')}" archive ${sha} | tar -x -C "${dir}"`])
+    unpacked.set(sha, dir)
   }
-  rig = join(old, 'bin', 'rig.js')
+  return unpacked.get(sha)
+}
+/** Run `rig` as it stood at `sha` (default: the commit this build started from) until restored. */
+function oldRig(sha = START) {
+  rig = join(unpack(sha), 'bin', 'rig.js')
   return () => {
     rig = RIG
   }
+}
+function before(path) {
+  return import(join(unpack(REVIEWED), path))
 }
 
 // `rig status` needs a config whose worktreeDir holds the slice worktrees, and no terminal.

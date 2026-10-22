@@ -175,10 +175,12 @@ status: `rig status [--base <ref>] [--no-fetch] [--eta]
   drift first: each slice against the live base (fetched; --no-fetch uses the last fetch), the owned
   files it touched, how many are safe, and whether each still merges (git merge-tree);
   --eta prints the median of measured stage times for a final round, or "no data"`,
-rebase: `rig rebase <id> [--base <ref>] [--share <0..1>] [--covered "<what upstream covers>"] [--drop <sha>]... [--no-fetch]
+rebase: `rig rebase <id> [--base <ref>] [--share <0..1>] [--covered "<what upstream covers>"] [--drop <sha>]... [--no-fetch] [--force]
   stops before resolving (exit 3, .rig/rebase-<id>.md) when upstream deleted, moved, also created, or
   rewrote ≥ share (default 0.5) of a file the slice changed; --covered records the answer and goes on;
-  --drop drops a superseded commit; a conflict is aborted with the files named (exit 1)`,
+  --drop drops a superseded commit; a conflict is aborted with the files named (exit 1);
+  a failed fetch stops it (--no-fetch rebases onto the last fetched base on purpose);
+  a slice whose agent is working or blocked is refused (--force rebases under it anyway)`,
 ```
 COMMANDS one-liner for status: `per-slice: drift against the live base first, then agent state, commits ahead, uncommitted files, and anything edited outside its slice (--eta for measured stage times)`.
 
@@ -202,6 +204,23 @@ README paragraph:
 - **r55q** (`rig qa` warns): `import { staleBaselines, formatStale } from '../baselines.js'`, then
   `for (const l of formatStale(staleBaselines(root, { base }), { base })) console.warn(l)`.
   `base` defaults to `origin/main` and falls back to the live base when that does not resolve.
+
+## Fixes after r55m's review (docs/review-r55u.md on rig/r55m, reviewed at a75bc05)
+Each fix has a check that is red against the reviewed code (7d6e987, unpacked with `git archive`
+and swapped in as the check's `breaks`) and green on the fix.
+
+| finding | fix | check (file) | red against |
+|---|---|---|---|
+| 1. the fetch overrode `core.sshCommand` | `fetchEnv()`: GIT_SSH_COMMAND, else `core.sshCommand`, else `ssh`, each with `-o BatchMode=yes -o ConnectTimeout=10`; a `GIT_SSH` program is left alone | the repo's own ssh script is called (and fetches); plain ssh on PATH is never reached (upstream-drift) · the three env cases (upstream-drift) | 7d6e987's drift; the reviewed env line |
+| 2. `rig rebase` ignored a failed fetch | the fetch result is read: the reason is printed, the branch is untouched, exit 1; `--no-fetch` rebases onto the last fetch and says so | unreachable remote (upstream-rebase) | 7d6e987's rig, which rebased onto the stale base, exit 0 |
+| 3. a silent 30 s wait in `rig status` | `ConnectTimeout=10` (as in 1); `fetching origin/main…` is printed before the fetch, in status and rebase | status names the fetch before the drift header (upstream-drift) | 7d6e987's rig |
+| 4. rebase rewrote a live agent's tree | refused while herdr says the slice's agent is working or blocked, unless `--force`; after any rebase in the slice's own tree it prints "<id>'s tree moved: … Tell the owner before its next commit" | fake `herdr` on PATH, working → refused, `--force` → goes, nothing ever typed into a pane · idle → rebased with the note (upstream-rebase) | 7d6e987's rig |
+| 5. `staleBaselines` returned `[]` when it could not check | it throws with the reason; the array contract is unchanged otherwise. r55q's `warnStaleBaselines` already catches and prints "could not be checked: <reason>" | detached, no origin → the reason (upstream-baselines) | 7d6e987's baselines.js |
+| 6. eta total (lead's decision) | `roundEstimate`/`roundTotal`: qa:test and qa:host count once, at the longer; so do `qa:ci` here and `qa:ci@<host>` there (estimate() per host). Repeat stages (`qa:repeat`, `qa:host:repeat`) never enter the round. The output says which stages ran side by side | the max total (37 min 30 s on fixture timings), repeats ignored, the floor counting a pair once (upstream-drift) | 7d6e987's summing total; an estimate over every recorded stage |
+
+Note for r55q: the lead's decision has you recording host repeats as `qa:host:repeat`. Until then,
+rig/r55q's `qa.js:546` still records them as `qa:host`, and they skew the `qa:host` median that
+`--eta` uses.
 
 ## What's left
 - **Review of r55w**: DONE at ef60454, in `docs/review-r55w.md`. Two medium findings, both reproduced:

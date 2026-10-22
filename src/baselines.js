@@ -26,13 +26,15 @@ const HEAD_LINES = 5
  * changed more than baselines (committing a fresh baseline does not make it stale); a sha
  * this clone does not have (recorded on a branch since rewritten) is reported with `behind: null`
  * and `unknown: true`, since nothing can say how stale it is. When `base` does not resolve here
- * (no origin), the live base of the current branch is used instead.
+ * (no origin), the live base of the current branch is used instead; when neither resolves it throws,
+ * with the reason, so a caller never reads "could not check" as "nothing stale".
  *
  * @returns {{ file: string, recordedFrom: string, behind: number }[]}
  */
 export function staleBaselines(root, { base = 'origin/main', dirs } = {}) {
   const at = resolveBase(root, base)
-  if (!at) return []
+  // "Could not check" must never read as "none stale": both used to be [].
+  if (!at) throw new Error(`no base to compare baselines against: ${base} does not resolve here, and neither does a live base`)
   const want = dirs ?? loadConfig(root).snapshotDirs ?? null
   const files = baselineFiles(root, want)
   const tracked = new Set(files)

@@ -96,7 +96,7 @@ function printDrift(root, cfg, plan, base, { fetch }) {
   // move, and "pull before the round" can only be said from a fresh copy.
   const up = tryGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${base}@{upstream}`], root)
   const upstream = up.ok && up.out ? up.out : null
-  const f = fetch ? fetchBase(root, upstream || base) : { ok: false, why: null }
+  const f = fetch ? fetchBase(root, upstream || base, undefined, { say: (m) => console.log(DIM(m)) }) : { ok: false, why: null }
   const live = liveBase(root, base)
   const how = !fetch
     ? 'not fetched (--no-fetch)'
@@ -140,39 +140,88 @@ export function roundStages(cfg = {}, recorded = []) {
   if (cfg.ciCommand || seen.has('qa:ci')) stages.push('qa:ci')
   if (cfg.qaHost || seen.has('qa:host')) stages.push('qa:host')
   stages.push('review', 'fold')
-  return stages
+  // Repeat runs (qa:repeat, qa:host:repeat) prove a flake fix; they are not a stage of the round.
+  return stages.filter((st) => !isRepeat(st))
+}
+
+const isRepeat = (stage) => /:repeat$/.test(stage)
+
+/**
+ * Stages that run side by side, so the round takes the longer of them, not their sum: the suite
+ * here (qa:test) and on the second machine (qa:host), and the repo's CI here and there.
+ */
+export const SIDE_BY_SIDE = { 'qa:test': 'suite', 'qa:host': 'suite', 'qa:ci': 'ci', 'qa:ci@host': 'ci' }
+
+/**
+ * The estimate for a final round: estimate() per stage, with the CI command split by machine when
+ * it ran on a second one (`qa:ci` here, `qa:ci@<host>` there). Each row carries its side-by-side
+ * group; the total is roundTotal()'s. `deps` lets a test hand in timings without a recorder.
+ */
+export function roundEstimate(root, cfg = {}, { estimate: est = estimate, readTimings: read = readTimings } = {}) {
+  const recorded = read(root).filter((t) => !isRepeat(t.stage))
+  const stages = roundStages(cfg, recorded)
+  const ciHost = cfg.qaHost || recorded.find((t) => t.stage === 'qa:ci' && t.host && t.host !== 'local')?.host || null
+  const rows = []
+  for (const stage of stages) {
+    if (stage === 'qa:ci' && ciHost) {
+      rows.push({ ...est(root, [stage], { host: 'local' }).stages[0], group: 'ci' })
+      rows.push({ ...est(root, [stage], { host: ciHost }).stages[0], stage: `qa:ci@${ciHost}`, group: 'ci' })
+    } else rows.push({ ...est(root, [stage]).stages[0], group: SIDE_BY_SIDE[stage] || stage })
+  }
+  return { stages: rows, ...roundTotal(rows) }
 }
 
 /**
- * The lines `rig status --eta` prints for an estimate(): each stage's median and how many runs it
- * came from, or "no data". The total is printed only when every stage has data; a guess is never
- * filled in for a stage nobody measured.
+ * The round's total from per-stage medians: stages in one side-by-side group count once, at the
+ * longest; the rest add up. totalMs is null when any stage has no data, and floorMs is then what the
+ * measured stages alone add up to (null when none is measured).
+ */
+export function roundTotal(rows) {
+  const has = (r) => r.medianMs !== null && r.medianMs !== undefined
+  const groups = new Map()
+  for (const r of rows) {
+    const g = r.group || r.stage
+    groups.set(g, [...(groups.get(g) || []), r])
+  }
+  const longest = (rs) => Math.max(...rs.filter(has).map((r) => r.medianMs))
+  const complete = rows.every(has)
+  const known = [...groups.values()].filter((rs) => rs.some(has))
+  const sum = known.reduce((t, rs) => t + longest(rs), 0)
+  return { totalMs: complete && rows.length ? sum : null, floorMs: !complete && known.length ? sum : null }
+}
+
+/**
+ * The lines `rig status --eta` prints: each stage's median and how many runs it came from, or "no
+ * data". The total is printed only when every stage has data, with side-by-side stages counted once
+ * at the longest; otherwise the measured part is printed as a floor, never a guess at the rest.
  */
 export function formatEta(est) {
   const lines = ['eta for a final round  ' + DIM('(median of measured stage times)')]
+  const has = (s) => s.medianMs !== null && s.medianMs !== undefined
   for (const s of est.stages) {
-    const v = s.medianMs === null || s.medianMs === undefined ? DIM('no data') : `${duration(s.medianMs)}  ${DIM(`median of ${s.n}`)}`
+    const v = has(s) ? `${duration(s.medianMs)}  ${DIM(`median of ${s.n}`)}` : DIM('no data')
     lines.push(`  ${s.stage.padEnd(12)} ${v}`)
   }
-  if (est.totalMs === null || est.totalMs === undefined) {
-    const has = (s) => s.medianMs !== null && s.medianMs !== undefined
+  const { totalMs, floorMs } = roundTotal(est.stages)
+  if (totalMs === null) {
     const missing = est.stages.filter((s) => !has(s)).map((s) => s.stage)
     lines.push(`  ${'total'.padEnd(12)} ${YEL('no data')}${DIM(` for ${missing.join(', ') || 'every stage'}`)}`)
-    // The measured part is still a measurement: a floor, never a guess at the rest.
-    const known = est.stages.filter(has)
-    if (known.length)
-      lines.push(
-        `  ${''.padEnd(12)} ${DIM(`at least ${duration(known.reduce((t, s) => t + s.medianMs, 0))} from the ${known.length} measured stage(s)`)}`,
-      )
+    if (floorMs !== null) {
+      const n = est.stages.filter(has).length
+      lines.push(`  ${''.padEnd(12)} ${DIM(`at least ${duration(floorMs)} from the ${n} measured stage(s)`)}`)
+    }
   } else {
-    lines.push(`  ${'total'.padEnd(12)} ${duration(est.totalMs)}`)
+    lines.push(`  ${'total'.padEnd(12)} ${duration(totalMs)}`)
   }
+  const together = [...new Set(est.stages.map((s) => s.group))]
+    .map((g) => est.stages.filter((s) => s.group === g))
+    .filter((rs) => rs.length > 1)
+  for (const rs of together) lines.push(`  ${DIM(`${rs.map((r) => r.stage).join(' and ')} run side by side: the longer counts`)}`)
   return lines
 }
 
 function printEta(root, cfg) {
-  const stages = roundStages(cfg, readTimings(root))
-  for (const line of formatEta(estimate(root, stages))) console.log(line)
+  for (const line of formatEta(roundEstimate(root, cfg))) console.log(line)
   console.log()
 }
 

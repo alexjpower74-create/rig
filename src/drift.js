@@ -130,9 +130,10 @@ export function mergeTree(root, base, head) {
 /**
  * Fetch the remote branch `base` names (origin/main → `git fetch origin main`): { ok, why }. A local
  * base needs none and answers { ok: false, why: null }. Exported so a caller checking several heads
- * against one base fetches once, then passes `fetch: false`.
+ * against one base fetches once, then passes `fetch: false`. `say` is told what is being fetched
+ * before the wait starts, so a slow network has a name on screen rather than silence.
  */
-export function fetchBase(root, base, remote) {
+export function fetchBase(root, base, remote, { say } = {}) {
   const remotes = tryGit(['remote'], root)
   const names = remotes.ok ? remotes.out.split('\n').filter(Boolean) : []
   const from = remote || names.find((n) => base.startsWith(`${n}/`))
@@ -141,14 +142,26 @@ export function fetchBase(root, base, remote) {
   const branch = base.startsWith(`${from}/`) ? base.slice(from.length + 1) : null
   const args = ['fetch', '--quiet', '--no-tags', from]
   if (branch) args.push(`+refs/heads/${branch}:refs/remotes/${from}/${branch}`)
-  const r = tryRun('git', args, {
-    cwd: root,
-    timeout: FETCH_TIMEOUT_MS,
-    // Never wait on a password prompt or a host-key question: a fetch that asks is a fetch that failed.
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes' },
-  })
+  say?.(`fetching ${branch ? `${from}/${branch}` : from}…`)
+  const r = tryRun('git', args, { cwd: root, timeout: FETCH_TIMEOUT_MS, env: fetchEnv(root) })
   if (r.ok) return { ok: true }
   return { ok: false, why: `fetch from ${from} failed: ${(r.err || 'no answer').split('\n')[0]}` }
+}
+
+/**
+ * The environment a fetch runs in: it never waits on a password prompt or a host-key question (a
+ * fetch that asks is a fetch that failed), and an unreachable host gives up in 10 s rather than at
+ * the 30 s limit. The ssh command is the one the person configured (GIT_SSH_COMMAND, else the
+ * repo's core.sshCommand, else plain ssh) with those two options added: GIT_SSH_COMMAND outranks
+ * core.sshCommand, so setting a bare `ssh` here once threw away a repo's own key. Someone using
+ * GIT_SSH (a program, not a command line) is left exactly as they are.
+ */
+export function fetchEnv(root, env = process.env) {
+  const out = { ...env, GIT_TERMINAL_PROMPT: '0' }
+  const configured = tryGit(['config', '--get', 'core.sshCommand'], root)
+  const ssh = env.GIT_SSH_COMMAND || (configured.ok && configured.out) || (env.GIT_SSH ? null : 'ssh')
+  if (ssh) out.GIT_SSH_COMMAND = `${ssh} -o BatchMode=yes -o ConnectTimeout=10`
+  return out
 }
 
 function resolve(root, ref) {

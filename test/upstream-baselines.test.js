@@ -7,9 +7,14 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { suite } from '../harness/check.js'
 import { writeBaseline } from '../harness/snapshot.js'
 import { formatStale, staleBaselines } from '../src/baselines.js'
+
+const here = dirname(fileURLToPath(import.meta.url))
+// The tip r55m's review (docs/review-r55u.md on rig/r55m) was answered from: the code before its fixes.
+const REVIEWED = '7d6e987'
 
 const git = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const made = []
@@ -161,6 +166,31 @@ await suite('upstream: baselines that know their sha', async (s) => {
       fmt = () => []
       return () => {
         fmt = formatStale
+      }
+    },
+  })
+
+  await s.check('review 5: when there is no base to compare against it says so (a throw with the reason), never "none stale"', {
+    assert: () => {
+      const root = repo()
+      record(root, 'test/__snapshots__/home.snap')
+      commit(root, { 'src/app.js': 'v2\n' }, 'app v2')
+      git(['checkout', '-q', '--detach'], root) // no origin, no branch: nothing to resolve a base from
+      try {
+        const got = stale(root)
+        throw new Error(`answered ${JSON.stringify(got)} instead of saying it could not check`)
+      } catch (e) {
+        return /no base to compare baselines against: origin\/main does not resolve here/.test(e.message)
+      }
+    },
+    // staleBaselines as reviewed: [] for "could not check", the same answer as "all fresh".
+    breaks: async () => {
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'rig-old-')))
+      made.push(dir)
+      execFileSync('sh', ['-c', `git -C "${join(here, '..')}" archive ${REVIEWED} | tar -x -C "${dir}"`])
+      stale = (await import(join(dir, 'src', 'baselines.js'))).staleBaselines
+      return () => {
+        stale = staleBaselines
       }
     },
   })

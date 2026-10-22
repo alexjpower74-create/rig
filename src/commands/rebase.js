@@ -1,4 +1,4 @@
-// rig rebase <id> [--base <ref>] [--share <0..1>] [--covered "<what upstream covers>"] [--drop <sha>]...
+// rig rebase <id> [--base <ref>] [--share <0..1>] [--covered "<what upstream covers>"] [--drop <sha>]... [--no-fetch] [--force]
 //
 // Rebase a slice's branch onto the live base, the way a maintainer of a long-lived fork does it:
 // before resolving anything, look at what upstream did to the files the slice changed. Upstream once
@@ -15,11 +15,12 @@
 
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { loadConfig, mainRoot, currentBranch } from '../config.js'
+import { loadConfig, mainRoot, currentBranch, sessionName } from '../config.js'
 import { drift, fetchBase, formatDrift, liveBase } from '../drift.js'
 import { loadPlan } from '../plan.js'
 import { rigDir } from '../rigdir.js'
 import { tryGit, tryRun } from '../sh.js'
+import { terminal } from '../terminal.js'
 import { listWorktrees, worktreeBase, dirtyFiles } from '../worktrees.js'
 
 const RED = (s) => `\x1b[31m${s}\x1b[0m`
@@ -50,13 +51,28 @@ export default function rebase(args) {
   if (drops.length && !covered)
     throw new Error('--drop needs --covered "<what upstream now covers>": a dropped commit needs its reason on record')
 
+  // A rebase is the one command where a stale base is the whole failure: it would land the slice on
+  // yesterday's base and say "rebased". So a fetch that fails stops it; --no-fetch says, on purpose,
+  // that the last fetched base will do.
+  const noFetch = args.includes('--no-fetch')
   let base = argOf(args, '--base')
+  let fetchTarget = base
   if (!base) {
     const local = currentBranch(root)
     const up = tryGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${local}@{upstream}`], root)
-    if (!args.includes('--no-fetch')) fetchBase(root, up.ok && up.out ? up.out : local)
-    base = liveBase(root, local)
-  } else if (!args.includes('--no-fetch')) fetchBase(root, base)
+    fetchTarget = up.ok && up.out ? up.out : local
+  }
+  if (!noFetch) {
+    const f = fetchBase(root, fetchTarget, undefined, { say: (m) => console.log(DIM(m)) })
+    if (f.why) {
+      console.log(RED(`${f.why}`))
+      console.log(`  ${branch} was not touched. Rebasing onto the last fetched copy would land it on a stale base;`)
+      console.log(`  fix the fetch, or say the last fetch will do: rig rebase ${id} --no-fetch`)
+      process.exitCode = 1
+      return
+    }
+  } else console.log(DIM(`not fetched (--no-fetch): rebasing onto the last fetched ${fetchTarget}`))
+  if (!base) base = liveBase(root, currentBranch(root))
 
   const d = drift(root, { base, head: `refs/heads/${branch}`, slices: [agent], fetch: false })
   for (const line of formatDrift(d, { label: id })) console.log(line)
@@ -94,6 +110,15 @@ export default function rebase(args) {
   try {
     const dirty = dirtyFiles(wt.path)
     if (dirty.length) throw new Error(`${branch} has uncommitted work in ${wt.path}: ${dirty.slice(0, 6).join(', ')}. Commit it first.`)
+    // The branch's checkout is the slice agent's own tree. A clean tree is not an idle agent: one
+    // between a commit and its next edit would find its files rewritten and commit on top unawares.
+    const state = wt.temp ? null : paneState(cfg, root, id)
+    if ((state === 'working' || state === 'blocked') && !args.includes('--force')) {
+      console.log(RED(`${id}'s agent is ${state} in ${wt.path}: a rebase now rewrites its tree mid-task.`))
+      console.log(`  ${branch} was not touched. Rebase when it is idle (rig status shows it), or pass --force.`)
+      process.exitCode = 1
+      return
+    }
     const r = runRebase(root, wt.path, { onto: baseSha, upstream: d.mergeBase, dropped })
     if (!r.ok) {
       console.log(RED(`rebase of ${branch} onto ${base} stopped on conflicts and was aborted; the branch is as it was.`))
@@ -111,6 +136,11 @@ export default function rebase(args) {
     const rd = tryGit(['range-diff', '--no-color', '-s', `${d.mergeBase}..${oldTip}`, `${baseSha}..${newTip}`], root)
     if (rd.ok && rd.out) console.log(DIM('range-diff (old → new):\n') + rd.out.replace(/^/gm, '  '))
     if (covered) console.log(DIM(`answer recorded in ${relative(process.cwd(), notePath) || notePath}`))
+    if (!wt.temp)
+      console.log(
+        YEL(`${id}'s tree moved: ${wt.path} is now on ${base} at ${baseSha.slice(0, 9)} (tip ${newTip.slice(0, 9)}).`) +
+          ` Tell the owner before its next commit${state ? ` (its agent is ${state})` : ''}.`,
+      )
   } finally {
     if (wt.temp) {
       tryGit(['worktree', 'remove', '--force', wt.path], root)
@@ -278,6 +308,18 @@ const todo = readFileSync(file, 'utf8').split('\\n').map((l) => {
 })
 writeFileSync(file, todo.join('\\n'))
 `
+
+/** What the slice's agent is doing, from the terminal (herdr reports it; tmux cannot): a state or null. */
+function paneState(cfg, root, id) {
+  try {
+    const term = terminal(cfg)
+    const session = sessionName(root)
+    if (!term.available() || !term.sessionExists(session)) return null
+    return term.slicePanes(session, [id]).find((p) => p.name === id)?.agentStatus ?? null
+  } catch {
+    return null
+  }
+}
 
 /** Where the branch is checked out, or a temporary worktree for it when it is checked out nowhere. */
 function checkoutFor(root, cfg, branch, id) {

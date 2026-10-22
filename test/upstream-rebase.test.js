@@ -6,7 +6,7 @@
 // (its rebase is a stub), by a threshold that lets the rewrite through, or by leaving out the answer.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,11 +17,13 @@ const here = dirname(fileURLToPath(import.meta.url))
 const RIG = join(here, '..', 'bin', 'rig.js')
 // The scaffold commit r55u started from: its rebase.js throws "not built yet".
 const START = '14a1ad6'
+// The tip r55m's review (docs/review-r55u.md on rig/r55m) was answered from: the code before its fixes.
+const REVIEWED = '7d6e987'
 const git = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
 const made = []
 let rig = RIG
-let old = null
+const unpacked = new Map()
 
 const PLAN = `# Fixture plan
 
@@ -83,9 +85,10 @@ function land(fx, files, msg) {
   git(['push', '-q', 'origin', 'main'], fx.other)
 }
 
-function rebase(fx, args) {
+function rebase(fx, args, extra = {}) {
   const env = { ...process.env }
   for (const k of ['HERDR_ENV', 'HERDR_PANE_ID', 'DISPLAY', 'WAYLAND_DISPLAY', 'GIT_DIR', 'GIT_WORK_TREE']) delete env[k]
+  Object.assign(env, extra)
   const r = spawnSync(process.execPath, [rig, 'rebase', 's1', ...args], { cwd: fx.lead, env, encoding: 'utf8', timeout: 30_000 })
   return { code: r.status, out: plain(`${r.stdout}${r.stderr}`) }
 }
@@ -93,15 +96,44 @@ function rebase(fx, args) {
 const note = (fx) => join(fx.lead, '.rig', 'rebase-s1.md')
 const subjects = (fx) => git(['log', '--format=%s', 'origin/main..rig/s1'], fx.lead).split('\n').filter(Boolean)
 
-function oldRig() {
-  if (!old) {
-    old = realpathSync(mkdtempSync(join(tmpdir(), 'rig-old-')))
-    made.push(old)
-    execFileSync('sh', ['-c', `git -C "${join(here, '..')}" archive ${START} | tar -x -C "${old}"`])
+/** Run `rig` as it stood at `sha` (default: the commit this build started from) until restored. */
+function oldRig(sha = START) {
+  if (!unpacked.has(sha)) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'rig-old-')))
+    made.push(dir)
+    execFileSync('sh', ['-c', `git -C "${join(here, '..')}" archive ${sha} | tar -x -C "${dir}"`])
+    unpacked.set(sha, dir)
   }
-  rig = join(old, 'bin', 'rig.js')
+  rig = join(unpacked.get(sha), 'bin', 'rig.js')
   return () => {
     rig = RIG
+  }
+}
+
+/**
+ * A herdr on PATH that answers for one workspace: the lead's tab and s1's, whose agent is in
+ * FAKE_HERDR_STATE. Every call is logged, so a check can say nothing was ever typed into a pane.
+ */
+function fakeHerdr(fx, state) {
+  const bin = join(fx.top, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const log = join(fx.top, 'herdr.log')
+  writeFileSync(
+    join(bin, 'herdr'),
+    `#!/bin/sh
+echo "$*" >> "${log}"
+case "$1 $2" in
+  "--version "*) echo "herdr 0.0-fake" ;;
+  "tab list") echo '{"result":{"tabs":[{"tab_id":"t0","label":"lead"},{"tab_id":"t1","label":"s1"}]}}' ;;
+  "pane list") echo '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"t0"},{"pane_id":"w1:p2","tab_id":"t1","agent_status":"'"$FAKE_HERDR_STATE"'"}]}}' ;;
+  *) exit 1 ;;
+esac
+`,
+  )
+  chmodSync(join(bin, 'herdr'), 0o755)
+  return {
+    env: { PATH: `${bin}:${process.env.PATH}`, HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p1', FAKE_HERDR_STATE: state },
+    typed: () => (existsSync(log) ? readFileSync(log, 'utf8') : '').split('\n').filter((l) => /send-keys|prompt|pane run/.test(l)),
   }
 }
 
@@ -254,6 +286,57 @@ await suite('upstream: rig rebase asks before it resolves', async (s) => {
         find = supersededFiles
       }
     },
+  })
+
+  // ── r55m's review of 7d6e987, findings 2 and 4 ──────────────────────────────────────────────
+
+  await s.check('review 2: a fetch that fails stops the rebase, named, branch untouched; --no-fetch goes on and says so', {
+    assert: () => {
+      const fx = fixture()
+      land(fx, { 'src/c.js': 'export const c = 2\n' }, 'upstream: c is 2')
+      git(['fetch', '-q'], fx.lead) // the clone's last copy of origin/main: one commit behind what comes next
+      land(fx, { 'src/c.js': 'export const c = 3\n' }, 'upstream: c is 3')
+      git(['remote', 'set-url', 'origin', join(fx.top, 'gone.git')], fx.lead)
+      const tip = fx.tip()
+      const r = rebase(fx, [])
+      if (r.code === 0 || !/fetch from origin failed/.test(r.out) || fx.tip() !== tip) throw new Error(`exit ${r.code}:\n${r.out}`)
+      const stale = rebase(fx, ['--no-fetch'])
+      return stale.code === 0 && /not fetched \(--no-fetch\)/.test(stale.out) && subjects(fx).length === 2
+    },
+    // rebase as reviewed: the failed fetch is thrown away and it reports success on the stale base.
+    breaks: () => oldRig(REVIEWED),
+    timeout: 30_000,
+  })
+
+  await s.check('review 4: a slice whose agent is working is not rebased under it, unless --force', {
+    assert: () => {
+      const fx = fixture()
+      writeFileSync(join(fx.lead, '.rig', 'config.json'), JSON.stringify({ worktreeDir: join(fx.top, 'wt'), terminal: 'herdr' }))
+      land(fx, { 'src/c.js': 'export const c = 2\n' }, 'upstream: c is 2')
+      const h = fakeHerdr(fx, 'working')
+      const tip = fx.tip()
+      const r = rebase(fx, [], h.env)
+      if (r.code !== 1 || !/s1's agent is working in .*: a rebase now rewrites its tree mid-task/.test(r.out) || fx.tip() !== tip)
+        throw new Error(`exit ${r.code}:\n${r.out}`)
+      const forced = rebase(fx, ['--force'], h.env)
+      if (forced.code !== 0 || !/s1's tree moved: .* is now on origin\/main/.test(forced.out))
+        throw new Error(`--force: exit ${forced.code}:\n${forced.out}`)
+      return h.typed().length === 0
+    },
+    breaks: () => oldRig(REVIEWED),
+    timeout: 30_000,
+  })
+
+  await s.check('review 4: an idle agent’s tree is rebased, and the output says the owner’s tree moved', {
+    assert: () => {
+      const fx = fixture()
+      writeFileSync(join(fx.lead, '.rig', 'config.json'), JSON.stringify({ worktreeDir: join(fx.top, 'wt'), terminal: 'herdr' }))
+      land(fx, { 'src/c.js': 'export const c = 2\n' }, 'upstream: c is 2')
+      const r = rebase(fx, [], fakeHerdr(fx, 'idle').env)
+      return r.code === 0 && /s1's tree moved: .* Tell the owner before its next commit \(its agent is idle\)/.test(r.out)
+    },
+    breaks: () => oldRig(REVIEWED),
+    timeout: 30_000,
   })
 })
 
