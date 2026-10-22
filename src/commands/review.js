@@ -152,7 +152,10 @@ export const ASK_THESE = `## Ask these
 4. **Every feature flag off.** Is each new endpoint, action, prop and job unreachable on every surface
    (UI, API, CLI, tool servers, background jobs), and does the old behaviour hold exactly?
 5. **A saved user preference.** Does the change override one (theme, locale, notifications) instead
-   of reading it?`
+   of reading it?
+6. **A negative test counted exactly.** An assertion that something did NOT happen, written as "not
+   exactly once", passes when it happened twice. Absence is "never happened" (at least once, negated).
+   Would each negative control go red if the thing happened more than once?`
 
 export const FINAL_BRIEF = join('.rig', 'REVIEW-final.md')
 const STALE_BRIEF_MS = 12 * 3_600_000

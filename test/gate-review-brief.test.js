@@ -51,24 +51,29 @@ const asks = (t) =>
   /A state that flips off and back on\./.test(t) &&
   /Every feature flag off\.\*\* Is each new endpoint, action, prop and job unreachable on every surface/.test(t) &&
   /\(UI, API, CLI, tool servers, background jobs\), and does the old behaviour hold exactly\?/.test(t) &&
-  /Does the change override one \(theme, locale, notifications\)/.test(t)
+  /Does the change override one \(theme, locale, notifications\)/.test(t) &&
+  /A negative test counted exactly\.\*\* An assertion that something did NOT happen, written as "not\s+exactly once", passes when it happened twice/.test(
+    t,
+  ) &&
+  /Absence is "never happened" \(at least once, negated\)/.test(t) &&
+  /Would each negative control go red if the thing happened more than once\?/.test(t)
 
 await suite('rig 5.5, what every review brief asks (r55g)', async (s) => {
-  // The control: 24ce390's review.js, which asks the first three only (and 0ed0253's, which asks none,
-  // fails the same way).
+  // The control: 72d5b01's review.js, which asks the first five only (older ones ask fewer, and fail
+  // the same way).
   let src = join(RIG, 'src')
   const swapOld = async () => {
-    const dir = srcWith('old', { 'commands/review.js': '24ce390' })
+    const dir = srcWith('old', { 'commands/review.js': '72d5b01' })
     if (dir) src = dir
     return () => {
       src = join(RIG, 'src')
     }
   }
-  await s.check('the slice review brief asks all five questions', {
+  await s.check('the slice review brief asks all six questions', {
     assert: async () => asks(briefs(await load(src)).slice),
     breaks: swapOld,
   })
-  await s.check('the second-vendor brief asks all five too', {
+  await s.check('the second-vendor brief asks all six too', {
     assert: async () => asks(briefs(await load(src)).vendor),
     breaks: swapOld,
   })

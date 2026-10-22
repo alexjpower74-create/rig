@@ -130,8 +130,10 @@ use or delivery, and is it checked again; (2) time edges: daylight saving, time 
 moves, exactly at the boundary; (3) a state that flips off and back on; (4) with every feature flag
 off, is each new endpoint, action, prop and job unreachable on every surface (UI, API, CLI, tool servers,
 background jobs), and does the old behaviour hold exactly; (5) does the change override a saved user
-preference (theme, locale, notifications). `test/gate-review-brief.test.js` checks both briefs ask all
-five; red by swapping `24ce390`'s `review.js` (the first three only) back in.
+preference (theme, locale, notifications); (6) a negative test counted exactly: "not exactly once"
+passes when it happened twice, so assert absence as "never happened" and ask whether each negative
+control goes red when the thing happens more than once. `test/gate-review-brief.test.js` checks both
+briefs ask all six; red by swapping `72d5b01`'s `review.js` (the first five only) back in.
 
 **The tell line**: since main was merged in (`45449c7`, with r55w), `review.js` imports `tellLine`
 from `src/brief.js` directly, and both briefs end with it: id = `--by`, else `rv-<id>`; `rv-<vendor>`
