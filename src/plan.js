@@ -133,7 +133,7 @@ export function parsePlan(text) {
   for (const a of agents) a.task = a.task.join('\n').trim()
   const sections = parseSections(lines)
   const fields = briefFields(sections)
-  return { title, agents, sections, ...fields, negativeCommand: negativeCommand(fields.checks) }
+  return { title, agents, sections, ...fields, ui: uiLine(text), negativeCommand: negativeCommand(fields.checks) }
 }
 
 /**
@@ -238,7 +238,96 @@ export function briefFields(sections) {
     tools: find(/^tools\b/i),
     budget: find(/^budget (and|&) autonomy\b/i),
     handBack: find(/^what to hand back\b/i),
+    refusals: find(/^refusals\b/i),
   }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Item 14: the refusal → repair matrix. Dead ends (a move refused with no way to fix it) were the
+// largest class of defects found in one review round, so a plan whose work is a UI over rules lists
+// every refusal a screen can hit and its repair: the field to fill, or the message naming who acts.
+
+/** The plan's own `UI:` line (`UI: none`, `UI: web`…), lower-cased, or null when it has none. */
+export function uiLine(text) {
+  const m = (text || '').match(/^\s*[-*]?\s*\**UI\**:\**\s*(.+?)\s*$/m)
+  return m ? m[1].replace(/[`*.]/g, '').trim().toLowerCase() : null
+}
+
+// A file a person looks at: markup, styles, components, screens.
+const UI_PATH =
+  /\.(html?|css|scss|jsx|tsx|vue|svelte|astro|swift|kt|xib|storyboard)\b|(^|\/)(ui|web|views?|pages|screens|components|app\/routes|public)(\/|$)/i
+// Words that say there is a screen…
+const UI_WORDS = /\b(screens?|pages?|forms?|buttons?|dialogs?|modals?|taps?|clicks?)\b/i
+// …and words that say it enforces rules (refuses some moves).
+const RULE_WORDS =
+  /\b(rules?|refus\w*|reject\w*|validat\w*|permissions?|approv\w*|not allowed|allow(ed|s)?|forbid\w*|blocked|limits?|quota|eligib\w*|disabled?)\b/i
+
+/** The refusal rows of a `## Refusals` body that are filled in: table rows or bullets, not the template's. */
+export function refusalRows(body) {
+  const rows = []
+  for (const raw of (body || '').split('\n')) {
+    const l = raw.trim()
+    if (!l) continue
+    let cells
+    if (l.startsWith('|')) {
+      cells = l
+        .replace(/^\||\|$/g, '')
+        .split('|')
+        .map((c) => c.trim())
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c) || c === '')) continue // the separator row
+      if (/^refusal\b/i.test(cells[0])) continue // the header row
+    } else if (/^[-*]\s+/.test(l)) cells = l.replace(/^[-*]\s+/, '').split(/\s*(?:→|->)\s*/)
+    else continue
+    if (cells.every((c) => /^<.*>$/.test(c) || c === '')) continue // the template's own example
+    rows.push(cells.join(' → '))
+  }
+  return rows
+}
+
+/**
+ * Why this plan needs a `## Refusals` matrix it does not have, as a sentence, or null when it has
+ * one or needs none. A UI over rules is one of:
+ * - a `UI:` line that is not `none`;
+ * - a slice that owns UI files (not tests, examples or fixtures), and rule words anywhere in the
+ *   brief or a task (rules, refusals, validation, permissions, limits);
+ * - one sentence of the brief (not a task) that names a screen AND a rule ("a claim form that
+ *   refuses claims over the limit").
+ * Words alone have to meet in one sentence: a CLI plan says "page" in one place and "blocked" in
+ * another, and the first version of this warned on the very plan it shipped in. The hard rules for
+ * the agents (What must not happen, Rules) do not count as rules the product enforces.
+ */
+export function refusalsGap(plan) {
+  const ui = plan.ui ?? null
+  if (ui === 'none' || ui === 'no') return null
+  if (refusalRows(plan.refusals).length) return null
+  if (ui) return `its UI: line says "${ui}"`
+  const clean = (parts) => parts.map((t) => withoutPlaceholders(t || '').replace(/`[^`]*`/g, ' ')).join('\n\n')
+  // The brief says what the product is. Tasks say how to build it and talk about the crew's own
+  // tools ("a permission dialog goes to the human"), so they count for rules, never for a screen.
+  const brief = clean([plan.purpose, plan.users, plan.done, plan.feeling, plan.bar, plan.start])
+  const prose = clean([brief, ...plan.agents.map((a) => a.task)])
+  // Test fixtures and examples are pages nobody uses.
+  const uiPath = plan.agents
+    .flatMap((a) => a.owns)
+    .find((o) => UI_PATH.test(o) && !/(^|\/)(tests?|examples?|fixtures?|__tests__)\//.test(o))
+  if (uiPath) {
+    const rule = prose.match(RULE_WORDS)?.[0]
+    return rule ? `a slice owns ${uiPath} and the plan says "${rule}"` : null
+  }
+  for (const sentence of sentences(brief)) {
+    const w = sentence.match(UI_WORDS)?.[0]
+    const r = w && sentence.match(RULE_WORDS)?.[0]
+    if (r) return `it talks about "${w}" and "${r}" in one sentence`
+  }
+  return null
+}
+
+/** Sentences of prose: split at . ! ? and at every paragraph, bullet and numbered item. */
+function sentences(text) {
+  return text
+    .split(/(?<=[.!?])\s+|\n\s*\n|\n\s*(?:[-*]|\d+[.)])\s+/)
+    .map((t) => t.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
 }
 
 /** A references body split at its `Anti-references:` line: what to start from, and what not to make. */

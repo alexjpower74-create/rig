@@ -1,11 +1,21 @@
-import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { mainRoot, loadConfig, currentBranch } from '../config.js'
-import { acquireQaWorktree, porcelainLines } from '../worktrees.js'
+import { mainRoot, loadConfig, currentBranch, currentBranchOrNull } from '../config.js'
+import { acquireQaWorktree, cleanWorktree, porcelainLines } from '../worktrees.js'
 import { loadPlan } from '../plan.js'
-import { git } from '../sh.js'
+import { git, tryGit } from '../sh.js'
 import { recordQa } from '../qalog.js'
+import { rigDir } from '../rigdir.js'
+import { recordTiming } from '../timings.js'
+import { staleBaselines } from '../baselines.js'
+import { groups, running } from '../qa/group.js'
+import { exitCodeFor, fmtMs, runWatched } from '../qa/watch.js'
+import { compareBaseline, parseFailures, tally } from '../qa/failures.js'
+import { desktopFreeEnv, makeShims, needsStub, readShimCalls } from '../qa/desktop.js'
+import { detectCi, planSeeds, readCiStatus, withSeed } from '../qa/ci.js'
+import { ciOnHost, holderId, leaseHost, runHost } from '../qa/host.js'
+
+export { exitCodeFor, groups }
 
 // Never grade the shared tree. Agents are mid-edit in theirs by definition, so a number taken
 // there measures a half-finished checkout. QA gets its own worktree, detached at an exact commit,
@@ -15,56 +25,107 @@ import { recordQa } from '../qalog.js'
 // every pin, and each run takes a worktree no other run is using. What the clean touched, and what
 // the tests left behind, is printed by path and recorded: a tree that is not clean right after
 // `npm test` is a defect, and `rig finish` will say so.
+//
+// 5.5: a run cannot hang (the stall watchdog), cannot lie ("0 new" is computed from a second run on
+// the base, a repeat names its failing seeds, the second machine's tally sits beside this one), and
+// cannot touch the desktop (no display, clipboard tools that fail fast).
 
-export const USAGE = `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--port <n>] [--timeout <min>] [--fresh]
+export const USAGE = `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--port <n>] [--timeout <min>] [--stall <min>]
+       [--baseline [<base>]] [--host <ssh-host> | --no-host] [--ci | --no-ci] [--desktop] [--fresh]
+rig qa <ref> --repeat <N> [--seeds [<s1,s2,…>]] --run "<one file>" [--host <ssh-host>]
 
   <ref>              the commit to pin (a sha, a branch, a tag); defaults to the current branch of
                      the MAIN checkout. Give the sha: "rig qa" alone grades main, not your slice.
   --run "<cmd>"      the test command (default: devCommand in .rig/config.json); recorded as kind
                      "test". rig qa exits with the first non-zero of the test run, then the negative
+                     (with the CI and host runs, when they run, counted between the two)
   --negative "<cmd>" the negative-control command (default: negativeCommand in the config or the
                      plan's "Negative controls:" line); recorded as kind "negative" on the same sha
   --port <n>         PORT for the command (default: qaPort, +1 per extra QA worktree in use)
   --timeout <min>    stop a command still running after this many minutes and record exit 124
                      (default: qaTimeoutMinutes in the config, else 60; 0 = no limit)
+  --stall <min>      stop a command that has written nothing for this long, naming the worker and
+                     the last spec it mentioned; exit 124, recorded as "stalled" (default:
+                     qaStallMinutes, else 5; 0 = off). Watches the output, plus every file matching
+                     qaWorkerLogs (a glob in the worktree) when set. A run that keeps writing is
+                     never stopped by it.
+  --baseline [<base>] also run the same command on the merge base with the main checkout's branch
+                     (or exactly <base>) in a second QA worktree, and report only NEW failures;
+                     known ones are listed with where they also fail (here, there, both). Failure
+                     names are read from node:test (spec and TAP), the harness, rspec, Playwright and
+                     Jest, plus qaFailurePattern (a regex; its "name" group or first group)
+  --host <ssh-host>  run the same command at the same sha on a second machine too (default: qaHost
+                     in the config; --no-host skips it), under the host's lease; both tallies are
+                     printed side by side. A lease someone else holds refuses the run, by name.
+  --by <id>          who holds the lease (default: RIG_SESSION, else the branch you are on)
+  --ci / --no-ci     the repo's own local CI command runs, recorded as kind "ci", whenever --run is
+                     not given; --ci runs it beside --run too, --no-ci never. Found as ciCommand in
+                     the config, else scripts.ci in package.json, an executable bin/ci, script/ci
+                     or script/cibuild, or a "ci:" Makefile target. A status it writes to the file
+                     in RIG_CI_STATUS ("success"/"failure" or JSON with "state") is recorded.
+  --repeat <N>       run one file N times, a seed each (RIG_SEED, and the runner's own flag for
+                     node --test, jest, vitest and rspec); reports N green or the failing seeds
+  --seeds [<list>]   seeds that always run (comma-separated); fresh ones fill up to N
+  --desktop          let the command reach the display and the clipboard. By default DISPLAY and
+                     WAYLAND_DISPLAY are unset and xclip, xsel, wl-copy, wl-paste, pbcopy and
+                     pbpaste fail at once; a spec that fails with such a call is listed as "needs a
+                     stub", not as a new failure
   --fresh            clean ignored files too (git clean -fdx): node_modules is reinstalled
   --help, -h         this text
 
 The worktree is <worktreeDir>/qa when free, else qa-2, qa-3…; a run holds it with <worktreeDir>/<id>.lock.
 Tracked files the clean reset and files the run dirtied are printed by path and recorded in
-.rig/qa-history.jsonl, which \`rig finish\` reads.
+.rig/qa-history.jsonl, which \`rig finish\` reads. Full output is kept in .rig/qa-logs/, and each
+stage's wall time goes to .rig/timings.jsonl.
 `
+
+const MAX_MINUTES = Math.floor((2 ** 31 - 1) / 60_000)
 
 export default async function qa(args) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(USAGE)
     return
   }
-  for (const flag of ['--run', '--negative']) {
+  for (const flag of ['--run', '--negative', '--host', '--repeat', '--by']) {
     if (args.includes(flag) && !argOf(args, flag)) {
-      console.error(`rig qa: ${flag} needs a command, e.g. ${flag} "npm test". Nothing was run.`)
+      console.error(`rig qa: ${flag} needs a value, e.g. ${EXAMPLES[flag]}. Nothing was run.`)
       process.exit(2)
     }
   }
   const root = mainRoot()
   const cfg = loadConfig(root)
-  // A limit that does not parse must not quietly become no limit: `--timeout 10m`, a value of
-  // `--fresh` taken for the minutes, or a bad qaTimeoutMinutes all stop here instead.
-  const given = args.includes('--timeout')
-  const raw = given ? argOf(args, '--timeout') : (cfg.qaTimeoutMinutes ?? 60)
-  const minutes = typeof raw === 'number' ? raw : /^\d+(\.\d+)?$/.test(raw ?? '') ? Number(raw) : Number.NaN
-  // setTimeout holds at most 2^31 - 1 ms; past that Node fires after 1 ms, so "99999" meant to be
-  // generous stopped every run at once (fv2). Refuse it and point at 0.
-  if (!Number.isFinite(minutes) || minutes < 0 || minutes > MAX_MINUTES) {
-    const from = given ? '--timeout' : 'qaTimeoutMinutes in .rig/config.json'
-    console.error(
-      `rig qa: ${from} takes a number of minutes up to ${MAX_MINUTES} (0 = no limit), not ${JSON.stringify(raw ?? null)}. Nothing was run.`,
-    )
-    process.exit(2)
-  }
-  const limitMs = minutes * 60_000
+  const limitMs = minutesOf(args, '--timeout', cfg.qaTimeoutMinutes ?? 60, 'qaTimeoutMinutes') * 60_000
+  const stallMs = minutesOf(args, '--stall', cfg.qaStallMinutes ?? 5, 'qaStallMinutes') * 60_000
+  const repeat = repeatOf(args)
+  const host = argOf(args, '--host') || (args.includes('--no-host') ? null : cfg.qaHost || null)
+  const pattern = cfg.qaFailurePattern || null
+  if (pattern)
+    try {
+      new RegExp(pattern)
+    } catch (e) {
+      console.error(`rig qa: qaFailurePattern in .rig/config.json is not a regex (${e.message}). Nothing was run.`)
+      process.exit(2)
+    }
   const ref = resolveRef(args, currentBranch(root))
   const fresh = args.includes('--fresh')
+  const desktop = args.includes('--desktop')
+
+  // The lease first: a refused host refuses the run before a worktree is touched.
+  const by = holderId(argOf(args, '--by') || process.env.RIG_SESSION || currentBranchOrNull(process.cwd()) || `qa-${process.pid}`)
+  let lease = null
+  if (host) {
+    // Long enough for the stages that use the host at their limit, and renewed while the run lasts.
+    lease = leaseHost(root, host, by, { ttlMin: limitMs ? Math.ceil((2 * limitMs) / 60_000) + 30 : 120 })
+    if (!lease.ok) {
+      console.error(`rig qa: refused — ${lease.why}. Nothing was run. Wait for it, or run here only with --no-host.`)
+      process.exit(75)
+    }
+    process.on('exit', lease.release)
+    setInterval(() => {
+      const why = lease.renew()
+      if (why) console.error(`\nrig qa: could not renew the lease on ${host}: ${why}`)
+    }, 30 * 60_000).unref()
+  }
 
   const wt = acquireQaWorktree(root, cfg, ref, { fresh })
   const port = Number(argOf(args, '--port') || Number(cfg.qaPort) + wt.index)
@@ -84,37 +145,491 @@ export default async function qa(args) {
     console.log(
       `  removed ${wt.removed.length} untracked path${wt.removed.length === 1 ? '' : 's'}: ${wt.removed.join(', ')}${fresh ? ' (--fresh: ignored files too)' : ''}`,
     )
+  if (host) console.log(`  host ${host} (leased by ${by})`)
+  console.log(desktop ? '  desktop: reachable (--desktop)' : '  desktop-free: no display, clipboard tools fail fast (--desktop to allow)')
+  console.log(`  stall watchdog: ${stallMs ? fmtMs(stallMs) : 'off'}${cfg.qaWorkerLogs ? `, worker logs ${cfg.qaWorkerLogs}` : ''}`)
+  warnStaleBaselines(wt.path)
   console.log(`\nEvery number you report from here belongs to ${sha}. Say the sha when you report it.`)
 
-  const cmd = argOf(args, '--run') || cfg.devCommand
+  const shims = desktop ? null : makeShims()
+  if (shims) process.on('exit', shims.remove)
+  const baseEnv = { ...process.env, PORT: String(port), RIG_QA_SHA: sha }
+  const ctx = { root, cfg, wt, ref, full, sha, port, pattern, limitMs, stallMs, shims, host, by, desktop, lease }
+  ctx.env = shims ? desktopFreeEnv(baseEnv, shims) : baseEnv
+
+  if (repeat) process.exit(await repeatRuns(ctx, args, repeat))
+
+  const runFlag = argOf(args, '--run')
+  const cmd = runFlag || cfg.devCommand
   const negative = argOf(args, '--negative') || cfg.negativeCommand || planNegative(root, cfg)
-  if (!cmd && !negative) {
+  const wantCi = !args.includes('--no-ci') && (!runFlag || args.includes('--ci'))
+  const ci = wantCi ? detectCi(wt.path, cfg) : null
+  if (!cmd && !negative && !ci) {
     console.log('\nNo dev command configured. Set "devCommand" in .rig/config.json or pass --run "<cmd>".')
     return
   }
 
-  const env = { ...process.env, PORT: String(port), RIG_QA_SHA: sha }
   let exit = 0
-  const seen = new Set()
-  const runs = [
-    ['test', cmd],
-    ['negative', negative],
-  ].filter(([, c]) => c)
-  for (const [kind, c] of runs) {
-    console.log(`\n$ ${c}   (PORT=${port}${kind === 'negative' ? ', negative control' : ''})\n`)
-    const code = await runShell(c, { cwd: wt.path, env, limitMs })
-    const left = dirtiedBy(wt.path)
-    const dirtied = left.tracked.filter((p) => !seen.has(p))
-    const untracked = left.untracked.filter((p) => !seen.has(p))
-    ;[...dirtied, ...untracked].forEach((p) => {
-      seen.add(p)
-    })
-    recordQa(root, { kind, ref, sha: full, short: sha, cmd: c, exit: code, dirtied, untracked, worktree: wt.id })
-    console.log(`\nrig qa: ${kind} exit ${code} at ${sha}${code === 0 ? '' : '  (NOT green)'}  — recorded in .rig/qa-history.jsonl`)
-    if (dirtied.length || untracked.length) console.log(dirtyMessage(dirtied, untracked))
-    if (exit === 0) exit = code
+  // A CI that exits 0 but posted "failure" is not green (r55g review 2): the posted verdict counts.
+  const fail = (r) => {
+    const code = r.exit !== 0 ? r.exit : r.ciStatus?.state === 'failure' ? 1 : 0
+    if (exit === 0 && code !== 0) exit = code
   }
+  ctx.seen = new Set()
+  const heads = []
+
+  // The test run, here and on the host at the same time: two machines, one wait.
+  if (cmd) {
+    const both = ci && ci.cmd === cmd
+    const [here, there] = await Promise.all([
+      localStage(ctx, both ? ['test', 'ci'] : ['test'], cmd, { ci: both ? ci : null }),
+      host ? hostStage(ctx, both ? ['test', 'ci'] : ['test'], cmd) : null,
+    ])
+    fail(here)
+    if (there) fail(there)
+    heads.push({ here, there })
+    if (there) sideBySide(here, there, host)
+  }
+  if (ci && ci.cmd !== cmd) {
+    console.log(`\nlocal CI: ${ci.cmd}   (${ci.from})`)
+    const [here, there] = await Promise.all([localStage(ctx, ['ci'], ci.cmd, { ci }), host ? hostStage(ctx, ['ci'], ci.cmd) : null])
+    fail(here)
+    if (there) fail(there)
+    if (there) sideBySide(here, there, host)
+    if (!cmd) heads.push({ here, there })
+  }
+
+  // The base, with the same command, so "0 new" is computed and never typed.
+  if (args.includes('--baseline') || args.some((a) => a.startsWith('--baseline='))) {
+    const { here, there } = heads[0] ?? {}
+    if (!here) console.log('\nrig qa: --baseline needs a test or CI command to compare; none ran.')
+    else await baselineStage(ctx, args, here, there)
+  }
+
+  if (negative) {
+    const r = await localStage(ctx, ['negative'], negative)
+    fail(r)
+  }
+  lease?.release()
   process.exit(exit)
+}
+
+const EXAMPLES = {
+  '--run': '--run "npm test"',
+  '--negative': '--negative "npm run demo"',
+  '--host': '--host build-box',
+  '--repeat': '--repeat 10',
+  '--by': '--by r55q',
+}
+
+/**
+ * A number of minutes from a flag or the config. A limit that does not parse must not quietly
+ * become no limit: `--timeout 10m`, a value of `--fresh` taken for the minutes, or a bad config
+ * value all stop here. setTimeout holds at most 2^31 - 1 ms; past that Node fires after 1 ms, so
+ * "99999" meant to be generous stopped every run at once (fv2). Refuse it and point at 0.
+ */
+function minutesOf(args, flag, fallback, key) {
+  const given = args.includes(flag)
+  const raw = given ? argOf(args, flag) : fallback
+  const minutes = typeof raw === 'number' ? raw : /^\d+(\.\d+)?$/.test(raw ?? '') ? Number(raw) : Number.NaN
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > MAX_MINUTES) {
+    const from = given ? flag : `${key} in .rig/config.json`
+    console.error(
+      `rig qa: ${from} takes a number of minutes up to ${MAX_MINUTES} (0 = no limit), not ${JSON.stringify(raw ?? null)}. Nothing was run.`,
+    )
+    process.exit(2)
+  }
+  return minutes
+}
+
+function repeatOf(args) {
+  if (!args.includes('--repeat')) {
+    if (args.includes('--seeds')) {
+      console.error('rig qa: --seeds goes with --repeat <N>. Nothing was run.')
+      process.exit(2)
+    }
+    return null
+  }
+  const raw = argOf(args, '--repeat')
+  if (!/^\d+$/.test(raw ?? '') || Number(raw) < 1 || Number(raw) > 1000) {
+    console.error(`rig qa: --repeat takes a whole number of runs from 1 to 1000, not ${JSON.stringify(raw)}. Nothing was run.`)
+    process.exit(2)
+  }
+  if (!argOf(args, '--run')) {
+    console.error('rig qa: --repeat reruns one file: give it with --run "<cmd for that file>". Nothing was run.')
+    process.exit(2)
+  }
+  const seeds = optionalValues(args)['--seeds']
+  return { n: Number(raw), seeds: seeds ? seeds.split(',').filter(Boolean) : [] }
+}
+
+/** The log file for one run: .rig/qa-logs/<short>-<what>-<time>.log, opened for writing. */
+function openLog(root, sha, what) {
+  const name = `${sha}-${what}-${new Date().toISOString().replace(/[:.]/g, '-')}.log`
+  const dir = join(rigDir(root), 'qa-logs')
+  const path = join(dir, name)
+  try {
+    mkdirSync(dir, { recursive: true })
+    return { fd: openSync(path, 'a'), path: `.rig/qa-logs/${name}` }
+  } catch {
+    return { fd: null, path: null }
+  }
+}
+
+/**
+ * One local run of `cmd` in the QA worktree, recorded once per kind in `kinds` (the test command and
+ * the CI command are one run when they are the same command).
+ */
+async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
+  const { root, wt, sha, full, ref, port } = ctx
+  const kind = kinds[0]
+  console.log(`\n$ ${cmd}   (PORT=${port}${kind === 'negative' ? ', negative control' : ''}${kinds.includes('ci') ? ', local CI' : ''})\n`)
+  const statusFile = kinds.includes('ci') ? join(rigDir(root), `ci-status-${process.pid}-${Date.now()}`) : null
+  const env = statusFile ? { ...ctx.env, RIG_CI_STATUS: statusFile } : ctx.env
+  const callsBefore = ctx.shims ? readShimCalls(ctx.shims.log).length : 0
+  const log = openLog(root, sha, kinds.join('+'))
+  const r = await runWatched(cmd, {
+    cwd: wt.path,
+    env,
+    limitMs: ctx.limitMs,
+    stallMs: ctx.stallMs,
+    workerLogs: ctx.cfg.qaWorkerLogs || null,
+    log: log.fd,
+  })
+  if (log.fd !== null) closeSync(log.fd)
+  const failures = parseFailures(r.text, { pattern: ctx.pattern })
+  const calls = ctx.shims ? readShimCalls(ctx.shims.log).slice(callsBefore) : []
+  const stub = needsStub(r.lines, calls, { pattern: ctx.pattern })
+  const t = tally(r.text, failures)
+  const ciStatus = statusFile ? readCiStatus(statusFile) : null
+  if (statusFile) tryRm(statusFile)
+  const left = dirtiedBy(wt.path)
+  const dirtied = left.tracked.filter((p) => !ctx.seen.has(p))
+  const untracked = left.untracked.filter((p) => !ctx.seen.has(p))
+  for (const p of [...dirtied, ...untracked]) ctx.seen.add(p)
+  for (const k of kinds) {
+    recordQa(root, {
+      kind: k,
+      ref,
+      sha: full,
+      short: sha,
+      cmd,
+      exit: r.exit,
+      dirtied,
+      untracked,
+      worktree: wt.id,
+      host: 'local',
+      ms: r.ms,
+      desktop: ctx.desktop,
+      failures: failures.slice(0, 200),
+      passed: t.passed,
+      failed: t.failed,
+      needsStub: stub.map((s) => s.name),
+      stalled: r.stalled,
+      log: log.path,
+      ...(k === 'ci' ? { ciFrom: ci?.from ?? null, ciStatus } : {}),
+    })
+    timing(root, `qa:${k}`, r.ms, full, 'local', r.exit === 0)
+  }
+  console.log(
+    `\nrig qa: ${kinds.join(' + ')} exit ${r.exit} at ${sha}${r.exit === 0 ? '' : '  (NOT green)'}  ${fmtMs(r.ms)}  — recorded in .rig/qa-history.jsonl`,
+  )
+  if (r.stalled)
+    console.log(
+      `rig qa: stalled: worker ${r.stalled.worker}, last spec ${r.stalled.spec ?? 'none named'}, quiet ${fmtMs(r.stalled.quietMs)}`,
+    )
+  if (failures.length && kind !== 'negative') console.log(`rig qa: ${failures.length} failing: ${list(failures)}`)
+  if (stub.length) {
+    console.log(
+      `rig qa: needs a stub (reached for ${[...new Set(stub.map((s) => s.tool))].join(', ')}, which a desktop-free run takes away):`,
+    )
+    for (const s of stub) console.log(`  ${s.name}   (${s.tool})`)
+  } else if (calls.length)
+    console.log(
+      `rig qa: clipboard tools were called ${calls.length}× (${[...new Set(calls.map((c) => c.tool))].join(', ')}) and failed fast; no failing spec matched them`,
+    )
+  if (kinds.includes('ci')) printCiStatus(ciStatus, r.exit, '')
+  if (dirtied.length || untracked.length) console.log(dirtyMessage(dirtied, untracked))
+  return { ...r, cmd, failures, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
+}
+
+function printCiStatus(status, exit, where) {
+  const said = status ? `${status.state}${status.text ? ` (${status.text})` : ''}` : 'not posted (RIG_CI_STATUS left empty)'
+  console.log(`rig qa: CI status${where} ${said}`)
+  if (exit === 0 && status?.state === 'failure')
+    console.log(`rig qa: NOT green${where}: the CI exited 0 but posted failure, and the posted verdict counts`)
+}
+
+/** The same run on the host, recorded with host: '<ssh-host>'. */
+async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
+  const { root, host, full, sha, ref, by } = ctx
+  const env = { RIG_QA_SHA: sha, ...(seed ? { RIG_SEED: seed } : {}) }
+  const ci = kinds.includes('ci')
+  const r = await runHost({
+    root,
+    host,
+    sha: full,
+    cmd: ci ? ciOnHost(cmd) : cmd,
+    session: by,
+    env,
+    limitMs: ctx.limitMs,
+    stallMs: ctx.stallMs,
+    pattern: ctx.pattern,
+    desktop: ctx.desktop,
+    ci,
+  })
+  if (record)
+    for (const k of kinds) {
+      recordQa(root, {
+        kind: k,
+        ref,
+        sha: full,
+        short: sha,
+        cmd,
+        exit: r.exit,
+        host,
+        ms: r.ms,
+        dir: r.dir,
+        db: r.db,
+        failures: r.failures.slice(0, 200),
+        passed: r.tally.passed,
+        failed: r.tally.failed,
+        needsStub: r.needsStub,
+        stalled: r.stalled,
+        error: r.error,
+        ...(k === 'ci' ? { ciStatus: r.ciStatus } : {}),
+      })
+      timing(root, 'qa:host', r.ms, full, host, r.exit === 0)
+    }
+  if (record) {
+    console.log(`\nrig qa: ${kinds.join(' + ')} on ${host} exit ${r.exit} at ${sha}  ${fmtMs(r.ms)}`)
+    if (r.stalled) console.log(`rig qa: stalled on ${host}, last spec ${r.stalled.spec ?? 'none named'}, quiet ${fmtMs(r.stalled.quietMs)}`)
+    if (ci) printCiStatus(r.ciStatus, r.exit, ` on ${host}`)
+  }
+  return { ...r, label: `${kinds[0]} on ${host}` }
+}
+
+/** Both machines' tallies, side by side. */
+export function sideBySide(here, there, host) {
+  const rows = [
+    ['', 'here', host],
+    ['exit', here.exit, there.exit],
+    ['passed', here.tally.passed ?? '—', there.tally.passed ?? '—'],
+    ['failed', here.tally.failed, there.tally.failed],
+    ['time', fmtMs(here.ms), fmtMs(there.ms)],
+  ]
+  const w = [8, Math.max(...rows.map((r) => String(r[1]).length)) + 3]
+  console.log('')
+  for (const r of rows) console.log(`  ${String(r[0]).padEnd(w[0])}${String(r[1]).padEnd(w[1])}${r[2]}`)
+  const onlyHere = here.failures.filter((f) => !there.failures.includes(f))
+  const onlyThere = there.failures.filter((f) => !here.failures.includes(f))
+  if (onlyHere.length) console.log(`  fails only here: ${list(onlyHere)}`)
+  if (onlyThere.length) console.log(`  fails only on ${host}: ${list(onlyThere)}`)
+}
+
+/**
+ * Run the same command on the base in a second pinned QA worktree, and add the comparison to the
+ * head's test record. The base run is skipped only when every head run is green with no failures,
+ * because then nothing can be new whatever the base does.
+ */
+async function baselineStage(ctx, args, here, there) {
+  const { root, cfg, full, sha, ref } = ctx
+  const explicit = optionalValues(args)['--baseline']
+  const baseBranch = cfg.base || currentBranch(root)
+  let baseSha
+  let base
+  if (explicit) {
+    base = explicit
+    const r = tryGit(['rev-parse', '--verify', `${explicit}^{commit}`], root)
+    if (!r.ok) return console.error(`\nrig qa: --baseline ${explicit} is not a commit here; no baseline recorded.`)
+    baseSha = r.out
+  } else {
+    const r = tryGit(['merge-base', full, baseBranch], root)
+    if (!r.ok) return console.error(`\nrig qa: no merge base between ${sha} and ${baseBranch}; no baseline recorded.`)
+    base = `merge-base with ${baseBranch}`
+    baseSha = r.out
+  }
+  const baseShort = baseSha.slice(0, 7)
+  const runs = [here, there].filter(Boolean)
+  const record = (baseline) => {
+    recordQa(root, { kind: 'baseline', ref, sha: full, short: sha, host: 'local', cmd: here.cmd, baseline })
+    printBaseline(baseline, ctx.host)
+  }
+  if (baseSha === full) {
+    return record({
+      base,
+      baseSha,
+      ...compareBaseline({ here: here.failures, there: there?.failures, base: here.failures, runs }),
+      note: 'the commit is its own base',
+    })
+  }
+  if (runs.every((r) => r.exit === 0 && r.failures.length === 0)) {
+    return record({
+      base,
+      baseSha,
+      newFailures: [],
+      known: [],
+      fixed: [],
+      needsStub: [],
+      complete: true,
+      why: null,
+      note: 'the head is green; nothing can be new, base not run',
+    })
+  }
+  const cmd = here.cmd
+  const bwt = acquireQaWorktree(root, cfg, baseSha, {})
+  process.on('exit', bwt.release)
+  const port = ctx.port + 50 + bwt.index
+  console.log(`\n── baseline: ${base} @ ${baseShort} in ${bwt.id} (port ${port}) ──\n$ ${cmd}\n`)
+  const log = openLog(root, baseShort, 'baseline')
+  const r = await runWatched(cmd, {
+    cwd: bwt.path,
+    env: { ...ctx.env, PORT: String(port), RIG_QA_SHA: baseShort },
+    limitMs: ctx.limitMs,
+    stallMs: ctx.stallMs,
+    workerLogs: cfg.qaWorkerLogs || null,
+    log: log.fd,
+  })
+  if (log.fd !== null) closeSync(log.fd)
+  bwt.release()
+  timing(root, 'qa:baseline', r.ms, full, 'local', r.exit === 0)
+  const baseFailures = parseFailures(r.text, { pattern: ctx.pattern })
+  const cmp = compareBaseline({
+    here: here.failures,
+    there: there?.failures ?? null,
+    base: baseFailures,
+    needsStub: [...new Set([...(here.needsStub ?? []), ...(there?.needsStub ?? [])])],
+    runs: [...runs, { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures, stalled: r.stalled }],
+  })
+  record({ base, baseSha, baseExit: r.exit, baseFailed: baseFailures.length, baseLog: log.path, stalled: r.stalled, ...cmp })
+}
+
+function printBaseline(b, host) {
+  console.log(`\nrig qa: baseline ${b.base} @ ${b.baseSha.slice(0, 7)}${b.note ? ` (${b.note})` : ''}`)
+  if (!b.complete) {
+    console.log(`  NOT COMPUTED: ${b.why}. "0 new" cannot be claimed from this run.`)
+  } else if (b.newFailures.length === 0) console.log(`  0 new failures${b.known.length ? `, ${b.known.length} known` : ''}`)
+  if (b.newFailures.length) {
+    console.log(`  ${b.newFailures.length} NEW (pass on the base, fail here):`)
+    for (const n of b.newFailures) console.log(`    ${n}`)
+  }
+  if (b.known.length) {
+    console.log(`  known (also fail on the base), and where they fail now${host ? ` (here / ${host} / both)` : ''}:`)
+    for (const k of b.known) console.log(`    ${k.name}   ${k.where === 'there' ? host : k.where}`)
+  }
+  if (b.needsStub?.length) console.log(`  needs a stub, not counted as new: ${list(b.needsStub)}`)
+  if (b.fixed?.length) console.log(`  fixed (fail on the base, pass here): ${list(b.fixed)}`)
+}
+
+/**
+ * --repeat N: the one file, N times, a seed each, here and on the host at the same time. Recorded
+ * as kind "repeat", never "test": a single file green N times is a flake proof, not a suite pass,
+ * and must not stand in for one at the finish gate.
+ */
+async function repeatRuns(ctx, args, { n, seeds: listed }) {
+  const { root, wt, full, sha, ref, host } = ctx
+  const cmd = argOf(args, '--run')
+  const seeds = planSeeds(n, listed)
+  const how = withSeed(cmd, seeds[0]).how
+  console.log(`\nrepeat: ${seeds.length} run${seeds.length === 1 ? '' : 's'} of ${cmd}`)
+  console.log(
+    `  seeds ${seeds.join(', ')}${listed.length ? ` (listed: ${listed.join(', ')})` : ''}; passed as RIG_SEED${how === 'RIG_SEED' ? '' : ` and ${how}`}`,
+  )
+  const series = async (machine) => {
+    const out = []
+    for (const seed of seeds) {
+      const c = withSeed(cmd, seed).cmd
+      if (machine === 'local') {
+        const clean = cleanWorktree(wt.path)
+        if (clean.reset.length || clean.removed.length)
+          console.log(`  (reset before seed ${seed}: ${[...clean.reset, ...clean.removed].join(', ')})`)
+        console.log(`\n── seed ${seed} ──\n$ ${c}\n`)
+        const r = await runWatched(c, { cwd: wt.path, env: { ...ctx.env, RIG_SEED: seed }, limitMs: ctx.limitMs, stallMs: ctx.stallMs })
+        out.push({ seed, exit: r.exit, ms: r.ms, stalled: r.stalled, failures: parseFailures(r.text, { pattern: ctx.pattern }) })
+      } else {
+        const r = await hostStage(ctx, ['repeat'], c, { seed, record: false })
+        out.push({ seed, exit: r.exit, ms: r.ms, failures: r.failures })
+      }
+    }
+    return out
+  }
+  const [here, there] = await Promise.all([series('local'), host ? series('host') : null])
+  let exit = 0
+  for (const [machine, res] of [
+    ['local', here],
+    [host, there],
+  ]) {
+    if (!res) continue
+    const failedSeeds = res.filter((r) => r.exit !== 0).map((r) => r.seed)
+    const ms = res.reduce((a, r) => a + r.ms, 0)
+    recordQa(root, {
+      kind: 'repeat',
+      ref,
+      sha: full,
+      short: sha,
+      cmd,
+      host: machine,
+      exit: failedSeeds.length ? 1 : 0,
+      ms,
+      repeat: { n: seeds.length, seeds, failedSeeds, how },
+      failures: [...new Set(res.flatMap((r) => r.failures))].slice(0, 200),
+    })
+    // Their own stage names: a flake proof is not a stage of the round, and rig status --eta (r55u)
+    // leaves qa:repeat and qa:host:repeat out of the round total.
+    timing(root, machine === 'local' ? 'qa:repeat' : 'qa:host:repeat', ms, full, machine, failedSeeds.length === 0)
+    if (failedSeeds.length) exit = 1
+  }
+  console.log(`\nrig qa: repeat at ${sha}`)
+  console.log(`  ${'seed'.padEnd(12)}${'here'.padEnd(10)}${host ?? ''}`)
+  for (let i = 0; i < seeds.length; i++) {
+    const cell = (r) => (r ? (r.exit === 0 ? 'green' : r.stalled ? 'STALLED' : `exit ${r.exit}`) : '')
+    console.log(`  ${seeds[i].padEnd(12)}${cell(here[i]).padEnd(10)}${there ? cell(there[i]) : ''}`)
+  }
+  for (const [machine, res] of [
+    ['here', here],
+    [host, there],
+  ]) {
+    if (!res) continue
+    const bad = res.filter((r) => r.exit !== 0)
+    console.log(
+      bad.length
+        ? `rig qa: ${machine}: ${bad.length} of ${res.length} FAILED, seeds ${bad.map((r) => r.seed).join(', ')}`
+        : `rig qa: ${machine}: ${res.length} of ${res.length} green`,
+    )
+  }
+  ctx.lease?.release?.()
+  return exit
+}
+
+function timing(root, stage, ms, sha, host, ok) {
+  try {
+    recordTiming(root, { stage, ms, sha, host, ok })
+  } catch (e) {
+    console.error(`rig qa: could not record the ${stage} timing: ${e.message}`)
+  }
+}
+
+function warnStaleBaselines(dir) {
+  let stale = []
+  try {
+    stale = staleBaselines(dir) ?? []
+  } catch (e) {
+    console.log(`  note: snapshot baselines could not be checked: ${e.message}`)
+    return
+  }
+  if (!stale.length) return
+  console.log(`  WARNING: ${stale.length} snapshot baseline${stale.length === 1 ? ' was' : 's were'} recorded before the base moved:`)
+  for (const b of stale)
+    console.log(`    ${b.file}  recorded from ${String(b.recordedFrom).slice(0, 7)}, ${b.behind} commit${b.behind === 1 ? '' : 's'} behind`)
+}
+
+const list = (names, max = 8) =>
+  names.length > max ? `${names.slice(0, max).join(', ')} … and ${names.length - max} more` : names.join(', ')
+
+function tryRm(p) {
+  try {
+    rmSync(p, { force: true })
+  } catch {}
 }
 
 /**
@@ -167,15 +682,10 @@ function holdLock(wt) {
     ['SIGHUP', 129],
   ]) {
     process.on(sig, () => {
-      const child = running
-      if (!child) {
-        wt.release()
-        process.exit(code)
-      }
       // The whole process group, not just the bash wrapper: bash does not pass SIGTERM on to a
       // foreground child, so signalling bash alone left `npx playwright test` running in a tree the
       // lock had just called free. And the lock waits for the whole group, not for bash.
-      groups.stop(child, sig).then(() => {
+      Promise.all([...running].map((child) => groups.stop(child, sig))).then(() => {
         wt.release()
         process.exit(code)
       })
@@ -183,90 +693,50 @@ function holdLock(wt) {
   }
 }
 
-/** The command currently running in the QA worktree, so a signal can reach it. */
-let running = null
+const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative', '--timeout', '--stall', '--host', '--repeat', '--by'])
 
 /**
- * The processes still in the group led by `pgid`, as [pid, state], zombies left out: a zombie has
- * finished and only waits for its parent's wait(). Under PID 1 (a container started as `node
- * bin/rig.js qa …` without an init) the orphans of the group are reparented to rig qa itself, which
- * never reaps what it did not spawn, so kill(-pgid, 0) kept answering "alive" for ever: the
- * three-hour hang again, in the shape CI uses (fv2's verification of c238a03). On Linux this reads
- * /proc; elsewhere it falls back to kill(-pgid, 0), and the ceiling in stop() bounds the wait.
+ * Flags whose value is optional, and when the next argument is theirs: `--seeds [<list>]` takes a
+ * comma list of numbers; `--baseline [<base>]` takes a ref only once the commit to grade is known, so
+ * in `rig qa --baseline 3f2a1b9` the sha is graded against the merge base, and in
+ * `rig qa 3f2a1b9 --baseline v5.0.3` against v5.0.3. `--flag=value` always works.
  */
-function groupLeft(pgid) {
-  if (process.platform === 'linux' && existsSync('/proc/self/stat')) {
-    const left = []
-    for (const d of readdirSync('/proc')) {
-      if (!/^\d+$/.test(d)) continue
-      try {
-        const stat = readFileSync(`/proc/${d}/stat`, 'utf8')
-        // "pid (comm) state ppid pgrp …": comm may hold spaces and parentheses, so split after the last ")".
-        const [state, , pgrp] = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
-        if (Number(pgrp) === pgid && state !== 'Z' && state !== 'X') left.push([Number(d), state])
-      } catch {}
+const OPTIONAL_VALUE = {
+  '--baseline': { re: /^[^-\s]\S*$/, afterRef: true },
+  '--seeds': { re: /^\d+(,\d+)*$/, afterRef: false },
+}
+
+/** One walk over the arguments: the bare ref and the optional values, by the rules above. */
+function walkArgs(args) {
+  let bare = null
+  const values = {}
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (VALUE_FLAGS.has(a)) {
+      i++
+      continue
     }
-    return left
-  }
-  try {
-    process.kill(-pgid, 0)
-    return [[pgid, '?']]
-  } catch (e) {
-    return e.code === 'EPERM' ? [[pgid, '?']] : []
-  }
-}
-
-/**
- * Stop everything in the child's process group: `sig` now, SIGKILL after `graceMs`, and resolve once
- * none of it is left, or at the latest `graceMs` + 5 s, naming whatever is still listed.
- *
- * bash dies on SIGTERM, but a command behind a pipe that ignores SIGTERM (`node x | cat`, the shape of
- * `npm test | tail`) lives on. Resolving on bash's exit released the lock with that command still
- * running in the worktree, and the SIGKILL meant for it was on an unref'd timer that never fired
- * because rig qa exited first. Found by fv2's review of 8ac8712. Exported so a test can put the old
- * behaviour back.
- */
-export const groups = {
-  left: groupLeft,
-  stop(child, sig, graceMs = 5000) {
-    if (process.platform === 'win32') {
-      try {
-        child.kill(sig)
-      } catch {}
-      return child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise((r) => child.once('exit', r))
+    const eq = Object.keys(OPTIONAL_VALUE).find((f) => a.startsWith(`${f}=`))
+    if (eq) {
+      values[eq] = a.slice(eq.length + 1) || null
+      continue
     }
-    signalGroup(child, sig)
-    return new Promise((resolve) => {
-      const started = Date.now()
-      const kill = setTimeout(() => signalGroup(child, 'SIGKILL'), graceMs)
-      const poll = setInterval(() => {
-        const left = groups.left(child.pid)
-        const out = Date.now() - started >= graceMs + 5000
-        if (left.length && !out) return
-        if (left.length)
-          console.error(
-            `rig qa: still listed in the command's group after SIGKILL, not waited on any longer: ${left.map(([p, st]) => `${p} (${st})`).join(', ')}`,
-          )
-        clearTimeout(kill)
-        clearInterval(poll)
-        resolve()
-      }, 100)
-    })
-  },
-}
-
-/** Signal the child's process group (it is spawned as a group leader); fall back to the pid. */
-function signalGroup(child, sig) {
-  try {
-    process.kill(-child.pid, sig)
-  } catch {
-    try {
-      child.kill(sig)
-    } catch {}
+    const opt = OPTIONAL_VALUE[a]
+    if (opt) {
+      const next = args[i + 1]
+      if (next !== undefined && opt.re.test(next) && (!opt.afterRef || bare !== null)) {
+        values[a] = next
+        i++
+      } else values[a] = null
+      continue
+    }
+    if (!a.startsWith('-') && bare === null) bare = a
   }
+  return { bare, values }
 }
 
-const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative', '--timeout'])
+/** The values of the optional-value flags: { '--baseline': ref|null, '--seeds': list|null }. */
+export const optionalValues = (args) => walkArgs(args).values
 
 /**
  * The commit to pin. `--ref` and `--branch` win; otherwise the first bare argument; otherwise the
@@ -280,28 +750,7 @@ const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative
 export function resolveRef(args, fallback) {
   const flagged = argOf(args, '--ref') || argOf(args, '--branch')
   if (flagged) return flagged
-  for (let i = 0; i < args.length; i++) {
-    if (VALUE_FLAGS.has(args[i])) {
-      i++
-      continue
-    }
-    if (!args[i].startsWith('-')) return args[i]
-  }
-  return fallback
-}
-
-/**
- * The exit status to report for a finished command.
- *
- * Node gives `code === null` when the child was killed by a signal. `code ?? 0` turned that into
- * success: an out-of-memory kill or a timeout in the middle of a test run read as a green QA.
- * Shells report a signal death as 128 + the signal number, so do the same.
- */
-const SIGNALS = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGSEGV: 11, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15 }
-export function exitCodeFor(code, signal) {
-  if (code !== null && code !== undefined) return code
-  if (signal) return 128 + (SIGNALS[signal] ?? 0)
-  return 1
+  return walkArgs(args).bare ?? fallback
 }
 
 /**
@@ -311,47 +760,11 @@ export function exitCodeFor(code, signal) {
  *
  * `limitMs` stops a command still running past it and resolves 124, as GNU timeout does. On
  * 2026-10-16 a suite left a server listening after a failed check, never exited, and a lead waiting
- * on `rig qa` sat silent for three hours: a hang has to end as a failure with a name.
+ * on `rig qa` sat silent for three hours: a hang has to end as a failure with a name. `stallMs` does
+ * the same for a run that has stopped writing (src/qa/watch.js).
  */
-export function runShell(cmd, { cwd, env, shell, mapExit = exitCodeFor, limitMs = 0 } = {}) {
-  const bash = shell ?? findBash()
-  if (!bash) console.error('rig qa: bash not found — running under sh without pipefail; a failure inside a pipe can read as exit 0.')
-  const [file, argv] = bash ? [bash, bash.endsWith('bash') ? ['-o', 'pipefail', '-c', cmd] : ['-c', cmd]] : ['/bin/sh', ['-c', cmd]]
-  return new Promise((resolve) => {
-    // Its own process group, so a signal can reach everything the command started, not just bash.
-    const child = spawn(file, argv, { cwd, env, stdio: 'inherit', detached: process.platform !== 'win32' })
-    running = child
-    let stopped = null
-    const limit =
-      limitMs > 0 &&
-      setTimeout(() => {
-        console.error(`\nrig qa: still running after ${fmtLimit(limitMs)}; stopping it (exit 124). Raise it with --timeout <min>.`)
-        stopped = groups.stop(child, 'SIGTERM')
-      }, limitMs)
-    child.on('exit', (code, signal) => {
-      clearTimeout(limit)
-      if (!stopped) {
-        running = null
-        return resolve(mapExit(code, signal))
-      }
-      // bash is gone; the command behind it may not be. 124 only once the whole group is.
-      stopped.then(() => {
-        running = null
-        resolve(124)
-      })
-    })
-    child.on('error', () => resolve(127))
-  })
-}
-
-const MAX_MINUTES = Math.floor((2 ** 31 - 1) / 60_000)
-
-const fmtLimit = (ms) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${ms} ms`)
-
-/** bash from /bin, or anywhere on PATH (NixOS and some containers have no /bin/bash). */
-function findBash() {
-  if (existsSync('/bin/bash')) return '/bin/bash'
-  return spawnSync('bash', ['-c', 'exit 0']).status === 0 ? 'bash' : null
+export function runShell(cmd, opts = {}) {
+  return runWatched(cmd, opts).then((r) => r.exit)
 }
 
 function argOf(args, name) {

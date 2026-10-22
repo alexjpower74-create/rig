@@ -164,3 +164,30 @@ export function readHint(name, sliceIds) {
     .join(' ')
   return `herdr pane read <pane-id> --lines 40${ids ? '   (' + ids + ')' : ''}`
 }
+
+// ---------------------------------------------------------------------------------------------
+// Briefing one agent (`rig job`). The one place the rig submits a prompt: to an IDLE agent, between
+// turns, which is what `herdr agent prompt` exists for. A working or blocked agent is never prompted.
+
+/** The agent in a pane: { status, seq, completion (completion_seq), dir (its cwd), ... } with herdr's agent_status and state_change_seq, or null. */
+export function agentInfo(target) {
+  const a = json(['agent', 'get', target])?.agent
+  return a
+    ? {
+        ...a,
+        status: a.agent_status ?? 'unknown',
+        seq: a.state_change_seq ?? null,
+        completion: a.completion_seq ?? null,
+        dir: a.foreground_cwd ?? a.cwd ?? null,
+      }
+    : null
+}
+
+export function agentPrompt(target, text) {
+  return tryRun('herdr', ['agent', 'prompt', target, text])
+}
+
+export function agentRead(target, lines = 25) {
+  const r = tryRun('herdr', ['agent', 'read', target, '--lines', String(lines), '--source', 'recent', '--format', 'text'])
+  return r.ok ? r.out : ''
+}

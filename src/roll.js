@@ -19,6 +19,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs'
 import { join, isAbsolute, resolve, basename } from 'node:path'
 import { parseSections, withoutPlaceholders } from './plan.js'
 import { MINDSET } from './mindset.js'
+import { askTheLead } from './brief.js'
 import { tryGit, gitRaw } from './sh.js'
 
 const strip = (s) => s.replace(/`/g, '').trim()
@@ -178,7 +179,7 @@ export function reportPathFor(roll, rollDir, tab, home) {
 }
 
 /** The brief one tab reads: purpose, the rules, the procedure, its repos, and the commit discipline. */
-export function tabBrief(roll, tab, repos, { rollDir, reportPath, briefPath }) {
+export function tabBrief(roll, tab, repos, { rollDir, reportPath, briefPath, lead = process.env.RIG_LEAD || null }) {
   const rules = roll.mustNot.filter((r) => !/^<.*>$/.test(r))
   return `# Brief — ${tab} · ${roll.title}
 
@@ -244,12 +245,14 @@ Write \`${reportPath}\` as you go, not at the end: one line per repo, in list or
 A usage pause lands mid-roll with no warning; the report is what survives it.
 
 ## House rules
-- Nobody types into your pane. If you need something, put it in the report.
+- Nobody types into your pane. If you need something, ask the lead with \`rig tell\` (below) and
+  put it in the report.
 - Work only inside the repos listed above and \`${rollDir}\`. Reading or writing anywhere else
   triggers a permission prompt that stops you until a person notices.
 - Stop only what you started: never kill a process by name or free a port you do not own.
 - Dependencies: install, don't link (\`npm ci\` in the repo, never a symlink to another checkout).
-`
+
+${askTheLead(lead, tab)}`
 }
 
 // ------------------------------------------------------------------------------------------------
