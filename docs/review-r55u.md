@@ -84,3 +84,24 @@ decide.
   the right default. So is `--drop` refusing without `--covered`.
 - `formatEta` never fills in a missing stage: it prints "no data" and a measured floor, which meets
   the bar. It reads `estimate()` exactly as the contract defines it.
+
+## Verified at ac55143 (2026-10-22)
+
+I read the diff `a75bc05..ac55143` (`src/drift.js`, `src/commands/rebase.js`, `src/commands/status.js`,
+`src/baselines.js` and the three upstream test files). Then I ran `test/upstream-drift.test.js`,
+`test/upstream-rebase.test.js` and `test/upstream-baselines.test.js` in a clean detached worktree at
+ac55143: **16, 10 and 7 passed, 0 failed, 0 void.** Every fix's check is a harness check whose
+control is the reviewed code, so each was seen red as well as green.
+
+| Finding | Verdict | How I checked |
+|---|---|---|
+| 1. fetch overrode `core.sshCommand` | **fixed** | `fetchEnv()` uses GIT_SSH_COMMAND, else `core.sshCommand`, else `ssh`, adding `-o BatchMode=yes -o ConnectTimeout=10`; a `GIT_SSH` program is left alone. That is the same order git itself uses (env, then config, then GIT_SSH). **My repro, re-run against ac55143's `fetchBase`:** a clone whose `core.sshCommand` is a logging script. The script was called, with both options added, and the fetch succeeded and brought in the new upstream commit; before the fix the script was never called. Checks "review 1: the fetch uses the repo's own core.sshCommand…" and "review 1: GIT_SSH_COMMAND is kept and extended…" pass. |
+| 2. rebase ignored a failed fetch | **fixed** | The fetch result is now read. On a failure, the reason is printed, the branch is untouched, and the exit is 1. `--no-fetch` goes on and says it is using the last fetch. A local base (nothing to fetch) still proceeds. Check "review 2: a fetch that fails stops the rebase…" passes. |
+| 3. silent 30 s status wait | **fixed** | `ConnectTimeout=10` is in the ssh command, and `fetching <remote>/<branch>…` is printed before the wait, in both status and rebase. Check "review 3: rig status names the fetch before it waits on it" passes. |
+| 4. rebase in a live worktree | **fixed** | Refused while herdr reports the slice's agent working or blocked, unless `--force`. After any rebase in the slice's own tree, the output says the tree moved and to tell the owner. tmux, which cannot report agent state, falls back to the note only; that is acceptable. The checks use a fake `herdr`, and nothing is typed into a pane. "review 4" ×2 pass. |
+| 5. `staleBaselines` silent when it could not check | **fixed** | It now throws with the reason. r55q's `warnStaleBaselines` already catches that and prints "could not be checked: …". Check "review 5: … never 'none stale'" passes. |
+| 6. eta total (lead's decision) | **fixed** | `roundTotal` counts qa:test and qa:host once, at the longer, and does the same for `qa:ci` here and `qa:ci@<host>` there. Repeat stages never enter the round, and the floor counts a side-by-side pair once. It reads `estimate(root, [stage], { host })` exactly as `src/timings.js` defines it. Three checks pass. Still open, and r55q's to do: rig/r55q records host repeats as `qa:host`, not `qa:host:repeat`. |
+
+Residual, low and not blocking: an ssh wrapper that rejects `-o` options (rare) now gets two added.
+Git already sends its own `-o SendEnv=GIT_PROTOCOL` and a `-G` probe to such a command, so a wrapper
+that cannot take options was already broken. **All six findings verified; nothing further from r55m.**
