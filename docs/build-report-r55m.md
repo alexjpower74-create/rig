@@ -257,6 +257,24 @@ as your code already passes it. With r55q's branch merged in a throwaway worktre
 The merged run also exposed a flake in my own takeover check: a 1 s ttl against a host clock that
 counts whole seconds. It is now 2 s, and was green three runs in a row.
 
+## Fix after the first real two-machine run (main 515b118, Linux PC + a Mac over ssh)
+- **Found:** `deps install when the lockfile changed, and only then` failed on the Mac only.
+- **Cause:** the runner put `/opt/homebrew/bin` first on the host's PATH. Homebrew's real `npm`
+  then shadowed whatever the host's own PATH chose; in the test, that was the fake `npm` on the fake
+  host's PATH. On Linux that dir has no npm, so the check passed.
+- **Fix (e90950f):** each extra dir is appended only when it exists and is missing.
+- **Check:** "the host's own PATH comes first…" runs on Linux too. It asserts that the command
+  sees the host PATH unchanged at the front, extras only after it, and `npm` resolving to the
+  host's own. It was red on the old line before the fix, and its control (the old line restored)
+  is red on every run.
+- **Seen on both machines** with
+  `rig qa e90950f --run "node test/machines-remote.test.js" --host <the Mac> --no-ci`:
+  - `rig qa: test exit 0 at e90950f`
+  - `rig qa: test on <the Mac> exit 0 at e90950f`
+  - 17/17 passed on each, 0 void; negative exit 0.
+- **Lesson:** a second OS finds what the fakes share with the first. The fake host here inherits
+  this machine's PATH, so it never had a Homebrew `npm` to be shadowed.
+
 ## Verification run (code sha 8d1783a; the commit after it changes this report only)
 - `npm run check` on 8d1783a: **exit 0**. That covers `biome ci .`, `test/run.js: 19 file(s) green`
   and `check-no-personal-data` clean. This is a re-run after the PC rebooted around 20:00 and killed
