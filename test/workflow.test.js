@@ -67,6 +67,7 @@ await suite('rig 2.0, workflow', async (s) => {
   const { reviewBrief } = await import('../src/commands/review.js')
   const { finishChecks } = await import('../src/commands/finish.js')
   const { recordQa, qaLogPath } = await import('../src/qalog.js')
+  const { recordVerdict } = await import('../src/vendor.js')
   const { addRule } = await import('../src/commands/rule.js')
   const { ensureRulebook } = await import('../src/commands/init.js')
 
@@ -212,6 +213,8 @@ await suite('rig 2.0, workflow', async (s) => {
   }
 
   writeLog([{ sha: head, exit: 0, cmd: 'npm test' }])
+  // 5.5: a passing finish needs a second-vendor pass on this sha (the builders are anthropic by default).
+  recordVerdict(repo, { sha: head, vendor: 'openai', verdict: 'pass', what: 'npm test; read the diff' })
   await s.check('finish passes when merged, clean, and QA exited 0 on this exact commit', {
     assert: async () => {
       const r = finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main')

@@ -1,13 +1,54 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { mainRoot, loadConfig, currentBranch } from '../config.js'
 import { loadPlan, missingBrief } from '../plan.js'
 import { worktreePath, dirtyFiles } from '../worktrees.js'
 import { reportPath } from '../reports.js'
-import { lastQaOn, lastNegativeOn } from '../qalog.js'
+import { lastNegativeOn, readQa } from '../qalog.js'
 import { git, tryGit } from '../sh.js'
 import { jot, appsTouch, ghIssueClose, ghAvailable, wrap } from '../desk.js'
 import { rigDir } from '../rigdir.js'
+import { drift } from '../drift.js'
+import { staleBaselines } from '../baselines.js'
+import { builderVendor, vendorGate } from '../vendor.js'
+import { roundDecisions, roundStart, DECISIONS } from '../decisions.js'
+import { foldHolds, latestFolds } from '../fold.js'
+
+// r55q's CI detection (src/qa/ci.js). Loaded when present, so this file also runs on a branch that
+// predates it; without it, only a configured ciCommand makes the CI gate required.
+const ciModule = await import('../qa/ci.js').catch(() => null)
+
+/** The files detectCi() looks at. */
+const CI_FILES = ['package.json', 'bin/ci', 'script/ci', 'script/cibuild', 'Makefile']
+
+/**
+ * The repo's CI command as of this sha: ciCommand in the config (null or "" there means none), else
+ * what r55q's detectCi finds in the commit itself (package.json scripts.ci, an executable bin/ci or
+ * script/ci, a Makefile ci target). The commit's files are copied to a scratch dir with their modes,
+ * because the checkout on disk may be at another commit. Returns { cmd, from } or null.
+ */
+export function ciCommandAt(root, sha, cfg = {}, detect = ciModule?.detectCi) {
+  if (Object.hasOwn(cfg, 'ciCommand')) return cfg.ciCommand ? { cmd: cfg.ciCommand, from: 'ciCommand in .rig/config.json' } : null
+  if (typeof detect !== 'function') return null
+  const dir = mkdtempSync(join(tmpdir(), 'rig-ci-'))
+  try {
+    for (const f of CI_FILES) {
+      const entry = tryGit(['ls-tree', sha, '--', f], root)
+      if (!entry.ok || !entry.out) continue
+      const [mode, type] = entry.out.split(/\s+/)
+      if (type !== 'blob') continue
+      const body = tryGit(['show', `${sha}:${f}`], root)
+      if (!body.ok) continue
+      mkdirSync(dirname(join(dir, f)), { recursive: true })
+      writeFileSync(join(dir, f), body.out + '\n')
+      if (mode === '100755') chmodSync(join(dir, f), 0o755)
+    }
+    return detect(dir, cfg)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 // Ship means told. `rig finish` is the gate between "the agents stopped" and "it is done": it
 // refuses to call a build finished while a slice is unmerged, a tree is dirty, or the tests have not
@@ -19,19 +60,26 @@ const G = (s) => `\x1b[32m${s}\x1b[0m`,
   R = (s) => `\x1b[31m${s}\x1b[0m`,
   Y = (s) => `\x1b[33m${s}\x1b[0m`
 
-export const USAGE = `rig finish [--base <ref>] [--no-review] [--no-desk] [--no-write] [--wrap "<message>"]
+export const USAGE = `rig finish [--base <ref>] [--since <ref>] [--no-review] [--no-vendor] [--no-fetch] [--no-desk] [--no-write] [--wrap "<message>"]
 
   --base <ref>       the branch every slice must be on (default: the current branch)
+  --since <ref>      where this round started, for decisions (default: the oldest slice branch point)
   --no-review        an unreviewed slice warns instead of failing; FINISH.md says so
+  --no-vendor        a missing second-vendor pass warns instead of failing; FINISH.md says so
+  --no-fetch         print drift against the live base without fetching it first
   --no-desk          do not close issues, jot, or touch the registry even when every gate passes
   --no-write         do not write docs/FINISH.md
   --wrap "<msg>"     after a pass, run \`wrap <slug> "<msg>"\` (the lead's call; crews never pass it)
   --help, -h         this text
 
-Gates: every slice merged, reviewed (docs/review-<id>.md on base, newer than the slice's last code
-commit), nothing uncommitted, QA green on this sha, negative controls green on this same sha when the
-config or plan names them, and the QA run left its tree clean. Only when every gate passes does it
-close the slice issues, jot, and touch the registry.
+Drift against the live base is printed first. Gates: every slice merged, reviewed (docs/review-<id>.md
+on base, newer than the slice's last code commit), nothing uncommitted, QA green on this sha, the same
+on qaHost when one is configured, the repo's own CI command green on each machine it ran on (and on
+every machine when ciCommand is set), negative controls green on this same sha when the config or plan
+names them, the QA run left its tree clean, "0 new" against the base baseline when one was recorded,
+a pass from a second model vendor on this sha (rig review --vendor), and no decision made this round
+still open (${DECISIONS}). Only when every gate passes does it close the slice issues, jot, and touch
+the registry.
 `
 
 export default function finish(args) {
@@ -51,7 +99,25 @@ export default function finish(args) {
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
   const base = argOf(args, '--base') || currentBranch(root)
-  const opts = { noReview: args.includes('--no-review') }
+  const opts = { noReview: args.includes('--no-review'), noVendor: args.includes('--no-vendor') }
+  if (args.includes('--since')) {
+    const want = argOf(args, '--since')
+    const r = want && tryGit(['rev-parse', '--verify', '-q', `${want}^{commit}`], root)
+    if (!r?.ok) {
+      console.error(`rig finish: --since needs a commit; "${want ?? ''}" is not one here. Nothing was run.`)
+      process.exit(2)
+    }
+    opts.since = { ref: r.out, from: `--since ${want}` }
+  }
+  // Drift before the gates: a base that moved is a rebuild, and it has to be known before anything
+  // here is read as "ready".
+  opts.drift = printDrift(root, {
+    base: liveBaseOf(root, cfg, base),
+    head: base,
+    slices: plan.agents,
+    fetch: !args.includes('--no-fetch'),
+  })
+  console.log('')
   const result = finishChecks(root, cfg, plan, base, opts)
   result.desk =
     result.failed || args.includes('--no-desk')
@@ -65,6 +131,11 @@ export default function finish(args) {
   }
 
   if (opts.noReview) console.log(Y('\n--no-review: unreviewed slices warn instead of failing; FINISH.md says so.'))
+  if (opts.noVendor) console.log(Y('\n--no-vendor: no second-vendor pass is required; FINISH.md says so.'))
+  if (result.decisions?.list.length) {
+    console.log(`\nDecisions ${result.decisions.scope}:`)
+    for (const d of result.decisions.list) console.log(`  ${d.kind === 'open' ? R('OPEN') : G(' ok ')}  ${d.id}  ${d.what}  — ${d.status}`)
+  }
   if (!args.includes('--no-write')) {
     mkdirSync(join(root, 'docs'), { recursive: true })
     writeFileSync(join(root, 'docs', 'FINISH.md'), finishReport(plan, result, opts))
@@ -159,6 +230,78 @@ function argOf(args, name) {
   return i >= 0 ? args[i + 1] : null
 }
 
+/**
+ * The live base to compare with: \`liveBase\` in the config, else the base branch's upstream, else
+ * origin/<base> when it exists, else null (nothing to compare with, and drift says so).
+ */
+export function liveBaseOf(root, cfg, base) {
+  if (cfg.liveBase) return cfg.liveBase
+  const local = String(base).replace(/^refs\/heads\//, '')
+  const up = tryGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${local}@{upstream}`], root)
+  if (up.ok && up.out) return up.out
+  if (tryGit(['rev-parse', '--verify', '-q', `refs/remotes/origin/${local}`], root).ok) return `origin/${local}`
+  return null
+}
+
+/** Run drift() and print it, first, in four lines at most. Returns what drift() returned (or null). */
+export function printDrift(root, { base, head = 'HEAD', slices = [], fetch = true }) {
+  if (!base) {
+    console.log(Y('drift: no live base to compare with (no upstream, no origin/<base>; set liveBase in .rig/config.json)'))
+    return null
+  }
+  let d
+  try {
+    d = drift(root, { base, head, slices, fetch })
+  } catch (e) {
+    d = { base, head, moved: false, since: [], touched: [], safe: [], merges: null, conflicts: [], error: e.message }
+  }
+  if (d.error) {
+    console.log(Y(`drift vs ${d.base}: could not check — ${d.error}`))
+    return d
+  }
+  if (!d.moved) {
+    console.log(G(`drift vs ${d.base}: none`) + ' — the live base has nothing this stack lacks')
+    return d
+  }
+  const merge =
+    d.merges === false ? R(`does NOT merge (${d.conflicts.join(', ') || 'conflicts'})`) : d.merges ? 'still merges' : 'merge unknown'
+  console.log(Y(`drift vs ${d.base}: moved ${d.since.length} commit(s)`) + `; ${merge}`)
+  if (d.touched.length)
+    console.log(`  touched: ${d.touched.map((t) => `${t.file}${t.slices.length ? ` (${t.slices.join(', ')})` : ''}`).join(', ')}`)
+  if (d.safe.length) console.log(`  safe: ${d.safe.length} owned file(s) untouched`)
+  console.log('  the base moved: rebuild the round before reviews (rig rebase <id>), not after them')
+  return d
+}
+
+/** The drift gate, from what drift() returned: a stack that no longer merges fails; a moved base warns. */
+export function driftCheck(d) {
+  if (!d) return { state: 'warn', detail: 'no live base to compare with' }
+  if (d.error) return { state: 'warn', detail: `could not check: ${d.error}` }
+  if (!d.moved) return { state: 'ok', detail: `${d.base} has not moved` }
+  if (d.merges === false)
+    return {
+      state: 'fail',
+      detail: `${d.base} moved ${d.since.length} commit(s) and the stack no longer merges: ${d.conflicts.join(', ')}`,
+    }
+  return {
+    state: 'warn',
+    detail: `${d.base} moved ${d.since.length} commit(s)${d.touched.length ? `, touching ${d.touched.length} owned file(s)` : ''}; rebuild before calling it ready`,
+  }
+}
+
+/**
+ * The newest QA record of this kind on exactly this sha, on one machine: 'local' (records written
+ * before hosts existed are local) or an ssh host. A run on the second machine never answers for this one.
+ */
+export function runOn(root, sha, kind, host = 'local') {
+  const isHost = (e) => (host === 'local' ? !e.host || e.host === 'local' : e.host === host)
+  return (
+    readQa(root)
+      .filter((e) => e.sha === sha && (e.kind || 'test') === kind && isHost(e))
+      .pop() || null
+  )
+}
+
 /** Run every gate. Returns { checks: [{ name, state: ok|fail|warn, detail }], failed, sha, short, qa, shots }. */
 export function finishChecks(root, cfg, plan, base, opts = {}) {
   const checks = []
@@ -218,12 +361,93 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
     dirty.map((t) => `${t.id}: ${t.files.slice(0, 3).join(', ')}${t.files.length > 3 ? ` …+${t.files.length - 3}` : ''}`).join('; '),
   )
 
-  // 3. The tests ran, and passed, on exactly this commit.
-  const qa = lastQaOn(root, sha)
+  // 0. Drift, as a gate: printed before everything, and a stack that no longer merges is not ready.
+  if ('drift' in opts) {
+    const dc = driftCheck(opts.drift)
+    add('the stack merges with the live base', dc.state, dc.detail)
+  }
+
+  // 3. The tests ran, and passed, on exactly this commit. Passed means exit 0, or (Chromium's test
+  // expectations) every failure is one the base already has: a complete "0 new" comparison recorded
+  // on this sha after the run. A stalled or killed run (124, 137, 143) never finished: never green.
+  const qa = runOn(root, sha, 'test')
+  const hostQa = cfg.qaHost ? runOn(root, sha, 'test', cfg.qaHost) : null
+  const baselineRun = runOn(root, sha, 'baseline')
+  const knownOnly = (run) => {
+    const b = baselineRun?.baseline ?? run?.baseline
+    if (
+      !run ||
+      run.exit === 0 ||
+      run.stalled ||
+      [124, 137, 143].includes(run.exit) ||
+      !b ||
+      b.complete === false ||
+      (b.newFailures || []).length
+    )
+      return null
+    if (baselineRun?.baseline && String(baselineRun.at) < String(run.at)) return null
+    return `exited ${run.exit}, but every failure is known on the base: 0 new against ${String(b.baseSha || '').slice(0, 7) || b.base}`
+  }
+  const qaState = (run) => (run.exit === 0 || knownOnly(run) ? 'ok' : 'fail')
   if (!qa) add(`QA green on ${short}`, 'fail', `no \`rig qa ${short} --run …\` recorded on this commit`)
-  else add(`QA green on ${short}`, qa.exit === 0 ? 'ok' : 'fail', qa.exit === 0 ? qa.cmd : `last run exited ${qa.exit}: ${qa.cmd}`)
+  else add(`QA green on ${short}`, qaState(qa), qa.exit === 0 ? qa.cmd : knownOnly(qa) || `last run exited ${qa.exit}: ${qa.cmd}`)
   if (qa && cfg.devCommand && qa.cmd !== cfg.devCommand)
     add('QA ran the project’s test command', 'warn', `ran "${qa.cmd}", the config's devCommand is "${cfg.devCommand}"`)
+
+  // 3a. The second machine, when there is one: a second OS caught 34 platform-only failures and a
+  // 1-in-3 flake the first never showed. Its tally has to be on this sha too.
+  const hosts = ['local', ...(cfg.qaHost ? [cfg.qaHost] : [])]
+  if (cfg.qaHost) {
+    if (!hostQa) add(`QA green on ${cfg.qaHost}`, 'fail', `no \`rig qa ${short} --host ${cfg.qaHost}\` recorded on this commit`)
+    else
+      add(
+        `QA green on ${cfg.qaHost}`,
+        qaState(hostQa),
+        `${tally(hostQa)} beside ${qa ? tally(qa) : 'no local run'} here${hostQa.exit === 0 ? '' : ` — ${knownOnly(hostQa) || `exited ${hostQa.exit}`}`}`,
+      )
+  }
+
+  // 3a'. The repo's own CI command is the gate where it has one; the rig's checks come on top. When
+  // it is configured it must have run; when it ran anywhere, it must have run (and passed) everywhere.
+  const ciRuns = hosts.map((h) => ({ host: h, run: runOn(root, sha, 'ci', h) }))
+  const ci = ciCommandAt(root, sha, cfg, 'detectCi' in opts ? opts.detectCi : undefined)
+  if (ci || ciRuns.some((c) => c.run)) {
+    for (const { host, run } of ciRuns) {
+      const name = `CI command green on ${short}${hosts.length > 1 ? ` (${host})` : ''}`
+      if (!run)
+        add(
+          name,
+          'fail',
+          `${ci ? `"${ci.cmd}" (${ci.from})` : 'the CI command'} has no run recorded on this commit${host === 'local' ? '' : ` on ${host}`}: \`rig qa ${short}${host === 'local' ? '' : ` --host ${host}`}\``,
+        )
+      // A CI command can exit 0 and still post "failure" (r55q reads RIG_CI_STATUS): both must agree.
+      else if (run.ciStatus?.state === 'failure')
+        add(name, 'fail', `${run.cmd} posted failure${run.ciStatus.text ? `: ${run.ciStatus.text}` : ''}`)
+      else add(name, run.exit === 0 ? 'ok' : 'fail', run.exit === 0 ? run.cmd : `exited ${run.exit}: ${run.cmd}`)
+    }
+  }
+
+  // 3a''. "0 new" is a computed fact against the base's own run, shown when it was computed: a
+  // `kind: 'baseline'` record on this sha (one comparison for both machines), or a `baseline` field
+  // on the test run itself.
+  const baselines = baselineRun?.baseline
+    ? [{ b: baselineRun.baseline, where: '' }]
+    : [qa, hostQa].filter((r) => r?.baseline).map((r) => ({ b: r.baseline, where: r.host && r.host !== 'local' ? ` on ${r.host}` : '' }))
+  for (const { b, where } of baselines) {
+    const known = (b.known || []).map((k) => `${k.name} (${k.where})`)
+    const fresh = b.newFailures || []
+    const name = `0 new failures against ${b.base || 'the base'}${where}`
+    if (fresh.length) add(name, 'fail', `${fresh.length} new: ${fresh.slice(0, 5).join(', ')}${fresh.length > 5 ? ' …' : ''}`)
+    else if (b.complete === false) add(name, 'warn', `not computed: ${b.why || 'the base run did not finish'}`)
+    else
+      add(
+        name,
+        'ok',
+        `0 new, ${known.length} known on ${String(b.baseSha || '').slice(0, 7) || 'the base'}${known.length ? `: ${known.slice(0, 5).join(', ')}` : ''}`,
+      )
+  }
+  for (const run of [qa, hostQa].filter((r) => r?.needsStub?.length))
+    add('specs that need a stub', 'warn', `${run.needsStub.join(', ')} reach for the desktop (clipboard or display)`)
 
   // 3b. The negatives went red again on THIS sha. Four source-patching controls silently went NOT
   // RED after a formatter moved the strings they anchored on; the sha changed, so the record must.
@@ -251,6 +475,50 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
       left.length ? 'fail' : 'ok',
       left.length ? `${left.length} file(s) written: ${left.join(', ')} — untrack it or have the test restore it` : '',
     )
+
+  // 3c'. After a fold, only message-only rewrites: every stamped commit's tree is on the branch as stamped.
+  const folds = latestFolds(root)
+  const baseName = String(base).replace(/^refs\/heads\//, '')
+  for (const [branch, stamp] of folds) {
+    const isSlice = plan.agents.some((a) => cfg.branchPrefix + a.id === branch)
+    if (branch !== baseName && !isSlice) continue
+    const ref = branch === baseName ? sha : `refs/heads/${branch}`
+    if (branch !== baseName && !tryGit(['show-ref', '--verify', '--quiet', ref], root).ok) continue
+    const h = foldHolds(root, ref, stamp)
+    add(`fold on ${branch} holds`, h.state, h.detail)
+  }
+
+  // 3d. A reviewer from a second model vendor passed exactly this sha. Same-vendor reviews passed
+  // nine real defects that one from another vendor found.
+  const vg = vendorGate(root, sha, cfg)
+  const vendorState = vg.state === 'ok' ? 'ok' : opts.noVendor ? 'warn' : 'fail'
+  add(`second-vendor pass on ${short}`, vendorState, vg.detail + (vendorState === 'warn' ? ' (--no-vendor)' : ''))
+
+  // 3e. Every decision made this round is built, scheduled for a named round, or out of scope.
+  const since = opts.since || roundStart(root, sha, plan.agents, cfg.branchPrefix)
+  const dec = roundDecisions(root, sha, since)
+  const open = dec.round.filter((d) => d.kind === 'open')
+  if (!dec.round.length && !dec.older.length) add('decisions closed', 'ok', `no decisions in ${DECISIONS}`)
+  else
+    add(
+      'decisions closed',
+      open.length ? 'fail' : 'ok',
+      open.length
+        ? `${open.length} open ${dec.scope}: ${open.map((d) => d.id).join(', ')} — rig decision <id> --built | --scheduled <round> | --not-in-scope`
+        : `${dec.round.length} ${dec.scope}, none open`,
+    )
+  const olderOpen = dec.older.filter((d) => d.kind === 'open')
+  if (olderOpen.length) add('older decisions', 'warn', `${olderOpen.map((d) => d.id).join(', ')} still open from an earlier round`)
+
+  // 3f. Snapshot baselines recorded before the base moved past them.
+  let stale = []
+  try {
+    stale = staleBaselines(root, { base }) || []
+  } catch {
+    stale = []
+  }
+  if (stale.length)
+    add('snapshot baselines current', 'warn', stale.map((b) => `${b.file} (${b.behind} behind ${b.recordedFrom.slice(0, 7)})`).join(', '))
 
   // 4. Every slice left its reasoning on base.
   for (const a of plan.agents) {
@@ -280,7 +548,27 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
   )
   add('README', existsSync(join(root, 'README.md')) ? 'ok' : 'warn', existsSync(join(root, 'README.md')) ? '' : 'missing')
 
-  return { checks, failed: checks.some((c) => c.state === 'fail'), sha, short, qa, shots }
+  return {
+    checks,
+    failed: checks.some((c) => c.state === 'fail'),
+    sha,
+    short,
+    qa,
+    hostQa,
+    shots,
+    vendor: { ...vg, builder: builderVendor(cfg) },
+    decisions: { list: dec.round, scope: dec.scope },
+    drift: opts.drift ?? null,
+  }
+}
+
+/** "exit 0, 412 passed" from a QA record, with whatever tallies it carries. */
+function tally(run) {
+  const parts = [`exit ${run.exit}`]
+  for (const k of ['passed', 'failed', 'skipped']) if (typeof run[k] === 'number') parts.push(`${run[k]} ${k}`)
+  if (run.tally && typeof run.tally === 'object')
+    for (const [k, v] of Object.entries(run.tally)) if (!parts.some((p) => p.endsWith(k))) parts.push(`${v} ${k}`)
+  return parts.join(', ')
 }
 
 /** The registry slug for a directory name: the same rule as `rig init` (rg2's slugFor). */
@@ -382,7 +670,28 @@ ${plan.done ? plan.done : '(the plan has no "What done looks like" section)'}
 ## The proof
 ${r.qa ? `- \`${r.qa.cmd}\` exited **${r.qa.exit}** on \`${r.short}\` (${r.qa.at})` : '- No QA run recorded on this commit.'}
 ${r.checks.map((c) => `- ${c.state === 'ok' ? '✓' : c.state === 'fail' ? '✗' : '!'} ${c.name}${c.detail ? ' — ' + c.detail : ''}`).join('\n')}
-${opts.noReview ? '\nRun with `--no-review`: unreviewed slices were downgraded to warnings.\n' : ''}
+${opts.noReview ? '\nRun with `--no-review`: unreviewed slices were downgraded to warnings.\n' : ''}${opts.noVendor ? '\nRun with `--no-vendor`: **no second-vendor pass was required** on this sha; the gate was downgraded to a warning.\n' : ''}
+## Second-vendor review
+${
+  r.vendor?.verdict
+    ? `- ${r.vendor.verdict.verdict} from ${r.vendor.verdict.vendor} on \`${r.short}\` (${r.vendor.verdict.at}): ${r.vendor.verdict.what}`
+    : `- none recorded on \`${r.short}\``
+}${r.vendor?.builder ? `\n- builders: ${r.vendor.builder.vendor || 'unknown'} (${r.vendor.builder.from})` : ''}
+
+## Decisions
+${r.decisions?.list.length ? r.decisions.list.map((d) => `- ${d.id} (${d.status}): ${d.what} — ${d.source}`).join('\n') : '- none this round'}
+
+## Drift
+${
+  !r.drift
+    ? '- not checked (no live base)'
+    : r.drift.error
+      ? `- could not check against ${r.drift.base}: ${r.drift.error}`
+      : r.drift.moved
+        ? `- ${r.drift.base} moved ${r.drift.since.length} commit(s); ${r.drift.merges === false ? 'the stack does not merge' : 'the stack still merges'}`
+        : `- ${r.drift.base} has not moved`
+}
+
 ## Desk
 ${deskLines.join('\n')}
 

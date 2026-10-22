@@ -18,6 +18,7 @@ const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
 
 const { finishChecks, finishReport } = await import('../src/commands/finish.js')
 const { recordQa, qaLogPath, lastQaOn, lastNegativeOn } = await import('../src/qalog.js')
+const { recordVerdict } = await import('../src/vendor.js')
 const { loadPlan } = await import('../src/plan.js')
 const { readQaLock, qaLockPath, qaSlots } = await import('../src/worktrees.js')
 
@@ -370,6 +371,9 @@ const check = (repo, name, opts) =>
 const requal = (repo, sha) => {
   recordQa(repo, { kind: 'test', sha, exit: 0, cmd: 'npm test', dirtied: [] })
 }
+// 5.5: a passing finish needs a second-vendor pass on the sha. The builders here are the default
+// launch command's vendor (anthropic), so the fixture's reviewer is another one.
+const vendorPass = (repo, sha) => recordVerdict(repo, { sha, vendor: 'openai', verdict: 'pass', what: 'npm test; read the diff' })
 
 test('an unreviewed slice fails the gate; --no-review warns and FINISH.md says so; a review on base passes', () => {
   const repo = builtRepo('review')
@@ -382,6 +386,7 @@ test('an unreviewed slice fails the gate; --no-review warns and FINISH.md says s
 
   const head = review(repo)
   requal(repo, head)
+  vendorPass(repo, head)
   assert.equal(check(repo, 'c1 reviewed').state, 'ok')
   const r = finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main')
   assert.equal(
@@ -457,6 +462,7 @@ test('negative controls must be green on THIS sha: a run on the previous sha doe
 
   recordQa(repo, { kind: 'negative', sha: head, exit: 0, cmd: 'npm run demo' })
   assert.equal(check(repo, name).state, 'ok')
+  vendorPass(repo, head)
   assert.equal(finishChecks(repo, cfg, loadPlan(join(repo, 'PLAN.md')), 'main').failed, false)
 
   // Known-bad for the trigger: a plan with no negatives and no config command has no such gate.
@@ -526,6 +532,7 @@ test('a passing finish closes the slice issue, jots and touches the registry; a 
 
   const head = review(repo)
   requal(repo, head)
+  vendorPass(repo, head)
   const short = git(['rev-parse', '--short', 'HEAD'], repo)
   const pass = rig('finish', repo, [], env)
   assert.equal(pass.status, 0, pass.out)
@@ -553,6 +560,7 @@ test('a passing finish closes the slice issue, jots and touches the registry; a 
   writeFileSync(join(repo, 'docs', 'review-c1.md'), '# Review c1\nstill no findings\n')
   const h2 = commit(repo, 'review again')
   requal(repo, h2)
+  vendorPass(repo, h2)
   rmSync(d.log)
   rig('finish', repo, [], env)
   assert.equal(d.lines().filter((l) => l.startsWith('jot ')).length, 1)
@@ -580,6 +588,7 @@ test('without cfg.slug the desk uses rg2’s slug rule for the directory name (r
   const repo = builtRepo('Depot Draw')
   const head = review(repo)
   requal(repo, head)
+  vendorPass(repo, head)
   const r = rig('finish', repo, [], env)
   assert.equal(r.status, 0, r.out)
   assert.ok(d.lines().includes('apps touch depot-draw'), d.lines().join('\n'))
@@ -607,6 +616,7 @@ test('desk tools that are not on PATH are skipped with a reason, never thrown', 
   const repo = builtRepo('nodesk-tools')
   const head = review(repo)
   requal(repo, head)
+  vendorPass(repo, head)
   // Only node, git and /bin. Not /usr/bin: macOS ships BSD /usr/bin/jot (a number-sequence tool),
   // so "jot is not on PATH" never held there. Not node's own dir either: Homebrew puts gh beside it.
   const bin = join(tmp, 'bare-bin')
