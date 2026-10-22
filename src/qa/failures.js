@@ -30,8 +30,16 @@ const RUNNERS = [
   },
   // node:test's spec reporter: "✖ name (1.2ms)". Its "✖ failing tests:" heading is not a test.
   { id: 'node-spec', re: /^\s*✖ (.+)$/, name: (m) => (/^failing tests:?$/.test(m[1].trim()) ? null : tidy(m[1])) },
-  // The Rig's own harness: "  FAIL  name 12ms"; VOID and UNPRV fail the run too. A target's name ends at " — ".
-  { id: 'harness', re: /^\s*(?:FAIL|VOID|UNPRV)\s{1,2}(\S.*?)(?:\s+\d+ms)?$/, name: (m) => m[1].split(' — ')[0].trim() },
+  // The Rig's own harness: "  FAIL  name 12ms" ("UNPRV name" is one space narrower); VOID and UNPRV
+  // fail the run too. Its summary ("  VOID checks passed against a broken page…") has one space and
+  // is not a test. A target's name ends at " — ".
+  {
+    id: 'harness',
+    re: /^\s*(?:(?:FAIL|VOID)\s{2}|UNPRV\s)(\S.*?)(?:\s+\d+ms)?$/,
+    name: (m) => m[1].split(' — ')[0].trim(),
+  },
+  // Jest names the failing file: "FAIL src/cart.test.js".
+  { id: 'jest', re: /^\s*FAIL\s+(\S+\.[cm]?[jt]sx?)\s*$/, name: (m) => m[1] },
   // rspec's re-run list: "rspec ./spec/a_spec.rb:12 # does a thing". The description is the stable name.
   { id: 'rspec', re: /^rspec (\S+?)(?::\d+|\[[\d:]+\])?(?:\s+#\s+(.+))?$/, name: (m) => (m[2] ? m[2].trim() : m[1]) },
   // Playwright, list reporter ("  ✘  3 [chromium] › a.spec.ts:12:5 › title (1.2s)") and its summary
@@ -80,7 +88,7 @@ export function failureIn(line, { pattern = null } = {}) {
 /** A result line of any kind, pass or fail: the boundary between one spec and the next. */
 export function isResultLine(line) {
   const l = plain(line)
-  return /^\s*(?:not ok|ok) \d+/.test(l) || /^\s*[✔✖✓✘×]\s/.test(l) || /^\s*(?:PASS|FAIL|VOID|UNPRV)\s{1,2}\S/.test(l)
+  return /^\s*(?:not ok|ok) \d+/.test(l) || /^\s*[✔✖✓✘×]\s/.test(l) || /^\s*(?:(?:PASS|FAIL|VOID)\s{2}|UNPRV\s)\S/.test(l)
 }
 
 /**
@@ -166,7 +174,7 @@ const SPEC_PATTERNS = [
   // a result line names a test
   (l) => l.match(/^\s*(?:ok|not ok) \d+ - (.+)$/)?.[1],
   (l) => l.match(/^\s*[▶✔✖✓✘]\s+(.+)$/)?.[1],
-  (l) => l.match(/^\s*(?:PASS|FAIL|VOID)\s{1,2}(\S.*)$/)?.[1],
+  (l) => l.match(/^\s*(?:PASS|FAIL|VOID)\s{2}(\S.*)$/)?.[1],
 ]
 
 /** The last spec, file or test the given output mentions, or null. */
