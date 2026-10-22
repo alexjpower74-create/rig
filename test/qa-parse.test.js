@@ -289,3 +289,21 @@ test('the CI status a host run posts is read from its marked line (r55g review 3
     remote.runOnHost = saved
   }
 })
+
+test('on the host, the stub calls runOnHost returns count even when the spec swallowed the stub message', async () => {
+  const { remote, runHost } = await import('../src/qa/host.js')
+  const saved = remote.runOnHost
+  remote.runOnHost = async (o) => ({
+    host: o.host,
+    exit: 1,
+    ms: 1,
+    log: 'not ok 1 - copies the link\n  Command failed: xclip -selection clipboard\nnot ok 2 - totals the cart\n',
+    stubCalls: [{ tool: 'xclip', t: 1, args: '-selection clipboard' }],
+  })
+  try {
+    const r = await runHost({ root: tmp, host: 'box', sha: 'abc', cmd: 'x', session: 's', echo: false })
+    assert.deepEqual(r.needsStub, ['copies the link'])
+  } finally {
+    remote.runOnHost = saved
+  }
+})

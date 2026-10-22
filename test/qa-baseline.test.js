@@ -417,6 +417,29 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       },
       timeout: 60_000,
     })
+
+    // A repeat is a flake proof, not a stage of the round: its times go under their own names, so
+    // `rig status --eta` (r55u) can leave them out of the round total.
+    let repeatArgs = ['--repeat', '2', '--seeds', '2,4']
+    await s.check('repeat runs record qa:repeat and qa:host:repeat, never qa:test or qa:host', {
+      assert: async () => {
+        rmSync(join(tRepo, '.rig', 'timings.jsonl'), { force: true })
+        rigQa(tRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', ...repeatArgs, '--run', 'node --test test/a.test.js'], {
+          fake: fakeBox({ exit: 0, log: 'ok 1 - fine\n' }),
+        })
+        const stages = [...new Set(readTimings(tRepo).map((t) => t.stage))].sort()
+        if (JSON.stringify(stages) !== '["qa:host:repeat","qa:repeat"]') throw new Error(`stages ${JSON.stringify(stages)}`)
+        return true
+      },
+      // The same command as a plain run: its times are round stages, qa:test and qa:host.
+      breaks: () => {
+        repeatArgs = []
+        return () => {
+          repeatArgs = ['--repeat', '2', '--seeds', '2,4']
+        }
+      },
+      timeout: 60_000,
+    })
   }
 })
 

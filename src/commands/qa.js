@@ -574,7 +574,9 @@ async function repeatRuns(ctx, args, { n, seeds: listed }) {
       repeat: { n: seeds.length, seeds, failedSeeds, how },
       failures: [...new Set(res.flatMap((r) => r.failures))].slice(0, 200),
     })
-    timing(root, machine === 'local' ? 'qa:repeat' : 'qa:host', ms, full, machine, failedSeeds.length === 0)
+    // Their own stage names: a flake proof is not a stage of the round, and rig status --eta (r55u)
+    // leaves qa:repeat and qa:host:repeat out of the round total.
+    timing(root, machine === 'local' ? 'qa:repeat' : 'qa:host:repeat', ms, full, machine, failedSeeds.length === 0)
     if (failedSeeds.length) exit = 1
   }
   console.log(`\nrig qa: repeat at ${sha}`)

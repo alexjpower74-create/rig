@@ -180,9 +180,16 @@ export async function runHost({
   error ??= r.why ?? null
   const log = r.log ?? ''
   const failures = parseFailures(log, { pattern })
-  // The host's own stubs (src/remote.js) say "<tool>: the desktop is off in test runs" and log no
-  // times, so only a failure whose block names the tool counts there; never the time rule.
-  const stubbed = [...new Set([...log.matchAll(/^\s*(?:\[[^\]]*\] )?(\S+): the desktop is off in test runs/gm)].map((m) => m[1]))]
+  // The host's own stubs (src/remote.js) say "<tool>: the desktop is off in test runs" and, since
+  // r55m's edf29fd, also come back as `stubCalls`. Their times are the host's clock and the output
+  // lines carry none, so only a failure whose block names a called tool counts there; never the
+  // time rule.
+  const stubbed = [
+    ...new Set([
+      ...[...log.matchAll(/^\s*(?:\[[^\]]*\] )?(\S+): the desktop is off in test runs/gm)].map((m) => m[1]),
+      ...(r.stubCalls ?? []).map((c) => c.tool),
+    ]),
+  ]
   const stub = needsStub(
     log.split('\n').map((text) => ({ t: Number.NaN, text })),
     stubbed.map((tool) => ({ t: Number.NaN, tool })),
@@ -198,6 +205,7 @@ export async function runHost({
     db: r.db ?? null,
     failures,
     needsStub: stub,
+    stubCalls: r.stubCalls ?? [],
     tally: tally(log, failures),
     stalled,
     ciStatus: posted ? parseCiStatus(posted) : null,
