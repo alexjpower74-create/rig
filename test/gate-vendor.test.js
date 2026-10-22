@@ -245,6 +245,42 @@ await suite('rig 5.5, rig review --vendor (r55g)', async (s) => {
     },
   })
 
+  // r55w's review, finding 1: a made-up name is not a second vendor.
+  let extra = {}
+  await s.check('a pass from a vendor name the rig does not know is refused unless the config lists it', {
+    assert: async () => {
+      setConfig(repo, extra)
+      const before = readVerdicts(repo).length
+      const r = rig('review', repo, ['--vendor', 'me', '--pass', 'lgtm'])
+      setConfig(repo, {})
+      return r.status === 1 && /"me" is not a vendor the rig knows/.test(r.out) && readVerdicts(repo).length === before
+    },
+    breaks: async () => {
+      extra = { vendors: ['me'] }
+      return () => {
+        extra = {}
+      }
+    },
+  })
+
+  // Finding 2: a mixed crew (Claude slices plus a Codex member) has two builder vendors.
+  let crew = ['claude', 'codex']
+  await s.check('with a mixed crew, a pass from any builder vendor is refused', {
+    assert: async () => {
+      setConfig(repo, { vendor: crew })
+      const before = readVerdicts(repo).length
+      const r = rig('review', repo, ['--vendor', 'codex', '--pass', 'ran it'])
+      setConfig(repo, {})
+      return r.status === 1 && /one of the vendors that built this round/.test(r.out) && readVerdicts(repo).length === before
+    },
+    breaks: async () => {
+      crew = ['claude']
+      return () => {
+        crew = ['claude', 'codex']
+      }
+    },
+  })
+
   let launch = ''
   await s.check('an unknown builder vendor refuses every pass until the config names one', {
     assert: async () => /builders' vendor is unknown/.test(sameVendorReason('codex', builderVendor({ launch })) || ''),

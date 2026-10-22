@@ -41,17 +41,34 @@ export function vendorOf(name) {
 }
 
 /**
- * The vendor of the model that built this round, and where that answer came from: `vendor` in the
- * config, else the launch command's program (`claude …` → anthropic, `codex …` → openai). The launch
- * command defaults like the config does, so a repo with no config still has an answer.
- * @returns {{ vendor: string|null, from: string }}
+ * The vendors whose models built this round, and where that answer came from: `vendor` in the
+ * config (one name, or a list for a mixed crew: Claude slices plus a Codex member briefed through
+ * `rig job`), else the launch command's program (`claude …` → anthropic, `codex …` → openai). The
+ * launch command defaults like the config does, so a repo with no config still has an answer.
+ * A pass from any of them is a same-vendor pass.
+ * @returns {{ vendor: string|null, vendors: string[], from: string }}  vendor is the list, joined, for display
  */
 export function builderVendor(cfg = {}) {
-  if (cfg.vendor) return { vendor: vendorOf(cfg.vendor), from: `vendor "${cfg.vendor}" in .rig/config.json` }
+  const named = [cfg.vendor].flat().filter(Boolean)
+  if (named.length) {
+    const vendors = [...new Set(named.map(vendorOf))]
+    return { vendor: vendors.join(' + '), vendors, from: `vendor ${JSON.stringify(cfg.vendor)} in .rig/config.json` }
+  }
   const launch = cfg.launch ?? DEFAULTS.launch
   const program = launchProgram(launch)
-  if (!program) return { vendor: null, from: 'no vendor in .rig/config.json and no launch command' }
-  return { vendor: vendorOf(program), from: `the launch command (${program})` }
+  if (!program) return { vendor: null, vendors: [], from: 'no vendor in .rig/config.json and no launch command' }
+  const v = vendorOf(program)
+  return { vendor: v, vendors: [v], from: `the launch command (${program})` }
+}
+
+/**
+ * Is this a vendor the rig can tell apart from the builders? The table's vendors, plus any listed
+ * under `vendors` in the config. A word the table does not know is not a vendor: with it, the
+ * builders could pass their own round by typing \`--vendor me\`.
+ */
+export function knownVendor(name, cfg = {}) {
+  const v = vendorOf(name)
+  return Boolean(v && (v in ALIASES || [cfg.vendors].flat().filter(Boolean).map(vendorOf).includes(v)))
 }
 
 /** The program a launch command runs, past `env X=y`, `npx` and a path: `npx -y @x/codex --full-auto` → codex. */
@@ -112,12 +129,14 @@ export function verdictOn(root, sha) {
  * Would a pass from `reviewer` count against `builder`? Returns null when it would, else the reason
  * it would not, in words that tell the person what to do instead.
  */
-export function sameVendorReason(reviewer, builder) {
+export function sameVendorReason(reviewer, builder, cfg = {}) {
   const r = vendorOf(reviewer)
-  if (!builder.vendor)
+  if (!builder.vendors?.length)
     return `the builders' vendor is unknown (${builder.from}): set "vendor" in .rig/config.json so a second vendor can be told apart`
-  if (r === builder.vendor)
-    return `${reviewer} is ${r}, the same vendor that built this round (${builder.from}). Same-vendor reviews share the builders' blind spots; a second-vendor pass has to come from a model trained by someone else`
+  if (builder.vendors.includes(r))
+    return `${reviewer} is ${r}, ${builder.vendors.length > 1 ? 'one of the vendors' : 'the same vendor'} that built this round (${builder.from}). Same-vendor reviews share the builders' blind spots; a second-vendor pass has to come from a model trained by someone else`
+  if (!knownVendor(reviewer, cfg))
+    return `"${reviewer}" is not a vendor the rig knows (${Object.keys(ALIASES).join(', ')}); if it is one, list it under "vendors" in .rig/config.json`
   return null
 }
 
@@ -140,7 +159,7 @@ export function vendorGate(root, sha, cfg) {
     }
   }
   if (v.verdict !== 'pass') return { state: 'fail', verdict: v, detail: `${v.vendor} failed it: ${v.what}` }
-  const why = sameVendorReason(v.vendor, builder)
+  const why = sameVendorReason(v.vendor, builder, cfg)
   if (why) return { state: 'fail', verdict: v, detail: why }
   return { state: 'ok', verdict: v, detail: `${v.vendor}: ${v.what}` }
 }

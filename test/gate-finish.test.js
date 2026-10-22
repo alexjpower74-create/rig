@@ -214,6 +214,20 @@ await suite('rig 5.5, the finish gate (r55g)', async (s) => {
       }
     },
   })
+  resetVerdicts(repo, [])
+  appendFileSync(reviewsPath(repo), JSON.stringify({ ...pass, vendor: 'me' }) + '\n')
+  await s.check('a pass recorded under a made-up vendor name does not pass the gate', {
+    assert: async () => {
+      const r = gate(repo)
+      return r.failed && /"me" is not a vendor the rig knows/.test(r.checks.find((x) => /second-vendor/.test(x.name)).detail)
+    },
+    breaks: async () => {
+      cfg.vendors = ['me']
+      return () => {
+        delete cfg.vendors
+      }
+    },
+  })
   resetVerdicts(repo, [pass])
 
   // ---------------------------------------------------------------------------------------------
