@@ -110,7 +110,7 @@ export function addDecision(root, { what, source, now = new Date() }) {
   })
   lines.splice(last + 1, 0, row)
   writeAtomic(p, lines.join('\n') + '\n')
-  return d
+  return { ...d, what: unesc(d.what), source: unesc(d.source) }
 }
 
 /**
