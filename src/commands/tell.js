@@ -2,10 +2,11 @@
 // questions all go here, never into the peer's own pane, where nobody reads them. With one argument
 // the lead is `lead` in .rig/config.json, else RIG_LEAD.
 import { mainRoot, loadConfig, currentBranchOrNull } from '../config.js'
-import { inboxRoot, leadName, senderId, tellMessage } from '../inbox.js'
+import { inboxRoot, leadName, senderId, tellMessage, freshInboxNote } from '../inbox.js'
 
 export default function tell(args) {
-  const words = args.filter((a) => !a.startsWith('--'))
+  // No flags: every argument is the lead or the text, so a message may start with `--`.
+  const words = args
   let cfg = {}
   let branch = null
   try {
@@ -26,6 +27,8 @@ export default function tell(args) {
     process.exit(2)
   }
   const from = senderId(process.env, { branch, branchPrefix: cfg.branchPrefix || 'rig/' })
+  const note = freshInboxNote(cfg, process.env, lead)
+  if (note) console.log(note)
   const file = tellMessage(inboxRoot(cfg), lead, from, text)
   console.log(`told ${lead} (from ${from}): ${file}`)
 }

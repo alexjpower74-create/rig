@@ -9,7 +9,7 @@ import { reportPath } from '../reports.js'
 import { terminal } from '../terminal.js'
 import { git } from '../sh.js'
 import { rigDir } from '../rigdir.js'
-import { inboxRoot, leadName, leadDir, watcherState, DEFAULT_WAIT_MIN } from '../inbox.js'
+import { inboxRoot, leadName, leadDir, watcherState, freshInboxNote, DEFAULT_WAIT_MIN } from '../inbox.js'
 import inbox from './inbox.js'
 
 const YEL = (s) => `\x1b[33m${s}\x1b[0m`
@@ -155,6 +155,8 @@ function watcherNote(cfg, lead) {
   const root = inboxRoot(cfg)
   const w = watcherState(root, lead)
   console.log(`\nlead inbox: ${lead}  (${leadDir(root, lead)})`)
+  const note = freshInboxNote(cfg, process.env, lead)
+  if (note) console.log(`  ${note}`)
   if (w) console.log(`  watcher armed: pid ${w.pid}, until ${new Date(w.until).toTimeString().slice(0, 5)}`)
   else {
     console.log(`  ${YEL('no watcher armed.')} Run this as a background job; it exits when a peer tells you something. Re-arm after each:`)

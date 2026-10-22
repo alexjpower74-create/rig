@@ -4,7 +4,17 @@
 //
 // Exit: 0 messages printed (or none, without --wait); 4 the deadline passed with nothing; 2 usage.
 import { mainRoot, loadConfig } from '../config.js'
-import { inboxRoot, leadName, takeAll, waitForMessages, formatMessage, DEFAULT_WAIT_MIN, DEFAULT_POLL_MS, checkLead } from '../inbox.js'
+import {
+  inboxRoot,
+  leadName,
+  takeAll,
+  waitForMessages,
+  formatMessage,
+  DEFAULT_WAIT_MIN,
+  DEFAULT_POLL_MS,
+  checkLead,
+  freshInboxNote,
+} from '../inbox.js'
 
 export const EXIT_DEADLINE = 4
 
@@ -24,6 +34,8 @@ export default async function inbox(args) {
   }
   checkLead(lead)
   const root = inboxRoot(cfg)
+  const note = freshInboxNote(cfg, process.env, lead)
+  if (note) console.log(note)
   const wait = args.includes('--wait')
   const dl = arg(args, '--deadline')
   const minutes = dl == null ? (cfg.inboxDeadline ?? DEFAULT_WAIT_MIN) : Number(dl)

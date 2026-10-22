@@ -13,6 +13,7 @@
 //
 // Exit codes, one per outcome:
 //   0  finished (idle or done), and the --expect file, when given, exists and is not empty
+//      (a relative --expect is read from the pane's own cwd, as herdr reports it)
 //   3  refused: no such agent, it is busy or blocked, or herdr would not take the prompt
 //   4  the deadline passed while it was still working
 //   5  BLOCKED: it is waiting on a prompt or an approval
@@ -20,6 +21,7 @@
 //   7  never started: still idle with no state change a minute after the prompt
 //   2  usage
 import { existsSync, statSync } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
 import { mainRoot, loadConfig } from '../config.js'
 import { agentInfo, agentPrompt, agentRead } from '../herdr.js'
 import { leadName } from '../inbox.js'
@@ -108,8 +110,11 @@ export default async function job(args) {
   } else say(`${pane} is ${now.status} after ${mins} min`)
 
   if (expect) {
-    const ready = existsSync(expect) && statSync(expect).isFile() && statSync(expect).size > 0
-    say(ready ? `expected output ready: ${expect}` : `expected output MISSING or empty: ${expect}`)
+    // The member writes the file in its own worktree: a relative path is read from the pane's cwd
+    // (herdr knows it), not from wherever the lead ran rig job.
+    const at = isAbsolute(expect) ? expect : resolve(now.dir || before.dir || process.cwd(), expect)
+    const ready = existsSync(at) && statSync(at).isFile() && statSync(at).size > 0
+    say(ready ? `expected output ready: ${at}` : `expected output MISSING or empty: ${at}`)
     if (!ready && code === EXIT.ok) code = EXIT.missing
   }
   if (now.status === 'blocked') {

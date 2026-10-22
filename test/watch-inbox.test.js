@@ -113,7 +113,7 @@ await suite('rig 5.5: peers report themselves, briefs say who acts', async (s) =
       const r = rigSync(['tell', 'boss', 'w1: done — report committed'], scratch, { ...baseEnv(inbox), RIG_AGENT_ID: 'w1' })
       if (r.status !== 0) throw new Error(r.stderr || r.stdout)
       const files = readdirSync(join(inbox, 'boss'))
-      if (files.length !== 1 || !/^\d{8}T\d{6}-\d+-[0-9a-f]{6}\.md$/.test(files[0])) throw new Error(files.join(','))
+      if (files.length !== 1 || !/^\d{8}T\d{6}\.\d{3}-\d{6}-\d+-[0-9a-f]{6}\.md$/.test(files[0])) throw new Error(files.join(','))
       const body = readFileSync(join(inbox, 'boss', files[0]), 'utf8')
       return /^from: w1\nat: \d{4}-\d\d-\d\d \d\d:\d\d\n\nw1: done — report committed\n$/.test(body)
     },
@@ -379,7 +379,7 @@ Do b.
       return (
         r.status === 0 &&
         r.stdout.includes('no ## Refusals matrix') &&
-        r.stdout.includes('(it talks about "form" and "refuses")') &&
+        r.stdout.includes('(it talks about "form" and "refuses" in one sentence)') &&
         r.stdout.includes('`UI: none`')
       )
     },
@@ -416,7 +416,7 @@ Do b.
       const uiFiles = parsePlan(PLAN_UI.replace('src/claims/**', 'src/components/**').replace('A claim form that refuses', 'It refuses'))
       return refusalsGap(cli) === null && refusalsGap(plainUi) === null && /a slice owns src\/components/.test(refusalsGap(uiFiles))
     },
-    breaks: broken([['src/plan.js', '  if (!ui && !rule) return null', '']]),
+    breaks: broken([['src/plan.js', 'const r = w && sentence.match(RULE_WORDS)?.[0]', 'const r = w']]),
   })
 
   await s.check('a filled matrix reaches the brief; the template’s placeholder row does not', {
@@ -440,6 +440,127 @@ Do b.
     breaks: broken([
       ['src/brief.js', "refusalRows(plan.refusals).length ? section('Refusals (every one has a repair)', plan.refusals) : ''", "''"],
     ]),
+  })
+
+  // ---------------------------------------------------------------------------------------------
+  // r55u's review of ef60454.
+
+  // 1. This repo's own plan (a CLI with no screens, full of "page" and "blocked") gets no warning.
+  //    Taken from git at the plan commit, so a later `UI: none` in PLAN.md cannot make it pass.
+  await s.check('Rig 5.5’s own PLAN.md (a CLI plan) gets no refusal-matrix warning from rig up', {
+    assert: async () => {
+      const text = git(['show', '14a1ad6:PLAN.md'], repo)
+      if (/^\s*UI:/m.test(text)) throw new Error('the fixture has a UI: line; it would prove nothing')
+      const { parsePlan, refusalsGap } = await mod('src/plan.js')
+      const gap = refusalsGap(parsePlan(text))
+      const r = rigSync(['up', '--dry-run'], fixture(text), baseEnv(freshInbox()))
+      if (r.status !== 0) throw new Error(r.stderr || r.stdout)
+      return gap === null && !r.stdout.includes('Refusals')
+    },
+    // 5.5's first trigger: any screen word and any rule word, anywhere in the brief or the tasks.
+    breaks: broken([
+      [
+        'src/plan.js',
+        '  for (const sentence of sentences(brief)) {',
+        '  if (prose.match(UI_WORDS) && prose.match(RULE_WORDS)) return `it talks about "${prose.match(UI_WORDS)[0]}"`\n  for (const sentence of sentences(brief)) {',
+      ],
+    ]),
+  })
+
+  // 2. Two tells in the same millisecond come back in the order they were written.
+  await s.check('messages written back to back (same millisecond) are read oldest first, 300 pairs out of 300', {
+    assert: async () => {
+      const { tellMessage, takeAll } = await mod('src/inbox.js')
+      const root = freshInbox()
+      const at = new Date()
+      let wrong = 0
+      for (let i = 0; i < 300; i++) {
+        tellMessage(root, 'boss', 'w1', `first ${i}`, at)
+        tellMessage(root, 'boss', 'w1', `correction ${i}`, at)
+        const got = takeAll(root, 'boss').map((m) => m.text)
+        if (got.join('|') !== `first ${i}|correction ${i}`) wrong++
+      }
+      if (wrong) throw new Error(`${wrong} of 300 pairs came back out of order`)
+      return true
+    },
+    // ef60454's name: seconds, pid, random suffix.
+    breaks: broken([
+      ['src/inbox.js', "`${stamp(now)}-${String(seq++).padStart(6, '0')}-${process.pid}-", '`${stamp(now).slice(0, 15)}-${process.pid}-'],
+    ]),
+  })
+
+  await s.check('two rig tell commands run back to back are read in that order, 10 times', {
+    assert: async () => {
+      for (let i = 0; i < 10; i++) {
+        const inbox = freshInbox()
+        rigSync(['tell', 'boss', 'done'], scratch, baseEnv(inbox))
+        rigSync(['tell', 'boss', 'correction: blocked'], scratch, baseEnv(inbox))
+        const r = rigSync(['inbox', 'boss'], scratch, baseEnv(inbox))
+        if (!(r.stdout.indexOf('\ndone\n') < r.stdout.indexOf('correction: blocked'))) throw new Error(r.stdout)
+      }
+      return true
+    },
+    // Names that sort the wrong way round whenever both land in one second.
+    breaks: broken([
+      [
+        'src/inbox.js',
+        "`${stamp(now)}-${String(seq++).padStart(6, '0')}-${process.pid}-",
+        '`${stamp(now).slice(0, 15)}-${String(1e6 - process.pid)}-',
+      ],
+    ]),
+    timeout: 30_000,
+  })
+
+  // 3. A fresh default inbox says once that an existing one can be kept, naming no other tool.
+  await s.check('a fresh default inbox prints the inboxDir note once, naming no vendor folder; inboxDir is honoured', {
+    assert: async () => {
+      const state = mkdtempSync(join(tmp, 'xdg-'))
+      const env = { ...baseEnv('x'), XDG_STATE_HOME: state }
+      delete env.RIG_INBOX_DIR
+      const first = rigSync(['inbox', 'boss'], scratch, env)
+      rigSync(['tell', 'boss', 'hello'], scratch, env)
+      const second = rigSync(['inbox', 'boss'], scratch, env)
+      const note = first.stdout.split('\n').find((l) => l.startsWith('note:')) || ''
+      // inboxDir from the config of the repo the command runs in.
+      const r = fixture('# P\n\n## Agents\n\n### a1 — x\nOwns:\n- src/a/**\n\nTask:\nx\n', {
+        lead: 'boss',
+        inboxDir: join(tmp, 'kept-inbox'),
+      })
+      const told = rigSync(['tell', 'kept'], r, env)
+      return (
+        note.includes('"inboxDir" in .rig/config.json') &&
+        !/claude|codex|anthropic|openai|gemini/i.test(note) &&
+        !second.stdout.includes('note:') &&
+        second.stdout.includes('hello') &&
+        told.status === 0 &&
+        !told.stdout.includes('note:') &&
+        readdirSync(join(tmp, 'kept-inbox', 'boss')).some((f) => f.endsWith('.md'))
+      )
+    },
+    breaks: broken([['src/inbox.js', '  if (env.RIG_INBOX_DIR || cfg.inboxDir) return null\n', '  return null\n']]),
+  })
+
+  await s.check('inboxDir in config moves the inbox (the note path aside)', {
+    assert: async () => {
+      const state = mkdtempSync(join(tmp, 'xdg-'))
+      const env = { ...baseEnv('x'), XDG_STATE_HOME: state }
+      delete env.RIG_INBOX_DIR
+      const r = fixture('# P\n\n## Agents\n\n### a1 — x\nOwns:\n- src/a/**\n\nTask:\nx\n', { lead: 'boss', inboxDir: join(tmp, 'kept-2') })
+      rigSync(['tell', 'moved'], r, env)
+      return existsSync(join(tmp, 'kept-2', 'boss')) && !existsSync(join(state, 'rig', 'inbox', 'boss'))
+    },
+    breaks: broken([['src/inbox.js', '  if (cfg.inboxDir) return expandHome(cfg.inboxDir)\n', '']]),
+  })
+
+  // 4. A message may start with `--`.
+  await s.check('rig tell keeps text that starts with --', {
+    assert: async () => {
+      const inbox = freshInbox()
+      rigSync(['tell', 'boss', '--no-vendor was needed'], scratch, baseEnv(inbox))
+      const r = rigSync(['inbox', 'boss'], scratch, baseEnv(inbox))
+      return r.stdout.includes('\n--no-vendor was needed\n')
+    },
+    breaks: broken([['src/commands/tell.js', '  const words = args\n', "  const words = args.filter((a) => !a.startsWith('--'))\n"]]),
   })
 })
 

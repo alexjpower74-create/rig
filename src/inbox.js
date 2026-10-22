@@ -3,7 +3,7 @@
 // job, and its exit is what wakes the lead. Before this, a question typed into a peer's own pane
 // reached nobody, and a finished peer sat idle until someone happened to look.
 //
-// One message is one file, `<inbox>/<lead>/<stamp>-<pid>-<rand>.md`, written to a dot-tmp name in the
+// One message is one file, `<inbox>/<lead>/<YYYYMMDDTHHMMSS.mmm>-<seq>-<pid>-<rand>.md`, written to a dot-tmp name in the
 // same directory and renamed into place, so a reader never sees half a message. Reading files it under
 // `read/`. The layout matches the bash `tell-lead`/`lead-inbox` scripts this replaces (`from:`, `at:`,
 // a blank line, the text), so an inbox they filled reads the same.
@@ -31,6 +31,19 @@ export function inboxRoot(cfg = {}, env = process.env) {
   if (cfg.inboxDir) return expandHome(cfg.inboxDir)
   if (env.XDG_STATE_HOME) return join(env.XDG_STATE_HOME, 'rig', 'inbox')
   return join(env.HOME || homedir(), '.local', 'state', 'rig', 'inbox')
+}
+
+/**
+ * A one-line note for a fresh default inbox: the folder does not exist yet and nothing chose it. A
+ * crew moving from another tool may have peers writing somewhere else, and a message there would never
+ * reach this watcher. Null when the inbox was set (RIG_INBOX_DIR, inboxDir) or already exists, so it
+ * is said once, until the first message or watcher creates the folder. It names no other tool's folder.
+ */
+export function freshInboxNote(cfg = {}, env = process.env, lead = null) {
+  if (env.RIG_INBOX_DIR || cfg.inboxDir) return null
+  const root = inboxRoot(cfg, env)
+  if (existsSync(lead ? join(root, lead) : root)) return null
+  return `note: this inbox is new (${lead ? join(root, lead) : root}). If peers already write messages to another folder, keep that one: set "inboxDir" in .rig/config.json to it.`
 }
 
 /** The lead's name: `lead` in config, else RIG_LEAD. Null when neither says. */
@@ -62,15 +75,18 @@ export function senderId(env = process.env, { branch, branchPrefix = 'rig/' } = 
 }
 
 const pad = (n) => String(n).padStart(2, '0')
+// Milliseconds plus a per-process counter, so names sort in the order they were written: with only
+// seconds, two tells in one second sorted by their random suffix and came back reversed half the time.
 const stamp = (d) =>
-  `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`
+let seq = 0
 const human = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 
 /** Write one message, atomically. Returns the file's path. */
 export function tellMessage(root, lead, from, text, now = new Date()) {
   const dir = leadDir(root, lead)
   mkdirSync(dir, { recursive: true })
-  const name = `${stamp(now)}-${process.pid}-${randomBytes(3).toString('hex')}.md`
+  const name = `${stamp(now)}-${String(seq++).padStart(6, '0')}-${process.pid}-${randomBytes(3).toString('hex')}.md`
   const tmp = join(dir, `.${name}.tmp`)
   writeFileSync(tmp, `from: ${from}\nat: ${human(now)}\n\n${text.trim()}\n`)
   renameSync(tmp, join(dir, name))

@@ -257,7 +257,7 @@ export function uiLine(text) {
 const UI_PATH =
   /\.(html?|css|scss|jsx|tsx|vue|svelte|astro|swift|kt|xib|storyboard)\b|(^|\/)(ui|web|views?|pages|screens|components|app\/routes|public)(\/|$)/i
 // Words that say there is a screen…
-const UI_WORDS = /\b(screens?|pages?|forms?|buttons?|dialogs?|modals?|taps?|clicks?|UI)\b/
+const UI_WORDS = /\b(screens?|pages?|forms?|buttons?|dialogs?|modals?|taps?|clicks?)\b/i
 // …and words that say it enforces rules (refuses some moves).
 const RULE_WORDS =
   /\b(rules?|refus\w*|reject\w*|validat\w*|permissions?|approv\w*|not allowed|allow(ed|s)?|forbid\w*|blocked|limits?|quota|eligib\w*|disabled?)\b/i
@@ -286,28 +286,48 @@ export function refusalRows(body) {
 
 /**
  * Why this plan needs a `## Refusals` matrix it does not have, as a sentence, or null when it has
- * one or needs none. The trigger: the plan's work has a UI (a slice owns UI files, the brief or a task
- * talks about screens, or a `UI:` line says so) and that UI enforces rules (the brief or a task talks
- * about rules, refusals, validation, permissions, limits). A `UI: none` line silences it. The hard
- * rules for the agents (What must not happen, Rules) do not count as rules the product enforces.
+ * one or needs none. A UI over rules is one of:
+ * - a `UI:` line that is not `none`;
+ * - a slice that owns UI files (not tests, examples or fixtures), and rule words anywhere in the
+ *   brief or a task (rules, refusals, validation, permissions, limits);
+ * - one sentence of the brief (not a task) that names a screen AND a rule ("a claim form that
+ *   refuses claims over the limit").
+ * Words alone have to meet in one sentence: a CLI plan says "page" in one place and "blocked" in
+ * another, and the first version of this warned on the very plan it shipped in. The hard rules for
+ * the agents (What must not happen, Rules) do not count as rules the product enforces.
  */
 export function refusalsGap(plan) {
   const ui = plan.ui ?? null
   if (ui === 'none' || ui === 'no') return null
   if (refusalRows(plan.refusals).length) return null
-  const prose = [plan.purpose, plan.users, plan.done, plan.feeling, plan.bar, plan.start, ...plan.agents.map((a) => a.task)]
-    .map((t) => withoutPlaceholders(t || ''))
-    .join('\n')
+  if (ui) return `its UI: line says "${ui}"`
+  const clean = (parts) => parts.map((t) => withoutPlaceholders(t || '').replace(/`[^`]*`/g, ' ')).join('\n\n')
+  // The brief says what the product is. Tasks say how to build it and talk about the crew's own
+  // tools ("a permission dialog goes to the human"), so they count for rules, never for a screen.
+  const brief = clean([plan.purpose, plan.users, plan.done, plan.feeling, plan.bar, plan.start])
+  const prose = clean([brief, ...plan.agents.map((a) => a.task)])
   // Test fixtures and examples are pages nobody uses.
   const uiPath = plan.agents
     .flatMap((a) => a.owns)
     .find((o) => UI_PATH.test(o) && !/(^|\/)(tests?|examples?|fixtures?|__tests__)\//.test(o))
-  const uiWord = prose.match(UI_WORDS)?.[0]
-  const why = ui ? `its UI: line says "${ui}"` : uiPath ? `a slice owns ${uiPath}` : uiWord ? `it talks about "${uiWord}"` : null
-  if (!why) return null
-  const rule = prose.match(RULE_WORDS)?.[0]
-  if (!ui && !rule) return null
-  return `${why}${rule ? ` and "${rule}"` : ''}`
+  if (uiPath) {
+    const rule = prose.match(RULE_WORDS)?.[0]
+    return rule ? `a slice owns ${uiPath} and the plan says "${rule}"` : null
+  }
+  for (const sentence of sentences(brief)) {
+    const w = sentence.match(UI_WORDS)?.[0]
+    const r = w && sentence.match(RULE_WORDS)?.[0]
+    if (r) return `it talks about "${w}" and "${r}" in one sentence`
+  }
+  return null
+}
+
+/** Sentences of prose: split at . ! ? and at every paragraph, bullet and numbered item. */
+function sentences(text) {
+  return text
+    .split(/(?<=[.!?])\s+|\n\s*\n|\n\s*(?:[-*]|\d+[.)])\s+/)
+    .map((t) => t.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
 }
 
 /** A references body split at its `Anti-references:` line: what to start from, and what not to make. */

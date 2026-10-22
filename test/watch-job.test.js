@@ -43,7 +43,7 @@ if (noun !== 'agent') process.exit(1)
 if (!p) { console.error('{"error":{"code":"agent_not_found"}}'); process.exit(1) }
 if (verb === 'get') {
   const n = now()
-  console.log(JSON.stringify({ result: { agent: { pane_id: target, agent: 'fake', agent_status: n.status, state_change_seq: n.seq } } }))
+  console.log(JSON.stringify({ result: { agent: { pane_id: target, agent: 'fake', agent_status: n.status, state_change_seq: n.seq, cwd: p.cwd, foreground_cwd: p.cwd } } }))
 } else if (verb === 'prompt') {
   const n = now()
   if (n.status === 'working' || n.status === 'blocked') { console.error('{"error":{"code":"agent_' + n.status + '"}}'); process.exit(1) }
@@ -57,7 +57,7 @@ if (verb === 'get') {
 )
 chmodSync(join(bin, 'herdr'), 0o755)
 
-const pane = (status, script, seq = 10) => ({ status, script, seq })
+const pane = (status, script, seq = 10, cwd) => ({ status, script, seq, cwd })
 const setPanes = (panes) => {
   writeFileSync(statePath, JSON.stringify({ panes }))
   writeFileSync(herdrLog, '')
@@ -176,7 +176,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
       const r = await job(['p1', 'write it', '--expect', f, '--deadline', '1'])
       return expectCode(r, 6, () => r.out.includes(`expected output MISSING or empty: ${f}`))
     },
-    breaks: broken([['src/commands/job.js', 'statSync(expect).size > 0', 'true']]),
+    breaks: broken([['src/commands/job.js', 'statSync(at).size > 0', 'true']]),
   })
 
   await s.check('exits 5 and says BLOCKED when the pane stops on a prompt or approval', {
@@ -298,12 +298,57 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
     ]),
   })
 
-  await s.check('the default deadline is 90 minutes and the poll is capped at 5 s', {
+  // Measured, not grepped: the deadline it says it waits for, and how soon it notices with a huge poll asked for.
+  await s.check('with no --deadline it waits up to 90 minutes, and says so', {
     assert: async () => {
-      const src = readFileSync(join(tree, 'src', 'commands', 'job.js'), 'utf8')
-      return /cfg\.jobDeadline \?\? 90\)/.test(src) && /const MAX_POLL_MS = 5000/.test(src)
+      setPanes({
+        p1: pane('idle', [
+          [100, 'working'],
+          [400, 'idle'],
+        ]),
+      })
+      const r = await job(['p1', 'x'])
+      return expectCode(r, 0, () => r.out.includes('waiting up to 90 min for idle, done or blocked'))
+    },
+    breaks: broken([['src/commands/job.js', 'cfg.jobDeadline ?? 90)', 'cfg.jobDeadline ?? 60)']]),
+  })
+
+  await s.check('a 10-minute poll asked for is clamped: a pane going idle is noticed within 6 s', {
+    assert: async () => {
+      setPanes({
+        p1: pane('idle', [
+          [100, 'working'],
+          [400, 'idle'],
+        ]),
+      })
+      const r = await job(['p1', 'x', '--deadline', '5'], { env: { RIG_JOB_POLL_MS: '600000' }, limit: 15_000 })
+      return expectCode(r, 0, () => r.ms - 400 < 6000)
     },
     breaks: broken([['src/commands/job.js', 'const MAX_POLL_MS = 5000', 'const MAX_POLL_MS = 60000']]),
+    timeout: 20_000,
+  })
+
+  await s.check('a relative --expect is read from the pane’s own worktree, not the lead’s cwd', {
+    assert: async () => {
+      const member = join(tmp, 'member-worktree')
+      mkdirSync(join(member, 'docs'), { recursive: true })
+      writeFileSync(join(member, 'docs', 'review.md'), 'findings\n')
+      rmSync(join(work, 'docs'), { recursive: true, force: true })
+      setPanes({
+        p1: pane(
+          'idle',
+          [
+            [100, 'working'],
+            [400, 'done'],
+          ],
+          10,
+          member,
+        ),
+      })
+      const r = await job(['p1', 'review it', '--expect', 'docs/review.md', '--deadline', '0.1'])
+      return expectCode(r, 0, () => r.out.includes(`expected output ready: ${join(member, 'docs', 'review.md')}`))
+    },
+    breaks: broken([['src/commands/job.js', 'resolve(now.dir || before.dir || process.cwd(), expect)', 'resolve(process.cwd(), expect)']]),
   })
 })
 

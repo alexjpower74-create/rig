@@ -118,19 +118,28 @@ until `npm ci`.)
 - **The tell line**: `When you finish, get blocked or have a question, tell the lead, never the
   human: \`rig tell <lead> "<id>: done|blocked|question — <one line>"\``. With no lead it says
   `rig tell "<id>: …"`, and the lookup happens when the peer runs it.
-- **Item 14 trigger**: (a) a UI, meaning a slice owns UI files (html/css/jsx/tsx/vue/svelte/…,
-  `ui/ web/ pages/ screens/ components/ …`, not under test/ examples/ fixtures/), or the brief or a
-  task says screen/page/form/button/dialog/modal/tap/click/UI, or there is a `UI:` line that is not
-  `none`; and (b) rules, meaning the brief or a task says rule/refuse/reject/validate/permission/
-  approve/allowed/forbid/blocked/limit/quota/eligible/disabled. A `UI: <anything>` line counts as
-  both. `UI: none` (or `no`) silences it. The agents' own hard rules (What must not happen, Rules)
-  do not count as rules the product enforces. A matrix counts once it has a table row or a
-  `refusal → repair` bullet that is not all `<placeholder>`.
+- **Item 14 trigger** (revised after r55u's review, see below). A UI over rules is one of three
+  things. (a) A `UI:` line that is not `none`. (b) A slice that owns UI files
+  (html/css/jsx/tsx/vue/svelte/…, `ui/ web/ pages/ screens/ components/ …`, not under test/,
+  examples/ or fixtures/), plus a rule word anywhere in the brief or tasks. (c) **One sentence of the
+  brief** (not a task) that names a screen (screen/page/form/button/dialog/modal/tap/click) **and**
+  a rule (rule/refuse/reject/validate/permission/approve/allowed/forbid/blocked/limit/quota/
+  eligible/disabled). Tasks describe how to build and talk about the crew's own tools ("a permission
+  dialog goes to the human"), so they never count as a screen. `UI: none` (or `no`) silences it.
+  A matrix counts once it has a table row or a `refusal → repair` bullet that is not all
+  `<placeholder>`.
+- **Message names**: `YYYYMMDDTHHMMSS.mmm-<seq>-<pid>-<rand>.md`, with milliseconds and a
+  per-process counter, so names sort in write order. Old bash names (`…THHMMSS-<pid>.md`) sort
+  before new ones from the same second.
+- **Fresh-inbox note**: when neither RIG_INBOX_DIR nor `inboxDir` is set and the default lead folder
+  does not exist yet, `rig tell`, `rig inbox` and `rig up` print one line: `note: this inbox is new
+  (<dir>). If peers already write messages to another folder, keep that one: set "inboxDir" in
+  .rig/config.json to it.` It names no vendor folder. It shows once, because the first message or
+  watcher creates the folder.
+- **`--expect`**: a relative path is resolved against the pane's own cwd (herdr's `foreground_cwd`,
+  else `cwd`), because the member writes it in its own worktree.
 
 ## For the lead
-
-**Rig's own PLAN.md trips the item 14 warning** ("page" and "blocked" in the tasks). Rig has no UI
-over rules, so add the line `UI: none` to PLAN.md. That file is yours.
 
 **`src/commands/roll.js` (not mine)**: `tabBrief` takes a `lead` option and falls back to RIG_LEAD.
 To use `lead` from config, pass `lead: cfg.lead` where roll.js calls `tabBrief` (line 121).
@@ -142,7 +151,12 @@ job:   rig job <pane> "<task>" [--expect <file>] [--deadline <min>] [--lead <nam
                6 expected file missing/empty · 7 never started
 tell:  rig tell [<lead>] "<one line>"      (lead: "lead" in .rig/config.json, else RIG_LEAD)
 inbox: rig inbox [<lead>] [--wait] [--deadline <min>]   exits 0 messages · 4 deadline
-up:    … [--watch]   after setup, wait as the lead's inbox watcher (run it as a background job)
+```
+The `up` USAGE line, in full (add `--watch` to the existing flags):
+```
+up:    rig up [--dry-run] [--no-launch] [--launch "<cmd>"] [--base <ref>] [--keep-branches] [--no-issues] [--watch]
+         --watch   after setting up the crew, wait as the lead's inbox watcher (rig inbox <lead> --wait);
+                   run it as a background job, so its exit on the first tell wakes the lead
 ```
 
 **README paragraph:**
@@ -167,6 +181,34 @@ up:    … [--watch]   after setup, wait as the lead's inbox watcher (run it as 
   vendor name the table does not know counts as a second vendor, so `--vendor me --pass` passes the
   gate. r55g calls `tellLine(lead, id)` correctly at the end of both of its briefs.
 - My diff is for r55u to review (`docs/review-r55w.md`).
+
+## Fixes from r55u's review (docs/review-r55w.md on rig/r55u)
+
+Every fix has a check whose control swaps the ef60454 code back in, and every control went red.
+`test/watch-inbox.test.js` now has 27 checks and `test/watch-job.test.js` has 15, all green, 0 void.
+
+1. **Warning on Rig's own CLI plan.** FIXED. The trigger is the revised one under Decided. Check:
+   `Rig 5.5's own PLAN.md (a CLI plan) gets no refusal-matrix warning from rig up`. It reads the plan
+   from git at `14a1ad6`, so adding `UI: none` to PLAN.md later cannot make it pass, and it refuses a
+   fixture that already has a `UI:` line. Red: 5.5's first trigger (any screen word plus any rule
+   word, anywhere). The claim-form fixture still warns, and the reason now ends "in one sentence".
+2. **Same-second order.** FIXED with milliseconds and a counter in the name. Check: 300 pairs
+   written in the same millisecond come back oldest first, 300 of 300. A second check runs two
+   `rig tell` commands back to back, 10 times. Red: the ef60454 name format. Measured against
+   ef60454's real `src/inbox.js`, not only a patched copy: **163 of 300 pairs out of order**. Now 0.
+3. **Mixed tell paths.** FIXED as the lead asked. The default stays, `inboxDir` is honoured, and the
+   one-time note above names no vendor folder. Checks: the note shows on a fresh default inbox and
+   not after it; it matches no vendor name (claude/codex/anthropic/openai/gemini); with `inboxDir` set
+   there is no note and the message lands there. Red: the note removed; the `inboxDir` step removed.
+4. **Smaller things.**
+   - `rig tell` text that starts with `--`: FIXED. `rig tell` has no flags, so every argument is the
+     lead or the text. Check: `--no-vendor was needed` arrives intact. Red: the old `--` filter.
+   - Relative `--expect`: FIXED. It resolves against the pane's cwd. Check: the file exists only in
+     the member's worktree and is reported ready at that path. Red: resolving against the lead's cwd.
+   - `up --watch` USAGE: the full line is under "For the lead".
+   - The source-grep check is gone. In its place: "with no --deadline it waits up to 90 minutes,
+     and says so" (red: default 60), and "a 10-minute poll asked for is clamped: idle noticed within
+     6 s" (measured with `r.ms`; red: cap 60 s).
 
 ## Shown
 
