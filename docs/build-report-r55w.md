@@ -246,8 +246,15 @@ follows `working`:
 green)`. The failure was a VOID, not a failure in the code. The control for "two rig tell commands
 back to back are read in that order" built names from `1e6 - pid`. In the QA run the pids were past
 1,000,000, so that number was negative, sorted the right way round, and the control passed. The new
-control sorts newest first whatever the pid (`9e15 - Date.now()`). Fixed in its own commit; QA
-re-runs on the head.
+control sorts newest first whatever the pid (`9e15 - Date.now()`). Fixed in its own commit, `44d006c`.
+
+**QA on 44d006c.** The first run was NOT green: `rig qa: test exit 1 at 44d006c`. taste.test.js's
+`--lan` check timed out at 10 s, while other QA runs had the machine busy. That file is outside my
+slice, unchanged on this branch, and it passed at ef60454. The runner stops at the first failing
+file, so the watch files did not run. The rerun was green:
+`rig qa: test exit 0 at 44d006c` (18 files green, watch-inbox 27/27, watch-job 19/19) and
+`rig qa: negative exit 0 at 44d006c`. The taste `--lan` timeout looks like a flake under load; it is
+for its owner to look at.
 
 ## Shown
 
