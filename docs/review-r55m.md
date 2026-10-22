@@ -78,3 +78,50 @@ lead's README paragraph on leases.
 Pass with one fix wanted: finding 1, so that a stopped `rig qa` stops its host run. Findings 2 and
 3 are small. Nothing here blocks the merge order (r55m first). rig qa already works around 1 and
 2, and the workarounds are tested.
+
+## Verified at 8d1783a (2026-10-22, r55q)
+
+r55m answered in edf29fd (code), e5151f0 (a lease test's ttl) and 8d1783a (their report). I merged
+8d1783a with r55q's tip into a throwaway detached worktree and checked each finding against its
+original repro, not only against r55m's own tests.
+
+Suites on the merge, all green:
+- `machines-lease`: 11 checks.
+- `machines-remote`: 16 checks.
+- `machines-timings`: 7 checks.
+- `qa-host-real`: 6 end-to-end checks of `rig qa --host` through the real runner, lease and fake
+  ssh.
+- `qa-baseline`: 14 checks.
+- `qa-parse`: 17 tests.
+
+Every harness control was seen red.
+
+1. **A host run cannot be stopped by its caller: fixed.**
+   - The original repro: `rig qa HEAD --host box --run "sleep 25"`, SIGTERM after 4 s. During the
+     run there were 6 processes in the host's directory; after `rig qa` exited there were none.
+     Before the fix, `sleep 25` and the runner outlived it.
+   - A stall, which aborts through the new `signal`: `--stall 0.05` with a host suite that
+     prints once and then sleeps 40 s. `rig qa` exits 124 in 4.6 s. The suite's `sleep 40` is
+     gone at once. What remains for up to 5 s is only the lifeline's own `sh` and its `sleep 5`
+     grace before SIGKILL; at +6 s nothing is left.
+   - r55q now gives the lease back after an aborted host run (runOnHost resolves 143). It still
+     keeps the lease when `rig qa` itself is killed mid-run, because it cannot wait for the
+     abort to land. That is conservative, and the lease expires at its ttl.
+   - Residual, low: after an abort, `runOnHost` resolves as soon as ssh is stopped, before the
+     host has killed the group. A suite that ignores SIGTERM can live up to the 5 s KILL grace
+     after the lease is given back. Not worth a change now; noted for the lead.
+2. **`acquire` throws: fixed.** `acquire(root, 'host:box', 'rig/r55q')` returns `ok: true`. A
+   bad resource returns `ok: false` with `why: lease: "nonsense" is not a resource: use
+   host:<ssh-host> or db:<name>[@<ssh-host>]` and does not throw. r55q's `holderId` still
+   rewrites the id (`rig/r55q` becomes `rig-r55q`); that is harmless and keeps one id per
+   holder.
+3. **Host stubs log no calls: fixed.** A host spec that runs
+   `echo x | xclip -selection clipboard 2>/dev/null` (swallowing the stub's message) now comes
+   back as `stubCalls: [{ tool: 'xclip', args: '-selection clipboard' }]`, and the stub's
+   message is absent from the log. r55q consumes `stubCalls` since c93631e: a host failure whose
+   output names a called tool is needs-a-stub even with the message swallowed (seen red without
+   it). The time rule still does not apply on the host, because `t` is the host's clock and the
+   output lines carry none. That is a known limit, not a finding.
+4. Note only; nothing to verify.
+
+Verdict: all three findings fixed. The r55m slice passes from r55q's side.
