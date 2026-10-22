@@ -516,6 +516,78 @@ The pattern that ran fifteen builds overnight without a person at the desk:
   so whatever resumes them cannot be one of them: a timer that reads each pane and prompts it to
   continue once the limit has reset.
 
+## Nobody waits blind (5.5)
+
+The lead should never have to be the human's alarm clock. Every wait has a deadline, every peer
+reports itself, every number is measured, and nothing called "ready" turns out stale an hour later.
+
+**Peers report themselves.** A peer that finishes, blocks or has a question runs
+`rig tell <lead> "<id>: done — <one line>"`, which is the last line of every brief. The lead keeps
+`rig inbox <lead> --wait` running as a background job (`rig up` prints the exact command, or
+`rig up --watch` becomes it). It wakes within seconds of a tell and files the message under `read/`.
+Inboxes live in `$XDG_STATE_HOME/rig/inbox/<lead>/` (`inboxDir` or `RIG_INBOX_DIR` moves them). To
+brief an agent with no inbox hook, such as a member from another vendor's CLI, use
+`rig job <pane> "<task>" --expect <file> --deadline <min>`. It prompts only an idle pane, ignores a
+status left over from the pane's last turn, and exits on idle, done, blocked or the deadline, with
+a different exit code for each. Briefs say it outright: ask the lead, never the human. Only a
+permission dialog, a go or a taste call goes to the human. Plans with a UI over rules carry a
+`## Refusals` matrix (refusal → repair), and `rig up` warns when one is missing (`UI: none`
+silences it).
+
+**rig qa cannot hang, lie, or touch the desktop.** Every run is watched for output. If nothing is
+written anywhere for 5 minutes (`--stall`, `qaStallMinutes`; per-worker logs with `qaWorkerLogs`),
+rig qa names the worker and the last spec it mentioned, stops the whole process group, and exits
+124. A run that keeps writing is never stopped. Runs have no display, and `xclip`, `xsel`,
+`wl-copy`, `wl-paste`, `pbcopy` and `pbpaste` fail at once. A spec that fails because it reached for
+one is listed as "needs a stub", not as a regression (`--desktop` opts back in). `--baseline` runs
+the same command on the merge base in a second pinned worktree and reports only new failures; known
+ones are listed with where they still fail. "0 new" is computed from both runs, and never claimed
+when a run crashed, timed out or stalled. When the repo has its own local CI (`ciCommand`,
+`scripts.ci`, `bin/ci`, `script/cibuild`, or `make ci`), rig qa runs exactly that command and
+records the status it posts to `$RIG_CI_STATUS`; the Rig's checks come on top of the repo's CI,
+never instead of it. `--repeat N --seeds 7,9` reruns one file across seeds on both machines and
+names every failing seed: a flake fix is done when it shows N green, the failing seed included.
+
+**Two machines, one lease each.** `rig qa --host <ssh-host>` (or `qaHost`) runs the same suite on a
+second machine at exactly the same sha. The commit travels as a `git bundle` over ssh, so nothing
+is pushed. It lands in a checkout per session with its own test DB name (`RIG_TEST_DB`). An
+unreachable or password-locked host fails in seconds with ssh's reason, never a hang. Shared things
+are leased: `rig lease host:<h> --by <id>` is refused while someone else holds it, and it names who
+holds it and until when. A host lease lives on the host, so two sessions on two machines see the
+same lease. Leases expire (`--ttl`, default 120 min), and an expired one is taken over. Every
+stage's wall time is recorded in `.rig/timings.jsonl`, and `rig status --eta` prints only medians of
+those measurements, saying "no data" where there are none.
+
+**Upstream moves; the round knows first.** `rig status` starts with drift: for each slice, the
+commits that landed on the live base since it was cut, which of its owned files they touched, which
+are still safe, and whether it still merges (`git merge-tree`, no checkout touched). `rig fold` and
+`rig finish` print the same thing before they do anything else. `rig rebase <id>` moves a slice onto
+the new base, but when upstream deleted, moved or largely rewrote a file the slice changed, it stops
+before resolving anything and asks the slice owner what upstream now covers. Answer with
+`--covered "…"`, drop the commits upstream superseded with `--drop <sha>`, and the slice gets
+smaller and correct, not merged by hand.
+
+**The gate.** `rig finish` checks facts with a sha beside each: every slice merged and reviewed, QA
+green on this sha here and on `qaHost` when one is set, the repo's own CI command green on every
+machine it ran on, "0 new" against the base's own run when it was compared, negative controls on
+this same sha, a pass from a reviewer of a second model vendor on this very sha
+(`rig review --vendor <name> --pass "<what ran>"`; a pass from the builders' own vendor is refused),
+and no decision of this round left open (`rig decision "<what>" --source <thread>`, kept in
+`docs/DECISIONS.md`, each marked built, scheduled or not in scope). Before the final round,
+`rig fold` folds the fix commits into their owners once, refuses unless the folded tree is
+byte-identical to the old tip's, walks every commit on its own, and stamps old → new shas; after
+that, only message-only rewrites pass. Every review brief, same vendor or not, ends with the
+questions reviewers most often skip: what changes between a check and its use, time edges (DST,
+zones, exactly at the boundary), a state that flips off and back on, every feature flag off on every
+surface, a saved user preference overridden, and a negative test that would still pass if the thing
+happened twice.
+
+**Tests that hold on any machine.** The test kit's snapshot helpers (`pin`, `snapshot`,
+`matchBaseline` from `harness/index.js`) pin the user agent, locale, zone and modifier-key hints,
+record auto margins as `auto`, wait for the app to say it is ready instead of the first paint, and
+retake a snapshot that was not ready. Baselines carry `RECORDED_FROM: <sha>`, so `rig qa` can say
+when the base has moved past them.
+
 ## Install
 
 ```console
