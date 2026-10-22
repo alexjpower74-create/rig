@@ -133,7 +133,8 @@ No test reaches a real machine, the clipboard or the display.
 
 ## Decided
 - **Extra result fields** beyond the stubs; the contract's fields are unchanged.
-  - `runOnHost` also returns `why` and `sent`, and takes `dir`, `desktop` and `connectTimeoutSec`.
+  - `runOnHost` also returns `why`, `sent` and `stubCalls`, and takes `dir`, `desktop`,
+    `connectTimeoutSec` and `signal` (abort gives exit 143).
   - `acquire` also returns `tookOver` and `renewed`, and takes `connectTimeoutSec`; so do `release`
     and `holderOf`.
 - **`holderOf` throws** when the machine cannot be asked. Unknown must never read as free.
@@ -197,9 +198,10 @@ README paragraph:
   real git, real sh. The first real `rig qa --host` is the lead's to watch. The things only a real
   host can show are the host's own login-shell quirks, sshd's handling of a killed client, and macOS
   `date -r` / `find -mmin` (both POSIX-documented BSD forms, but untested here).
-- When the local backstop kills ssh (the host went silent), the remote command is stopped only by
-  its own watchdog. Without `limitMs` there is no watchdog, so a run with no limit whose link drops
-  can keep running on the host until it ends. `rig qa` always passes a limit.
+- Since edf29fd, a run whose caller aborts, dies or loses the link is stopped on the host through
+  the stdin lifeline, whether or not `limitMs` is set. One case is unproven: a link that hangs
+  without closing (no FIN, no keepalive answer). That is cut by ssh's keepalives after about 60 s,
+  and real sshd behaviour there has only been reasoned about, not seen.
 - The stale-guard sweep has a narrow window: two calls that both find a dead guard more than a
   minute old may both remove it. The `mkdir` that follows is still atomic, so only one of them
   enters. This only arises after a crash inside a section that normally lasts milliseconds.
@@ -234,6 +236,25 @@ rig lease: not taken: ssh unreachable: connect to host unreachable port 22: Conn
   behind an atomic guard, on that machine's clock.
 - **Anti-reference, a watchdog that only checks the process is alive.** The limit target measures
   until the last process of the run is gone, not until ssh returns.
+
+## Fixes after r55q's review (docs/review-r55m.md on rig/r55q, eefd10f; reviewed at fcaba91)
+Each fix's check was written first and seen red on fcaba91's code, then made green. Each keeps a
+harness control (a mutant with the fix taken out) that is red on every run.
+
+| Finding | Fix | Check | Red first / control |
+|---|---|---|---|
+| 1. A host run cannot be stopped by its caller | `runOnHost` takes `signal` (an AbortSignal). The bundle now goes with its byte size (`head -c`), and after it ssh's stdin stays open as the run's lifeline. On abort, stdin is closed and ssh is stopped; the host reads the EOF and stops the run's whole process group (TERM, then KILL after 5 s). The result is exit 143 with `why` "stopped by the caller…". An already-aborted signal returns 143 before ssh is asked. The same lifeline covers a caller that dies, a dropped link and the local backstop. | **Target:** abort to the host's last process gone: **108 ms (≤ 5000)**, broken **14983 ms** | on fcaba91, NaN: the sleeper outlived the abort by 15 s. Control: no lifeline. |
+| 2. `acquire` throws on a branch-name holder | `acquire` and `release` return `{ ok: false, why }` for a bad resource, holder or ttl, and never throw. `by` may contain `/` (`rig/r55q`); it reaches the holder file only through `printf %s`. `holderOf` still throws when it cannot answer, by design: unknown is never "free". | branch name taken and released; quote, ttl 0, bad resource → refusals, no throw | on fcaba91: `must be a session id` thrown. Control: old holder pattern plus the throw. |
+| 3. Host stubs log no calls | Each stub appends `<tool> <epoch-ms> <args>` to `.git/rig-no-desktop/calls`. After the command, the runner prints `rig-qa: stub <tool> <ms> <args>` for each call, and `runOnHost` returns `stubCalls: [{ tool, t, args }]` (t in the host's epoch ms; whole seconds × 1000 where `date` has no `%N`, as on macOS). | a spec that sends its stub's stderr to /dev/null is still recorded, with the args | on fcaba91: no record. Control: the stub lines not printed. |
+| 4. Lease ttl for long runs | No change, as the review says. rig qa asks for 2 × limit + 30 min and renews. | n/a | n/a |
+
+**For r55q:** `src/qa/host.js` can now read `r.stubCalls` and use the same time rule as local
+runs, instead of matching "the desktop is off" in the log; both work today. `signal` is honoured
+as your code already passes it. With r55q's branch merged in a throwaway worktree, their
+`qa-host-real` (6/6), my `machines-remote` (16/16) and `machines-lease` all pass.
+
+The merged run also exposed a flake in my own takeover check: a 1 s ttl against a host clock that
+counts whole seconds. It is now 2 s, and was green three runs in a row.
 
 ## Verification run (code sha fcaba91; every later commit changes docs only)
 - `npm run check` on fcaba91: **exit 0**. That covers `biome ci .`, `test/run.js: 19 file(s) green`,
