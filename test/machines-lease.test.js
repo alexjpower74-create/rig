@@ -117,9 +117,11 @@ await suite('machines: leases on shared resources', async (s) => {
   await s.check('a lease past its ttl is taken over, and the result names whose it was', {
     assert: async () => {
       fresh()
-      const a = L.acquire(one.dir, 'host:box', 'sess-a', { ttlMin: 1 / 60 })
+      const a = L.acquire(one.dir, 'host:box', 'sess-a', { ttlMin: 2 / 60 })
+      // Two seconds, not one: the host clock counts whole seconds, so a one-second lease taken late
+      // in a second can read as expired on the very next call.
       const early = L.acquire(two.dir, 'host:box', 'sess-b')
-      await new Promise((r) => setTimeout(r, 2100))
+      await new Promise((r) => setTimeout(r, 3100))
       const gone = L.holderOf(two.dir, 'host:box')
       const b = L.acquire(two.dir, 'host:box', 'sess-b')
       return a.ok && !early.ok && gone === null && b.ok && b.tookOver?.by === 'sess-a' && L.holderOf(one.dir, 'host:box')?.by === 'sess-b'
