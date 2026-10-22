@@ -195,6 +195,8 @@ export function fold(cwd, opts = {}, hooks = {}) {
     after.length === planned.owners.length
       ? planned.owners.map((o, i) => ({ old: [o.sha, ...o.fixes.map((f) => f.sha)], new: after[i].sha, subject: after[i].subject }))
       : after.map((c) => ({ old: [], new: c.sha, subject: c.subject }))
+  // Each stamped commit's tree, so a later message-only rewrite can be told from a content change.
+  for (const m of map) m.tree = git(['rev-parse', `${m.new}^{tree}`], cwd)
   const walk = each ? walkCommits(root, cfg, after, each, timeoutMs) : []
   return { state: 'folded', branch: branch.out, oldTip, newTip, tree: newTree, mergeBase, map, walk, each }
 }
@@ -256,4 +258,52 @@ export function stampFold(root, result) {
   all.folds.push(entry)
   writeFileSync(foldStampPath(root), JSON.stringify(all, null, 2) + '\n')
   return entry
+}
+
+/** The newest fold stamped for each branch: Map(branch → stamp). */
+export function latestFolds(root) {
+  const out = new Map()
+  for (const f of readFolds(root).folds) if (f?.branch) out.set(f.branch, f)
+  return out
+}
+
+/**
+ * Do the folded commits still hold on `ref`? After a fold every final check reruns on the stamped
+ * shas, so the only rewrite allowed afterwards is message-only: each stamped commit's counterpart on
+ * `ref` (the n-th commit after the fold's merge base, first parent) must have exactly the stamped
+ * tree. Commits on top of the stack are new work, judged by the other gates.
+ * @returns {{ state: 'ok'|'fail', detail: string }}
+ */
+export function foldHolds(root, ref, stamp) {
+  const short = (x) => String(x).slice(0, 7)
+  const isAncestor = (a, b) => tryGit(['merge-base', '--is-ancestor', a, b], root).ok
+  const stamped = stamp.map || []
+  if (!stamped.length) return { state: 'ok', detail: 'the fold stamped no commits' }
+  if (isAncestor(stamp.newTip, ref)) return { state: 'ok', detail: `the ${stamped.length} folded commit(s) are on ${ref} unchanged` }
+  if (!isAncestor(stamp.mergeBase, ref))
+    return {
+      state: 'fail',
+      detail: `${ref} no longer sits on the fold's base ${short(stamp.mergeBase)}: it was rebased after the fold (${short(stamp.newTip)}); fold again and rerun the final checks`,
+    }
+  const list = tryGit(['rev-list', '--reverse', '--first-parent', `${stamp.mergeBase}..${ref}`], root)
+  const after = list.ok && list.out ? list.out.split('\n') : []
+  if (after.length < stamped.length)
+    return {
+      state: 'fail',
+      detail: `${ref} has ${after.length} commit(s) where the fold stamped ${stamped.length}: commits were dropped or squashed after it`,
+    }
+  for (let i = 0; i < stamped.length; i++) {
+    const want = stamped[i].tree || tryGit(['rev-parse', `${stamped[i].new}^{tree}`], root).out
+    const got = git(['rev-parse', `${after[i]}^{tree}`], root)
+    if (!want)
+      return { state: 'fail', detail: `stamped commit ${short(stamped[i].new)} can no longer be read here, so its tree cannot be compared` }
+    if (got !== want) {
+      const subject = git(['log', '-1', '--format=%s', after[i]], root)
+      return {
+        state: 'fail',
+        detail: `${short(after[i])} "${subject}" stands where the fold stamped ${short(stamped[i].new)} and its tree differs: it was changed after the fold, or the stack was rebased onto a moved base. Only message-only rewrites keep the final checks valid; fold again`,
+      }
+    }
+  }
+  return { state: 'ok', detail: `${stamped.length} commit(s) rewritten after the fold, every tree identical to the stamp (message-only)` }
 }

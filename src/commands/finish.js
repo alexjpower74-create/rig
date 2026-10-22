@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { mainRoot, loadConfig, currentBranch } from '../config.js'
 import { loadPlan, missingBrief } from '../plan.js'
 import { worktreePath, dirtyFiles } from '../worktrees.js'
@@ -12,6 +13,42 @@ import { drift } from '../drift.js'
 import { staleBaselines } from '../baselines.js'
 import { builderVendor, vendorGate } from '../vendor.js'
 import { roundDecisions, roundStart, DECISIONS } from '../decisions.js'
+import { foldHolds, latestFolds } from '../fold.js'
+
+// r55q's CI detection (src/qa/ci.js). Loaded when present, so this file also runs on a branch that
+// predates it; without it, only a configured ciCommand makes the CI gate required.
+const ciModule = await import('../qa/ci.js').catch(() => null)
+
+/** The files detectCi() looks at. */
+const CI_FILES = ['package.json', 'bin/ci', 'script/ci', 'script/cibuild', 'Makefile']
+
+/**
+ * The repo's CI command as of this sha: ciCommand in the config (null or "" there means none), else
+ * what r55q's detectCi finds in the commit itself (package.json scripts.ci, an executable bin/ci or
+ * script/ci, a Makefile ci target). The commit's files are copied to a scratch dir with their modes,
+ * because the checkout on disk may be at another commit. Returns { cmd, from } or null.
+ */
+export function ciCommandAt(root, sha, cfg = {}, detect = ciModule?.detectCi) {
+  if (Object.hasOwn(cfg, 'ciCommand')) return cfg.ciCommand ? { cmd: cfg.ciCommand, from: 'ciCommand in .rig/config.json' } : null
+  if (typeof detect !== 'function') return null
+  const dir = mkdtempSync(join(tmpdir(), 'rig-ci-'))
+  try {
+    for (const f of CI_FILES) {
+      const entry = tryGit(['ls-tree', sha, '--', f], root)
+      if (!entry.ok || !entry.out) continue
+      const [mode, type] = entry.out.split(/\s+/)
+      if (type !== 'blob') continue
+      const body = tryGit(['show', `${sha}:${f}`], root)
+      if (!body.ok) continue
+      mkdirSync(dirname(join(dir, f)), { recursive: true })
+      writeFileSync(join(dir, f), body.out + '\n')
+      if (mode === '100755') chmodSync(join(dir, f), 0o755)
+    }
+    return detect(dir, cfg)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 // Ship means told. `rig finish` is the gate between "the agents stopped" and "it is done": it
 // refuses to call a build finished while a slice is unmerged, a tree is dirty, or the tests have not
@@ -373,14 +410,15 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
   // 3a'. The repo's own CI command is the gate where it has one; the rig's checks come on top. When
   // it is configured it must have run; when it ran anywhere, it must have run (and passed) everywhere.
   const ciRuns = hosts.map((h) => ({ host: h, run: runOn(root, sha, 'ci', h) }))
-  if (cfg.ciCommand || ciRuns.some((c) => c.run)) {
+  const ci = ciCommandAt(root, sha, cfg, 'detectCi' in opts ? opts.detectCi : undefined)
+  if (ci || ciRuns.some((c) => c.run)) {
     for (const { host, run } of ciRuns) {
       const name = `CI command green on ${short}${hosts.length > 1 ? ` (${host})` : ''}`
       if (!run)
         add(
           name,
           'fail',
-          `${cfg.ciCommand ? `"${cfg.ciCommand}"` : 'the CI command'} has no run recorded on this commit${host === 'local' ? '' : ` on ${host}`}`,
+          `${ci ? `"${ci.cmd}" (${ci.from})` : 'the CI command'} has no run recorded on this commit${host === 'local' ? '' : ` on ${host}`}: \`rig qa ${short}${host === 'local' ? '' : ` --host ${host}`}\``,
         )
       // A CI command can exit 0 and still post "failure" (r55q reads RIG_CI_STATUS): both must agree.
       else if (run.ciStatus?.state === 'failure')
@@ -437,6 +475,18 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
       left.length ? 'fail' : 'ok',
       left.length ? `${left.length} file(s) written: ${left.join(', ')} — untrack it or have the test restore it` : '',
     )
+
+  // 3c'. After a fold, only message-only rewrites: every stamped commit's tree is on the branch as stamped.
+  const folds = latestFolds(root)
+  const baseName = String(base).replace(/^refs\/heads\//, '')
+  for (const [branch, stamp] of folds) {
+    const isSlice = plan.agents.some((a) => cfg.branchPrefix + a.id === branch)
+    if (branch !== baseName && !isSlice) continue
+    const ref = branch === baseName ? sha : `refs/heads/${branch}`
+    if (branch !== baseName && !tryGit(['show-ref', '--verify', '--quiet', ref], root).ok) continue
+    const h = foldHolds(root, ref, stamp)
+    add(`fold on ${branch} holds`, h.state, h.detail)
+  }
 
   // 3d. A reviewer from a second model vendor passed exactly this sha. Same-vendor reviews passed
   // nine real defects that one from another vendor found.

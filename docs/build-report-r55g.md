@@ -141,6 +141,40 @@ merges. Nothing for the lead to wire: the same test loads r55w's `brief.js` and 
 scaffold's `brief.js`, `3ef17d0`, which has none). Merged with `rig/r55w` in a scratch tree, the new
 test, brief-five, crew, up-guard-init and gate-vendor all pass.
 
+## Lead's follow-up: after the fold, and the detected CI command
+
+**(a) Item 2's last line.** `rig fold` now stamps each folded commit's tree in `.rig/fold.json`. `rig
+finish` reads the newest fold per branch (the base, and any slice branch still there) and adds
+`fold on <branch> holds`. If the stamped tip is on the branch, it passes. If the commits were rewritten,
+each commit at the stamped position (counted on first parent from the fold's merge base) must have
+exactly the stamped tree. A message-only rewrite passes ("every tree identical to the stamp"). Anything
+else fails and names the commit: `<sha> "<subject>" stands where the fold stamped <sha> and its tree
+differs: it was changed after the fold, or the stack was rebased onto a moved base`. The same applies
+when commits were dropped, the base itself was swapped out, or a stamped commit can no longer be read.
+Checks in `test/gate-final.test.js`:
+- a content rewrite fails and names the commit; red with `a25b59f`'s `finish.js`, which has no such gate;
+- a message-only rewrite passes; red when the same rewrite also changes content;
+- unchanged shas pass; red after a rebase onto a moved base;
+- that rebase fails and names its first commit out of place; red when the rebase is undone.
+
+**(b) Item 3b, detected CI.** `ciCommandAt(root, sha, cfg)` in `finish.js` returns, in order:
+- the configured `ciCommand` (`null` or `""` means none, as in r55q's rule);
+- otherwise r55q's `detectCi` run on the commit's own `package.json`, `bin/ci`, `script/ci`,
+  `script/cibuild` and `Makefile`, copied out of the sha with their committed modes.
+
+`detectCi` is exported as is (`src/qa/ci.js`, `detectCi(dir, cfg)`); nothing needs changing on r55q's
+side. Finish loads it with a guarded dynamic import, so this branch also runs before the merge (then
+only `ciCommand` counts). With a CI command and no `ci` record on the sha, the gate fails naming the
+command and where it came from: `"npm run ci" (scripts.ci in package.json) has no run recorded on this
+commit: rig qa <sha>`. Checks:
+- detected with no run fails; red with `a25b59f`'s `finish.js`;
+- a `ci` run satisfies it; red when the run is removed;
+- an executable `bin/ci` is found by its committed mode; red after `chmod -x`;
+- `ciCommand: null` turns detection off; red with detection on and no run.
+
+All of them load r55q's `ci.js` from `5d001c2`. I also merged with `rig/r55q` in a scratch tree, where
+finish imports the real module: gate-final, gate-finish, qa-finish and qa-baseline pass.
+
 ## Existing fixtures that now record a vendor pass
 
 A passing finish needs a second-vendor pass on the sha, so each fixture that expected a pass now
@@ -217,8 +251,6 @@ README paragraph:
   way either way.
 - **r55q**: the five findings in `docs/review-r55q.md`; finish already guards its side of 2 and 5.
   Finding 4 (baseline as its own record vs. a field) needs one shape named for the README.
-- **Not built**: finish does not read `.rig/fold.json` to check "message-only rewrites after the fold
-  keep every tree identical"; finish does not run r55q's `detectCi` on the sha, so a detected (not
-  configured) CI that was never run is not required; `git rebase --update-refs` for stacked branches
-  is off (it would move other slices' branches).
+- **Not built**: `git rebase --update-refs` for stacked branches is off (it would move other slices'
+  branches). The fold check and detected CI are now built (section above).
 - **For the owner**: nothing to send or press. The lead merges (order m, u, w, q, g), releases 5.5.0.
