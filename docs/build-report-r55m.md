@@ -256,15 +256,16 @@ as your code already passes it. With r55q's branch merged in a throwaway worktre
 The merged run also exposed a flake in my own takeover check: a 1 s ttl against a host clock that
 counts whole seconds. It is now 2 s, and was green three runs in a row.
 
-## Verification run (code sha fcaba91; every later commit changes docs only)
-- `npm run check` on fcaba91: **exit 0**. That covers `biome ci .`, `test/run.js: 19 file(s) green`,
-  and `check-no-personal-data` clean.
-  - A first run, made while my runner suite was also running, failed one `taste.test.js` check
-    ("t2 report names every repo"). Run alone it is 36/36, and the clean re-run above is green.
-    That test is load-sensitive; it is not mine and I did not touch it.
-- `rig qa fcaba917dbfe1360804da6900037dbc82e0616df --run "npm test"`:
-  - `rig qa: test exit 0 at fcaba91` and `rig qa: negative exit 0 at fcaba91`;
-  - the three machines suites inside it: 10, 14 and 7 passed, 0 void.
+## Verification run (code sha 8d1783a; the commit after it changes this report only)
+- `npm run check` on 8d1783a: **exit 0**. That covers `biome ci .`, `test/run.js: 19 file(s) green`
+  and `check-no-personal-data` clean. This is a re-run after the PC rebooted around 20:00 and killed
+  the first runs.
+- `rig qa 8d1783a56e0b035c396f572fac3aebdb5728e4ca --run "npm test" --negative "npm run demo"`:
+  - `rig qa: test exit 0 at 8d1783a` and `rig qa: negative exit 0 at 8d1783a`;
+  - the three machines suites inside it: leases 11, runner 16, timings 7 passed, 0 void.
+- Earlier, on fcaba91 (before r55q's review): `npm run check` exit 0, and `rig qa` test 0 /
+  negative 0. One `taste.test.js` check failed in a run made while my runner suite was also
+  running; run alone it is 36/36. That test is load-sensitive; it is not mine and I did not touch it.
 - Review of r55u: all six findings verified fixed at ac55143 (`docs/review-r55u.md`, c74a91e).
-- Review of r55m (by r55q): brief written with `rig review r55m --by r55q` (`.rig/REVIEW-r55m.md`
-  in the main checkout). No findings yet; I verify any fixes when they come.
+- Review of r55m by r55q (eefd10f): findings 1 to 3 fixed in edf29fd, each check seen red first;
+  the flaky takeover check fixed in e5151f0. r55q verifies.
