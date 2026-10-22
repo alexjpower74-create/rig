@@ -253,6 +253,7 @@ export async function runOnHost(opts) {
     let why = null
     if (exit === 3 && mark('at') === null) why = marks.filter((m) => m[1] !== 'exit').pop()?.[0] ?? null
     else if (exit !== 0 && mark('install') === 'failed') why = `${host}: dependency install failed`
+    else if (exit === 124) why = `${host}: still running after ${limitSec} s; stopped`
     return done(exit, why, r.log, { dir: at, sent: !!bundle })
   } finally {
     if (tmp) rmSync(tmp, { recursive: true, force: true })
