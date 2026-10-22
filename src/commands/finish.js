@@ -330,24 +330,34 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
     add('the stack merges with the live base', dc.state, dc.detail)
   }
 
-  // 3. The tests ran, and passed, on exactly this commit.
+  // 3. The tests ran, and passed, on exactly this commit. Passed means exit 0, or (Chromium's test
+  // expectations) every failure is one the base already has: a complete "0 new" comparison recorded
+  // on this sha after the run. A stalled run is never green, whatever was compared.
   const qa = runOn(root, sha, 'test')
+  const hostQa = cfg.qaHost ? runOn(root, sha, 'test', cfg.qaHost) : null
+  const baselineRun = runOn(root, sha, 'baseline')
+  const knownOnly = (run) => {
+    const b = baselineRun?.baseline ?? run?.baseline
+    if (!run || run.exit === 0 || run.stalled || !b || b.complete === false || (b.newFailures || []).length) return null
+    if (baselineRun?.baseline && String(baselineRun.at) < String(run.at)) return null
+    return `exited ${run.exit}, but every failure is known on the base: 0 new against ${String(b.baseSha || '').slice(0, 7) || b.base}`
+  }
+  const qaState = (run) => (run.exit === 0 || knownOnly(run) ? 'ok' : 'fail')
   if (!qa) add(`QA green on ${short}`, 'fail', `no \`rig qa ${short} --run …\` recorded on this commit`)
-  else add(`QA green on ${short}`, qa.exit === 0 ? 'ok' : 'fail', qa.exit === 0 ? qa.cmd : `last run exited ${qa.exit}: ${qa.cmd}`)
+  else add(`QA green on ${short}`, qaState(qa), qa.exit === 0 ? qa.cmd : knownOnly(qa) || `last run exited ${qa.exit}: ${qa.cmd}`)
   if (qa && cfg.devCommand && qa.cmd !== cfg.devCommand)
     add('QA ran the project’s test command', 'warn', `ran "${qa.cmd}", the config's devCommand is "${cfg.devCommand}"`)
 
   // 3a. The second machine, when there is one: a second OS caught 34 platform-only failures and a
   // 1-in-3 flake the first never showed. Its tally has to be on this sha too.
   const hosts = ['local', ...(cfg.qaHost ? [cfg.qaHost] : [])]
-  const hostQa = cfg.qaHost ? runOn(root, sha, 'test', cfg.qaHost) : null
   if (cfg.qaHost) {
     if (!hostQa) add(`QA green on ${cfg.qaHost}`, 'fail', `no \`rig qa ${short} --host ${cfg.qaHost}\` recorded on this commit`)
     else
       add(
         `QA green on ${cfg.qaHost}`,
-        hostQa.exit === 0 ? 'ok' : 'fail',
-        `${tally(hostQa)} beside ${qa ? tally(qa) : 'no local run'} here${hostQa.exit === 0 ? '' : ` — exited ${hostQa.exit}`}`,
+        qaState(hostQa),
+        `${tally(hostQa)} beside ${qa ? tally(qa) : 'no local run'} here${hostQa.exit === 0 ? '' : ` — ${knownOnly(hostQa) || `exited ${hostQa.exit}`}`}`,
       )
   }
 
@@ -363,14 +373,16 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
           'fail',
           `${cfg.ciCommand ? `"${cfg.ciCommand}"` : 'the CI command'} has no run recorded on this commit${host === 'local' ? '' : ` on ${host}`}`,
         )
+      // A CI command can exit 0 and still post "failure" (r55q reads RIG_CI_STATUS): both must agree.
+      else if (run.ciStatus?.state === 'failure')
+        add(name, 'fail', `${run.cmd} posted failure${run.ciStatus.text ? `: ${run.ciStatus.text}` : ''}`)
       else add(name, run.exit === 0 ? 'ok' : 'fail', run.exit === 0 ? run.cmd : `exited ${run.exit}: ${run.cmd}`)
     }
   }
 
   // 3a''. "0 new" is a computed fact against the base's own run, shown when it was computed: a
-  // \`kind: 'baseline'\` record on this sha (one comparison for both machines), or a \`baseline\` field
+  // `kind: 'baseline'` record on this sha (one comparison for both machines), or a `baseline` field
   // on the test run itself.
-  const baselineRun = runOn(root, sha, 'baseline')
   const baselines = baselineRun?.baseline
     ? [{ b: baselineRun.baseline, where: '' }]
     : [qa, hostQa].filter((r) => r?.baseline).map((r) => ({ b: r.baseline, where: r.host && r.host !== 'local' ? ` on ${r.host}` : '' }))

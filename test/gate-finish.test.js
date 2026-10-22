@@ -350,6 +350,42 @@ await suite('rig 5.5, the finish gate (r55g)', async (s) => {
       return () => resetQa(repo, asRecord(baseline(['entry rejects blank'])))
     },
   })
+  // Known base failures only: the suite exits 1, and a complete "0 new" on this sha makes that green.
+  const knownOnly = (extra = {}) => [
+    { kind: 'test', sha: head, exit: 1, cmd: 'npm test', dirtied: [], host: 'local', failed: 1, ...extra },
+    { kind: 'baseline', sha: head, host: 'local', cmd: 'npm test', baseline: baseline([]) },
+  ]
+  resetQa(repo, knownOnly())
+  await s.check('a run whose only failures are known on the base is green; a stalled one never is', {
+    assert: async () => {
+      const ok = gate(repo).checks.find((c) => c.name === `QA green on ${short}`)
+      resetQa(repo, knownOnly({ stalled: { worker: 'w1', spec: 'entry.test.js', quietMs: 300000 } }))
+      const stalled = stateOf(gate(repo), new RegExp(`^QA green on ${short}$`))
+      resetQa(repo, knownOnly())
+      return ok.state === 'ok' && /every failure is known on the base: 0 new against bbbbbbb/.test(ok.detail) && stalled === 'fail'
+    },
+    // The same run, and the comparison says one failure is new.
+    breaks: async () => {
+      recordQa(repo, { kind: 'baseline', sha: head, host: 'local', cmd: 'npm test', baseline: baseline(['entry rejects blank']) })
+      return () => resetQa(repo, knownOnly())
+    },
+  })
+
+  resetQa(repo, [
+    { kind: 'test', sha: head, exit: 0, cmd: 'npm test', dirtied: [] },
+    { kind: 'ci', sha: head, exit: 0, cmd: 'make ci', ciStatus: { state: 'failure', text: 'lint: 2 errors' } },
+  ])
+  await s.check('a CI command that exits 0 but posts "failure" is not green', {
+    assert: async () => {
+      const r = gate(repo)
+      return r.failed && /posted failure: lint: 2 errors/.test(r.checks.find((c) => /^CI command green/.test(c.name)).detail)
+    },
+    breaks: async () => {
+      recordQa(repo, { kind: 'ci', sha: head, exit: 0, cmd: 'make ci', ciStatus: { state: 'success', text: null } })
+      return () => {}
+    },
+  })
+
   resetQa(repo, asRecord({ ...baseline([]), complete: false, why: 'the base run timed out' }))
   await s.check('a baseline that could not be computed warns instead of reading "0 new"', {
     assert: async () => {
