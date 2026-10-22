@@ -75,9 +75,9 @@ test('rspec, Playwright and Jest lines; line numbers and durations are cut so na
     '[webkit] › tests/book.spec.ts › pays',
   ])
   assert.deepEqual(parseFailures('FAIL src/cart.test.js\n  ● Cart › totals'), ['src/cart.test.js'])
-  assert.deepEqual(tally('Tests:       2 failed, 5 passed, 7 total\n'), { passed: 5, failed: 2, names: [] })
+  assert.deepEqual(tally('Tests:       2 failed, 5 passed, 7 total\n'), { passed: 5, failed: 2, names: [], conflict: null })
   assert.deepEqual(tally('  5 passed (3.1s)\n  1 failed\n').passed, 5)
-  assert.deepEqual(tally('12 examples, 1 failure\n'), { passed: 11, failed: 1, names: [] })
+  assert.deepEqual(tally('12 examples, 1 failure\n'), { passed: 11, failed: 1, names: [], conflict: null })
 })
 
 test('qaFailurePattern names what the built-in runners do not know', () => {
@@ -306,4 +306,26 @@ test('on the host, the stub calls runOnHost returns count even when the spec swa
   } finally {
     remote.runOnHost = saved
   }
+})
+
+test('a tally that contradicts the exit is not printed as a number (real run on 515b118)', () => {
+  // test/target.test.js prints a fixture suite's summary inside a passing run: one VOID it expects.
+  const nested = [
+    '✔ PASS: 2 taps is inside the bar (539ms)',
+    'accept a shift: 0 passed, 0 failed, 1 void, 0 unproven',
+    '  VOID checks passed against a broken page. They are not evidence of anything.',
+    '  of which targets: 0 passed, 0 failed, 1 void, 0 unproven',
+    '  FAIL t2 report names every repo  not in the report: lantern',
+    'rig 5.5, workflow: 12 passed, 0 failed, 0 void, 0 unproven',
+  ].join('\n')
+  const green = tally(nested, null, 0)
+  assert.equal(green.failed, null, JSON.stringify(green))
+  assert.match(green.conflict, /exited 0/)
+  // The same output from a red run is consistent: a count, no conflict.
+  assert.equal(tally(nested, null, 1).conflict, null)
+  // "of which targets" breaks a suite's own count down; it is not a second suite.
+  const own = 'suite: 3 passed, 1 failed, 0 void, 0 unproven\n  of which targets: 1 passed, 1 failed, 0 void, 0 unproven\n'
+  assert.deepEqual([tally(own, null, 1).passed, tally(own, null, 1).failed], [3, 1])
+  // A red exit with nothing counted is a conflict too: no "failed 0" beside a failing run.
+  assert.match(tally('all fine\n', null, 2).conflict, /exited 2/)
 })

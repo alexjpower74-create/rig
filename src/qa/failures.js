@@ -95,8 +95,13 @@ export function isResultLine(line) {
  * Passed and failed counts from the summary lines runners print, summed over every summary in the
  * output (test/run.js prints one per file). `passed` is null when no summary was found: a count
  * nobody printed is not invented.
+ *
+ * Given the run's `exit`, a failed count that contradicts it is not reported as a number: `failed`
+ * is null and `conflict` says why. A summary is only text, and a test may print one inside a
+ * passing run (a harness self-test prints its fixture suite's "1 void"): on main 515b118 that made
+ * a green run read "failed 2" beside exit 0.
  */
-export function tally(text, failures = null) {
+export function tally(text, failures = null, exit = undefined) {
   const t = plain(text)
   let passed = null
   let failed = null
@@ -105,7 +110,8 @@ export function tally(text, failures = null) {
     else failed = (failed ?? 0) + n
   }
   for (const m of t.matchAll(/^\s*(?:#|ℹ) (pass|fail) (\d+)\s*$/gm)) add(m[1] === 'pass' ? 'p' : 'f', Number(m[2]))
-  for (const m of t.matchAll(/^.+?: (\d+) passed, (\d+) failed, (\d+) void/gm)) {
+  // "of which targets: …" breaks the suite's own count down; it is not another suite.
+  for (const m of t.matchAll(/^(?!\s*of which\b).+?: (\d+) passed, (\d+) failed, (\d+) void/gm)) {
     add('p', Number(m[1]))
     add('f', Number(m[2]) + Number(m[3]))
   }
@@ -122,7 +128,12 @@ export function tally(text, failures = null) {
     add('f', f ? Number(f[1]) : 0)
   }
   const names = failures ?? parseFailures(text)
-  return { passed, failed: failed ?? names.length, names }
+  const counted = failed ?? names.length
+  let conflict = null
+  if (exit === 0 && counted > 0)
+    conflict = `the output counts ${counted} failed but the run exited 0 (a test may print a summary of its own)`
+  else if (typeof exit === 'number' && exit !== 0 && counted === 0) conflict = `the run exited ${exit} but no failure was counted`
+  return { passed, failed: conflict ? null : counted, names, conflict }
 }
 
 /**
