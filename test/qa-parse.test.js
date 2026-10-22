@@ -206,3 +206,25 @@ test('on the host, a failure whose block names a stubbed tool needs a stub; the 
     remote.runOnHost = saved
   }
 })
+
+test('the host lease is not given back while a run there may still be going', async () => {
+  const { remote, runHost, leaseHost } = await import('../src/qa/host.js')
+  const saved = { ...remote }
+  const released = []
+  let finish
+  remote.acquire = () => ({ ok: true, holder: null, why: null })
+  remote.release = (_r, res) => released.push(res)
+  remote.runOnHost = (o) => new Promise((r) => (finish = () => r({ host: o.host, exit: 0, ms: 1, log: '' })))
+  try {
+    const lease = leaseHost(tmp, 'box', 'r55q')
+    const run = runHost({ root: tmp, host: 'box', sha: 'abc', cmd: 'x', session: 's', echo: false })
+    lease.release() // what rig qa's exit handler does when a signal ends it mid-run
+    assert.deepEqual(released, [], 'released under a running host suite')
+    finish()
+    await run
+    lease.release()
+    assert.deepEqual(released, ['host:box'])
+  } finally {
+    Object.assign(remote, saved)
+  }
+})

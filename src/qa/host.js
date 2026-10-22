@@ -40,7 +40,17 @@ export function leaseHost(root, host, by, { ttlMin = 120 } = {}) {
     return {
       ok: true,
       why: null,
-      release: () => safely(() => remote.release(root, `host:${host}`, by)),
+      // Not while a run there may still be going: rig qa cannot stop a run on the host (runOnHost
+      // takes no signal), and a lease given back under it hands the host and its test DB to the
+      // next session mid-run. Left held, it expires at its ttl, which outlasts the run's limit.
+      release: () => {
+        if (inFlight > 0) {
+          if (!warned) console.error(`rig qa: a run on ${host} may still be going; its lease is left to expire, not given back`)
+          warned = true
+          return
+        }
+        safely(() => remote.release(root, `host:${host}`, by))
+      },
       renew: () => {
         try {
           const again = take()
@@ -58,6 +68,10 @@ export function leaseHost(root, host, by, { ttlMin = 120 } = {}) {
       : `the lease on ${host} was refused: ${r?.why ?? 'no reason given'}`,
   }
 }
+
+/** Runs on a host that have started and not yet come back. */
+let inFlight = 0
+let warned = false
 
 function safely(f) {
   try {
@@ -90,11 +104,14 @@ export async function runHost({ root, host, sha, cmd, session, env = {}, limitMs
   const out = linePrefixer(`[${host}] `, (s) => echo && process.stdout.write(s))
   let r
   let error = null
+  inFlight++
   try {
     r = await remote.runOnHost({ root, host, sha, cmd, session, env, limitMs, desktop, onOutput: (c) => out.push(String(c)) })
   } catch (e) {
     error = e.message
     r = { host, exit: 255, ms: Date.now() - started, dir: null, db: null, log: '' }
+  } finally {
+    inFlight--
   }
   out.end()
   if (error) console.error(`[${host}] rig qa: the run on ${host} did not start: ${error}`)
