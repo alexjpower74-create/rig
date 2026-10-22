@@ -41,8 +41,9 @@ check has been seen red.
   own failure, and `why` gives ssh's reason. The result also carries `why`, `sent` and the resolved
   `dir`.
 - The command runs under `bash -o pipefail` when the host has bash (as `rig qa` does locally).
-  `/opt/homebrew/bin` and `/usr/local/bin` go first on PATH, because a non-interactive ssh session on
-  macOS does not have them and `npm` would not be found.
+  `/opt/homebrew/bin` and `/usr/local/bin` are added at the END of PATH when they exist and are
+  missing, because a non-interactive ssh session on macOS does not have them and `npm` would not be
+  found. (Until the fix below they went first, which shadowed the host's own PATH.)
 
 ### Leases
 - One POSIX sh script does every lease. It runs locally for `db:<name>` and over ssh for
@@ -256,15 +257,34 @@ as your code already passes it. With r55q's branch merged in a throwaway worktre
 The merged run also exposed a flake in my own takeover check: a 1 s ttl against a host clock that
 counts whole seconds. It is now 2 s, and was green three runs in a row.
 
-## Verification run (code sha fcaba91; every later commit changes docs only)
-- `npm run check` on fcaba91: **exit 0**. That covers `biome ci .`, `test/run.js: 19 file(s) green`,
-  and `check-no-personal-data` clean.
-  - A first run, made while my runner suite was also running, failed one `taste.test.js` check
-    ("t2 report names every repo"). Run alone it is 36/36, and the clean re-run above is green.
-    That test is load-sensitive; it is not mine and I did not touch it.
-- `rig qa fcaba917dbfe1360804da6900037dbc82e0616df --run "npm test"`:
-  - `rig qa: test exit 0 at fcaba91` and `rig qa: negative exit 0 at fcaba91`;
-  - the three machines suites inside it: 10, 14 and 7 passed, 0 void.
+## Fix after the first real two-machine run (main 515b118, Linux PC + a Mac over ssh)
+- **Found:** `deps install when the lockfile changed, and only then` failed on the Mac only.
+- **Cause:** the runner put `/opt/homebrew/bin` first on the host's PATH. Homebrew's real `npm`
+  then shadowed whatever the host's own PATH chose; in the test, that was the fake `npm` on the fake
+  host's PATH. On Linux that dir has no npm, so the check passed.
+- **Fix (e90950f):** each extra dir is appended only when it exists and is missing.
+- **Check:** "the host's own PATH comes first…" runs on Linux too. It asserts that the command
+  sees the host PATH unchanged at the front, extras only after it, and `npm` resolving to the
+  host's own. It was red on the old line before the fix, and its control (the old line restored)
+  is red on every run.
+- **Seen on both machines** with
+  `rig qa e90950f --run "node test/machines-remote.test.js" --host <the Mac> --no-ci`:
+  - `rig qa: test exit 0 at e90950f`
+  - `rig qa: test on <the Mac> exit 0 at e90950f`
+  - 17/17 passed on each, 0 void; negative exit 0.
+- **Lesson:** a second OS finds what the fakes share with the first. The fake host here inherits
+  this machine's PATH, so it never had a Homebrew `npm` to be shadowed.
+
+## Verification run (code sha 8d1783a; the commit after it changes this report only)
+- `npm run check` on 8d1783a: **exit 0**. That covers `biome ci .`, `test/run.js: 19 file(s) green`
+  and `check-no-personal-data` clean. This is a re-run after the PC rebooted around 20:00 and killed
+  the first runs.
+- `rig qa 8d1783a56e0b035c396f572fac3aebdb5728e4ca --run "npm test" --negative "npm run demo"`:
+  - `rig qa: test exit 0 at 8d1783a` and `rig qa: negative exit 0 at 8d1783a`;
+  - the three machines suites inside it: leases 11, runner 16, timings 7 passed, 0 void.
+- Earlier, on fcaba91 (before r55q's review): `npm run check` exit 0, and `rig qa` test 0 /
+  negative 0. One `taste.test.js` check failed in a run made while my runner suite was also
+  running; run alone it is 36/36. That test is load-sensitive; it is not mine and I did not touch it.
 - Review of r55u: all six findings verified fixed at ac55143 (`docs/review-r55u.md`, c74a91e).
-- Review of r55m (by r55q): brief written with `rig review r55m --by r55q` (`.rig/REVIEW-r55m.md`
-  in the main checkout). No findings yet; I verify any fixes when they come.
+- Review of r55m by r55q (eefd10f): findings 1 to 3 fixed in edf29fd, each check seen red first;
+  the flaky takeover check fixed in e5151f0. r55q verifies.

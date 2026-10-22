@@ -98,7 +98,12 @@ export const DESKTOP_TOOLS = ['xclip', 'xsel', 'wl-copy', 'wl-paste', 'pbcopy', 
 // stopped, so a stopped rig qa never leaves a suite running on the host with its checkout and DB.
 const RUN_SCRIPT = `
 set -u
-PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"; export PATH
+# A non-interactive ssh session on macOS has no /opt/homebrew/bin or /usr/local/bin, so npm is not
+# found. Those dirs fill gaps at the END: put first, Homebrew's tools shadowed the host's own PATH.
+for d in /opt/homebrew/bin /usr/local/bin; do
+  case ":$PATH:" in *":$d:"*) ;; *) [ -d "$d" ] && PATH="$PATH:$d" ;; esac
+done
+export PATH
 dir=$1 sha=$2 bundle=$3 limit=$4 desktop=$5 db=$6 cmd=$7
 shift 7
 case $dir in "~/"*) dir="$HOME/\${dir#"~/"}" ;; esac
