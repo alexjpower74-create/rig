@@ -21,7 +21,7 @@ const git = (args, cwd, env = {}) => execFileSync('git', args, { cwd, encoding: 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'rig-gate-')))
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
 
-const { finishChecks, finishReport, driftCheck } = await import('../src/commands/finish.js')
+const { finishChecks, driftCheck } = await import('../src/commands/finish.js')
 const { recordQa, qaLogPath } = await import('../src/qalog.js')
 const { recordVerdict, reviewsPath } = await import('../src/vendor.js')
 const { addDecision, setStatus } = await import('../src/decisions.js')
