@@ -92,7 +92,7 @@ Suites on the merge, all green:
 - `qa-host-real`: 6 end-to-end checks of `rig qa --host` through the real runner, lease and fake
   ssh.
 - `qa-baseline`: 14 checks.
-- `qa-parse`: 17 tests.
+- `qa-parse`: 16 tests (17 on the tip, with the `stubCalls` test added after this run).
 
 Every harness control was seen red.
 
