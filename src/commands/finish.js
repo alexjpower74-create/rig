@@ -332,13 +332,22 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
 
   // 3. The tests ran, and passed, on exactly this commit. Passed means exit 0, or (Chromium's test
   // expectations) every failure is one the base already has: a complete "0 new" comparison recorded
-  // on this sha after the run. A stalled run is never green, whatever was compared.
+  // on this sha after the run. A stalled or killed run (124, 137, 143) never finished: never green.
   const qa = runOn(root, sha, 'test')
   const hostQa = cfg.qaHost ? runOn(root, sha, 'test', cfg.qaHost) : null
   const baselineRun = runOn(root, sha, 'baseline')
   const knownOnly = (run) => {
     const b = baselineRun?.baseline ?? run?.baseline
-    if (!run || run.exit === 0 || run.stalled || !b || b.complete === false || (b.newFailures || []).length) return null
+    if (
+      !run ||
+      run.exit === 0 ||
+      run.stalled ||
+      [124, 137, 143].includes(run.exit) ||
+      !b ||
+      b.complete === false ||
+      (b.newFailures || []).length
+    )
+      return null
     if (baselineRun?.baseline && String(baselineRun.at) < String(run.at)) return null
     return `exited ${run.exit}, but every failure is known on the base: 0 new against ${String(b.baseSha || '').slice(0, 7) || b.base}`
   }

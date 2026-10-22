@@ -361,8 +361,15 @@ await suite('rig 5.5, the finish gate (r55g)', async (s) => {
       const ok = gate(repo).checks.find((c) => c.name === `QA green on ${short}`)
       resetQa(repo, knownOnly({ stalled: { worker: 'w1', spec: 'entry.test.js', quietMs: 300000 } }))
       const stalled = stateOf(gate(repo), new RegExp(`^QA green on ${short}$`))
+      resetQa(repo, knownOnly({ exit: 124 }))
+      const killed = stateOf(gate(repo), new RegExp(`^QA green on ${short}$`))
       resetQa(repo, knownOnly())
-      return ok.state === 'ok' && /every failure is known on the base: 0 new against bbbbbbb/.test(ok.detail) && stalled === 'fail'
+      return (
+        ok.state === 'ok' &&
+        /every failure is known on the base: 0 new against bbbbbbb/.test(ok.detail) &&
+        stalled === 'fail' &&
+        killed === 'fail'
+      )
     },
     // The same run, and the comparison says one failure is new.
     breaks: async () => {
