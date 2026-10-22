@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>rig snapshot fixture</title>
+<!--
+  A page that is honest about being ready. It paints "Loading…" first and says it is ready only
+  once its data is in: window.appReady, body[data-ready] and #items all appear together.
+  ?readyAfter=<ms> delays that (default 0); ?never=1 never gets there. The shortcut hint, the
+  number and the time zone come from the platform, locale and zone the browser reports, which is
+  what harness/snapshot.js pins. The column is centred with margin: 0 auto.
+-->
+<style>
+  body { margin: 0; font: 16px/1.5 sans-serif; background: #fafaf7; color: #1d1d1b }
+  main.column { max-width: 480px; margin: 0 auto; padding: 24px }
+  .card { margin: 16px 5%; padding: 12px; background: #fff; border-radius: 8px }
+  kbd { font-family: monospace; padding: 0 4px; background: #eee }
+  #status.loading { color: #888 }
+</style>
+<main class="column">
+  <h1>Orders</h1>
+  <p id="status" class="loading">Loading…</p>
+  <p class="hint">Search <kbd id="shortcut"></kbd></p>
+  <p class="card">Total <span id="total"></span> · <span id="zone"></span></p>
+</main>
+<script>
+  const q = new URLSearchParams(location.search)
+  document.getElementById('shortcut').textContent = /^Mac/.test(navigator.platform) ? '⌘K' : 'Ctrl K'
+  document.getElementById('total').textContent = new Intl.NumberFormat().format(1234.5)
+  document.getElementById('zone').textContent = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+    .formatToParts(new Date(0))
+    .find((p) => p.type === 'timeZoneName').value
+  function ready() {
+    const status = document.getElementById('status')
+    status.textContent = 'Ready: 3 orders'
+    status.className = ''
+    const ul = document.createElement('ul')
+    ul.id = 'items'
+    for (const o of ['A-1', 'A-2', 'A-3']) ul.appendChild(Object.assign(document.createElement('li'), { textContent: o }))
+    document.querySelector('main').appendChild(ul)
+    document.body.dataset.ready = '1'
+    window.appReady = true
+  }
+  if (!q.get('never')) setTimeout(ready, Number(q.get('readyAfter') || 0))
+</script>
