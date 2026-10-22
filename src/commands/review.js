@@ -117,7 +117,7 @@ export function vendorReview(args, root, cfg, plan, { now = Date.now() } = {}) {
     console.log(`second-vendor brief for ${short}: ${FINAL_BRIEF}`)
     console.log(`  diff: git diff ${brief.from}..${short}  (${brief.files.length} file(s))`)
     console.log(`  builders: ${builder.vendor || 'unknown'} (${builder.from}); reviewer: ${v}`)
-    const why = sameVendorReason(v, builder)
+    const why = sameVendorReason(vendor, builder)
     if (why) console.log(`\x1b[33m  warning: a pass from ${vendor} will be refused: ${why}\x1b[0m`)
     console.log(`\nhand it over: rig job <pane> "Read ${FINAL_BRIEF} and follow it."`)
     return brief
@@ -125,7 +125,7 @@ export function vendorReview(args, root, cfg, plan, { now = Date.now() } = {}) {
 
   const verdict = pass !== null ? 'pass' : 'fail'
   if (verdict === 'pass') {
-    const why = sameVendorReason(v, builder)
+    const why = sameVendorReason(vendor, builder)
     if (why) return stop(`refused: ${why}. Nothing was recorded.`, 1)
   }
   const ms = durationMs(args, root, now)

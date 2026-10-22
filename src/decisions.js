@@ -134,8 +134,10 @@ export function setStatus(root, id, kind, { round = null, now = new Date() } = {
 }
 
 /**
- * Where this round started: the oldest branch point of the plan's slice branches against `base`
- * (the earliest merge base), or null when no slice branch is left to say.
+ * Where this round started: the oldest point a slice branch was cut from. That is the commit the
+ * branch's reflog was created at (\`rig up\` cuts every slice from the base), else its merge base with
+ * \`base\` (after a merge, that is the slice's tip: later than the cut, so fewer decisions count, never
+ * more). Null when no slice branch is left to say.
  * @returns {{ ref: string, from: string } | null}
  */
 export function roundStart(root, base, agents = [], branchPrefix = 'rig/') {
@@ -143,10 +145,16 @@ export function roundStart(root, base, agents = [], branchPrefix = 'rig/') {
   for (const a of agents) {
     const ref = `refs/heads/${branchPrefix}${a.id}`
     if (!tryGit(['show-ref', '--verify', '--quiet', ref], root).ok) continue
-    const mb = tryGit(['merge-base', base, ref], root)
-    if (!mb.ok || !mb.out) continue
-    if (!oldest || tryGit(['merge-base', '--is-ancestor', mb.out, oldest.ref], root).ok)
-      oldest = { ref: mb.out, from: `${a.id}'s branch point` }
+    const log = tryGit(['reflog', 'show', '--format=%H', ref, '--'], root)
+    const created = log.ok && log.out ? log.out.split('\n').pop() : null
+    const point = created
+      ? { ref: created, from: `${a.id} was cut here` }
+      : (() => {
+          const mb = tryGit(['merge-base', base, ref], root)
+          return mb.ok && mb.out ? { ref: mb.out, from: `${a.id}'s merge base` } : null
+        })()
+    if (!point) continue
+    if (!oldest || tryGit(['merge-base', '--is-ancestor', point.ref, oldest.ref], root).ok) oldest = point
   }
   return oldest
 }
