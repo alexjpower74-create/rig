@@ -1,278 +1,343 @@
-# Rig 5.0 — briefs that aim high, bars you can measure, taste you can click
+# Rig 5.5 — the gate, watching, upstream and decisions, tests that hold anywhere
 
-One plan file. It is the contract, and it lives at the repo root so every agent reads the same copy.
-A plan is a brief first and a slice list second.
+One plan file. It is the contract. The seventeen items, the bar and the checks are written out in
+`docs/PLAN-5.5.md`: read that file whole before you start. This file adds the brief and the slices.
 
 ## The feeling
-A Rig brief should read like it came from the best creative director the agent has ever worked
-for: the aim is high, every target is a number, and nothing is left for the agent to guess. The taste
-board should feel like flipping through a well-printed portfolio: calm and fast, where one tap brings
-up the next page.
+The lead never has to be the human's alarm clock. Every wait has a deadline, every peer reports
+itself, every number is measured, and nothing called "ready" turns out stale an hour later.
 
 ## The specialist
-- fv1 writes like an **agency creative director** writing a one-page creative brief (single-minded
-  proposition, audience, mandatories, the bar), checked by a **technical writer** for plainness.
-- fv2 works like a **test-tooling engineer** who has shipped performance budgets: a number, a bar,
-  a red build when the number crosses it, and the number printed either way.
-- fv3 works like a **UX researcher running a preference test**: one stimulus at a time, a 1-to-5
-  scale, no leading questions, every answer saved the moment it is given.
+- r55g works like a **release engineer who owns a merge queue**: a gate is a list of facts with a sha
+  beside each, and "it passed on my machine" is not one of them.
+- r55q works like a **CI infrastructure engineer** who has run flaky suites at scale: every run
+  has a deadline, a baseline and a name for what hung.
+- r55m works like an **SRE writing a runbook for a shared lab**: two machines, leases with an owner
+  and an expiry, and a clock on every stage.
+- r55u works like a **maintainer of a long-lived fork** of a fast-moving upstream: drift is known
+  before the round, and a superseded commit is dropped, not resolved by hand.
+- r55w works like an **on-call tooling engineer**: nobody waits blind, and every alert names who acts.
 
 ## The best at this job
-- Briefs: Steve Clarke's creative prompt (its checklist is quoted in fv1's task); the agency
-  one-page creative brief; GitHub issue forms (named fields, nothing to guess).
-- Hard-number checks: Lighthouse CI budgets (`maxNumericValue` assertions), size-limit (prints the
-  size against the limit and fails CI over it), k6 thresholds (`p(95)<200` printed per run).
-- Rating board: Lyssna (UsabilityHub) preference tests, Typeform's one-question-at-a-time flow with
-  number-key shortcuts, Mobbin's big single-screen view, Apple Photos' one-key rating.
+- Merge gates: GitHub merge queues and required status checks; Bors ("not rocket science": test the
+  merged result, not the branch); Gerrit's Verified +1 from a separate system.
+- Watching: Buildkite agent timeouts and "no output for N minutes" kills; GitHub Actions
+  `timeout-minutes`; PagerDuty escalation (every alert has an owner and a deadline).
+- Upstream: `git merge-tree --write-tree`, `git range-diff`, `git rebase --update-refs`, Linux
+  stable-queue practice of dropping patches upstream already carries.
+- Flakes and baselines: pytest-rerunfailures with seeds, Jest `--seed`/`--randomize`, rspec
+  `--seed` and bisect, "known failures" baselines in Chromium's test expectations.
 
 Anti-references:
-- A Google Form grid of radio buttons; a long page you scroll to hunt for Submit.
-- A ticket that says "make it faster"; a timing test that passes against code that is slow.
-- A brief that lists files and no people.
+- A watchdog that only checks whether the process is alive.
+- "0 new failures" typed by hand into a PR description.
+- A lease that is a comment in a chat channel.
+- A gate that can be passed by a review recorded on an older sha.
 
 ## The bar
-- Every brief the rig writes (`rig up`, `rig review`, `rig roll up`) opens with the mindset block:
-  3 of 3, byte-exact, once each, before the first `## ` heading.
-- `rig up` on a plan whose bar has no number prints one warning line that says so.
-- A target check prints the measured number beside its bar (`2 taps (≤ 3)`), and one whose broken run
-  stays inside the bar is VOID. Both are shown in tests.
-- Alexander rates 6 references in at most 7 taps (one per reference plus Done), with no typing and no
-  scrolling, at 1440×900 and at 390×844. This is measured by an `s.target` walk with `countInput`.
-- `npm run check` stays green (Biome, the full suite, the personal-data scan), and every existing
-  test passes unchanged.
-
-## What it's for
-Agents left alone make the average of everything they have seen, sized to what a human team could
-ship. Rig 5 builds Steve Clarke's creative prompt into the tool, so every agent the rig briefs gets:
-the mindset block; the parts of a brief it cannot guess (feeling, specialist, references, a bar with
-a number); a harness that measures that number and goes red when it is missed; and a taste round
-Alexander answers by tapping ratings, not by describing what he wants.
+- A stalled test run is caught and named in 5 minutes or less (default); a run that keeps writing is
+  never stopped. Proven with a fake suite and a short configured window, and the default is 5 min.
+- A peer finishing or blocking reaches the lead in 60 seconds or less: `rig job` notices an idle,
+  done or blocked pane within 60 s, and `rig inbox --wait` wakes within 60 s of a `rig tell`.
+- Drift is known before a final round: `rig status`, `rig fold` and `rig finish` print it first.
+- `rig status --eta` prints only medians of measured stage times, and says "no data" when it has none.
+- `npm run check` stays green (Biome, the full suite, the personal-data scan); every existing test
+  passes, changed only where a new gate makes an old fixture incomplete (say which, and why).
 
 ## Who uses it, on what
-Alexander's lead sessions (Onyx on Claude Code) on the PC and the Mac, under herdr, and the Opus
-peers those leads launch. Alexander himself uses only `rig taste`, in a browser on a desktop or phone.
-Public repo: anyone running multi-agent builds with worktrees.
-
-## Where it lives
-The existing public repo (MIT), installed by `npm link` and the Homebrew tap. This is a local build:
-the release, the tag and the tap update are the lead's to do, on Alexander's word, after `rig finish`.
+A lead session (Claude Code or Codex) driving a crew under herdr on Linux and macOS, with a second
+machine reachable by SSH and a reviewer from a second model vendor. Public repo: anyone running
+multi-agent builds with worktrees.
 
 ## Where we're starting from
-Rig 4.0.0 plus the untagged ignore-probe fix (main at 7d40d97). `briefFor` (src/brief.js),
-`reviewBrief` (src/commands/review.js) and `tabBrief` (src/roll.js) write the three kinds of brief.
-`missingBrief` warns on five empty sections. The harness has `check()` with PASS / FAIL / VOID /
-UNPROVEN and real input through `Input.dispatch*`. Nothing measures a number against a bar, and
-there is no taste tooling.
+Rig 5.0.3 plus two plan commits (main at 93a7a9d), plus the scaffold commit that registers the new
+commands in `bin/rig.js` (stubs in `src/commands/{fold,decision,job,tell,inbox,lease,rebase}.js`)
+and writes contract stubs: `src/drift.js`, `src/baselines.js`, `src/timings.js`, `src/lease.js`,
+`src/remote.js`. Each stub's signature and JSDoc is the contract; its owner writes the body.
+Today: `rig qa` runs one command in a pinned worktree with a hard timeout and records
+`.rig/qa-history.jsonl`; `rig finish` gates on merge, review file, QA and negatives on the sha.
+The lead's helper scripts `tell-lead`, `lead-inbox` and `codex-job` exist outside the Rig (bash);
+their behaviour is described in item 5 and in the r55w task.
 
-## What done looks like
-- `rig up` writes slice briefs that open with the mindset block and carry the new sections, in this
-  order: feeling, specialist, best at this job (with anti-references), bar, who it's for, where
-  we're starting from, what must not happen or change, freedom, tools, checks, budget and autonomy,
-  what to hand back. `rig review` and `rig roll up` briefs open with the block too.
-- `rig up` names any missing feeling, references or bar, and says when the bar has no number.
-- `s.target(...)` and `countInput(page)` exist in the harness, and are documented in their source.
-- `rig taste` opens a rating board, saves every tap, and writes `docs/TASTE.md`. Slice briefs point to
-  that file when it exists.
-- The version is 5.0.0. The lead writes the README and the CHANGELOG from the build reports.
-
-## What must not happen
-- The mindset block is Steve's text, byte-exact. Never paraphrase, trim or reflow it.
-- Never open a browser window on Alexander's screen from a test. Tests run headless, and every
-  `rig taste` test passes `--no-open`.
-- Existing harness API and behaviour stay as they are. Changes are additions only, and every existing
-  test passes unchanged.
-- No dependencies. Node 22+. No personal data in tracked files: no home paths, hostnames or emails.
-- Never type into a running agent's pane. Never open a new herdr workspace or a split pane.
-- Never grade the shared tree. Every number in a report names its sha.
-- Never push, tag, release, deploy or post. The release is Alexander's word, carried out by the lead.
-- No AI credit anywhere: commits, docs, comments.
-- Do not edit files outside your Owns list. Say so in your report and let the owner change them.
+## What must not happen or change
+- File-slice ownership, the QA worktree pinned to a sha, negative controls, the mindset block,
+  `rig taste`, and herdr tabs in the current workspace.
+- No new dependency: node, git, herdr, ssh only. No npm packages.
+- No test touches the real clipboard, the real display, a real second machine or a real herdr pane:
+  fakes on PATH (`ssh`, `herdr`, clipboard tools) in temp dirs. Run suites with
+  `env -u WAYLAND_DISPLAY -u DISPLAY`.
+- No personal data in tracked files: no home paths, host names, emails, or names of people,
+  companies or client repos. Examples stay generic. Run `check-no-personal-data` before you call
+  it done.
+- No AI credit anywhere: no Co-Authored-By trailers, no "generated with" lines.
+- Every commit's author and committer is the repo owner's identity: use the commit prefix the lead
+  gives you in your first message (the session's environment carries another address) and check
+  `git log -1 --format='%an %ae / %cn %ce'` after each commit.
+- Never push, tag or release. The lead merges, releases and publishes.
+- Never type into another agent's pane. Never open a herdr workspace or split a pane.
+- Do not edit files outside your Owns list. `bin/rig.js`, `README.md`, `CHANGELOG.md` and
+  `package.json` are the lead's: put the USAGE text and README paragraph you want in your report.
 
 ## Freedom
-Wording, structure and names are yours, except for the contract below and the byte-exact block.
-fv3 owns the board's whole look, within the bar. Where the plan doesn't settle a choice, decide it,
-write it under "Decided" in your report, and carry on.
+Names of flags beyond those the plan fixes, file formats under `.rig/`, and module layout inside your
+slice are yours. Where the plan doesn't settle a choice, decide it, write it under "Decided" in your
+report, and carry on.
 
 ## Tools
-Node 22, the harness (`harness/cdp.js` headless Chrome, `RIG_CHROME` to point at a binary), Biome
-(`npx biome check --write <your files>`), `npm run check`, `rig qa <sha> --run "<cmd>"`, and
-`rig review <id>`. For screenshots, use headless Chrome through the harness or `pwshot`, never a
-visible window.
-
-## Budget and autonomy
-His plan's usage is finite (Max 5x): aim to finish your slice in one sitting, and spawn no
-sub-agents. Decide everything that has an established answer yourself. Only a business decision goes
-in your report as a question.
-
-## What to hand back
-Green commits on your branch. `docs/build-report-<id>.md` lists what you built, the red you saw for
-each check, what you decided, and what's left. fv3 also adds screenshots of the board at desktop and
-phone size, light and dark, to `docs/shots/` (fixture images only).
-
-## Size and mode
-Big: three slices. Cross-review happens EARLY, at each slice's first real commit, round-robin:
-fv1 reviews fv2, fv2 reviews fv3, fv3 reviews fv1. Each slice is reviewed again before merge.
-The lead merges in the order fv2, fv1, fv3.
+Node 22, `node:test` or the harness (`harness/check.js`: `s.check` with `breaks`), Biome
+(`npx biome check --write <your files>`), `npm run check`, `rig qa <sha> --run "npm test"`,
+`rig review <id>`. Headless Chrome only through `harness/cdp.js` (RIG_CHROME), debugging port 9355
+for r55u; existing tests use 9351 and 9352.
 
 ## Checks
-- `npm test` runs every `test/*.test.js`, and the existing tests stay as they are.
-- Every new check uses `harness/check.js` (`s.check` with `breaks`, or the new `s.target` with
-  `breaks`) or `node:test` with a paired known-bad case. The report says which check was seen red and
-  how: the old implementation swapped back in, not just a changed input.
-- `npm run check` is clean, and so is `tools/check-no-personal-data --self-test`.
+- Every check in `docs/PLAN-5.5.md` "Checks" is a test that is seen red once (the old behaviour
+  swapped back in, or the guard removed), then green. Your report says how each was made red.
+- `npm test` runs every `test/*.test.js`. New test files are yours; existing ones only if listed in
+  your Owns.
 - Negative controls: `npm run demo`
-  (`examples/demo.test.js` must still print exactly one VOID and one FAIL.)
+
+## Budget and autonomy
+Usage is finite: aim to finish your slice in one sitting, and spawn no sub-agents. Decide everything
+that has an established answer yourself.
+
+## Asking and reporting
+A question left in your pane reaches nobody. Ask the lead, never the human:
+`tell-lead rig55 "<id>: <question>"`. When you finish, or block, run
+`tell-lead rig55 "<id>: <one line: done|blocked, sha, tests>"` as your last step. Only things that
+need the human's own hands (a permission dialog) go to the human, and you still tell the lead.
+
+## What to hand back
+Green commits on your branch. `docs/build-report-<id>.md`: what you built, the red you saw for each
+check and how, what you decided, the USAGE/README text for the lead, and what's left.
+
+## Size and mode
+Big: five slices. Cross-review EARLY, at each slice's first real commit, round-robin: r55g reviews
+r55q, r55q reviews r55m, r55m reviews r55u, r55u reviews r55w, r55w reviews r55g. Write findings to
+`docs/review-<reviewee>.md` in your own worktree and commit it. The finder verifies the fix. The lead
+merges in the order r55m, r55u, r55w, r55q, r55g.
 
 ## Contract between slices
-- **fv2 → fv1:** the harness exports `Suite#target(name, { measure, atMost, atLeast, unit, breaks,
-  timeout })` and `countInput(page)`, from `harness/index.js`. fv1's brief text names them exactly
-  so.
-- **fv3 → fv1:** `rig taste` writes `docs/TASTE.md` at the repo root, with the headings
-  `## Ratings`, `## Comps` (when a comps round ran) and `## Principles`. When that file exists in the
-  main checkout, fv1's slice brief tells the agent to read it before designing: the ratings outrank
-  the agent's own taste.
-- **fv3 reads the plan** with the existing `parseSections` and `bullets` exports from `src/plan.js`.
-  It does not change plan.js, which fv1 owns.
+- **r55m → everyone:** `src/timings.js` (`recordTiming`, `readTimings`, `estimate`), `src/lease.js`
+  (`acquire`, `release`, `holderOf`), `src/remote.js` (`runOnHost`), with the signatures in the
+  stubs. Leases on a host must hold across machines and sessions, not just in one repo's `.rig/`.
+- **r55u → r55g, r55q:** `src/drift.js` `drift(root, opts)` and `src/baselines.js`
+  `staleBaselines(root, opts)`, with the shapes in the stubs.
+- **r55q → r55g:** records in `.rig/qa-history.jsonl` keep today's fields and add: `host`
+  (`'local'` or the ssh host), `kind: 'ci'` for the repo's own local CI command (3b), `baseline`
+  (`{ base, baseSha, newFailures: [name], known: [{ name, where: 'here'|'there'|'both' }] }`),
+  `stalled` (`{ worker, spec, quietMs }` when the watchdog stopped it), `needsStub` ([spec]), and
+  `repeat` (`{ n, seeds, failedSeeds }`). The config keys are `qaHost` (ssh host or null) and
+  `ciCommand` (or detected, r55q decides how and documents it).
+- **r55g reads those:** finish needs a local test pass on the sha, the same on `qaHost` when it is
+  set, the CI command's pass (both machines when a host is set) when the repo has one, a
+  second-vendor review pass on the sha, no open decisions, and it prints drift first.
+- **r55w → r55g:** nothing in code. `rig up` and every brief end with the `rig tell` line.
 
 ## Agents
 
-### fv1 — Briefs that aim high
+### r55g — The gate: second vendor, one fold, decisions, finish
 Owns:
+- src/commands/finish.js
+- src/commands/review.js
+- src/commands/fold.js
+- src/commands/decision.js
+- src/fold.js
+- src/decisions.js
+- src/vendor.js
+- test/qa-finish.test.js
+- test/workflow.test.js
+- test/gate-*.test.js
+- docs/DECISIONS.md
+- docs/review-r55q.md
+- docs/build-report-r55g.md
+
+Task:
+Items 1, 2 and 13 of docs/PLAN-5.5.md, and the finish side of 3, 3b, 4 and 11.
+
+1. `rig review --vendor <name> --pass "<what ran>"` records a second-vendor pass on the current
+   sha of the base (`--sha` to name another) in `.rig/`, with the time it took when given
+   (`--ms`, else since the review brief was written) via `recordTiming(stage 'review')`. The
+   builder's vendor comes from `vendor` in the config, else from the launch command (claude →
+   anthropic, codex → openai). A pass from the same vendor is refused with a message saying why.
+   `--fail "<what it found>"` records a failing verdict; the newest verdict on the sha wins.
+2. `rig fold [--base <ref>]`: fix commits (subject starting `fixup!`/`squash!`, or listed with
+   `--fix <sha>`) fold into their owning commits with an autosquash rebase run non-interactively.
+   Then: every commit walked (each checked out in a scratch worktree and the configured test or
+   `--each "<cmd>"` command run, exit recorded), the folded tip's tree compared to the old tip's tree
+   (which already contains the fixes) and refused unless `git diff` is empty, and the new shas
+   stamped in `.rig/fold.json` (old → new). A fold that drops a hunk is refused and the branch is
+   put back. Drift (`drift()`) is printed first. Timing recorded as stage 'fold'.
+3. `rig decision "<what>" --source <transcript|thread>` appends to `docs/DECISIONS.md` (id, date,
+   what, source, status open). `rig decision <id> --built|--scheduled <round>|--not-in-scope`.
+   `rig finish` lists every decision since the round started (the oldest slice branch point, or
+   `--since <ref>`) and fails while any is open.
+4. `rig finish` gains gates: second-vendor pass on this sha (`--no-vendor` downgrades to a warning
+   and FINISH.md says so); host tally on `qaHost` when set; the CI command's result (r55q's `ci`
+   records) on both machines when it ran; open decisions; baseline "0 new" shown when recorded.
+   Drift is printed before the gates.
+Checks (each red once): finish refuses without a vendor pass, without the host tally when
+configured, with an open decision; a same-vendor pass is refused; a fold that drops a hunk is
+refused by the tree check. Existing finish fixtures that now lack a vendor pass get one added:
+list each in your report.
+
+### r55q — QA that cannot hang, lie, or touch the desktop
+Owns:
+- src/commands/qa.js
+- src/qalog.js
+- src/qa/**
+- test/qa-*.test.js
+- docs/review-r55m.md
+- docs/build-report-r55q.md
+
+Task:
+Items 3b, 4, 7, 8, 16, and the `rig qa` side of 3, 9 and 15.
+
+1. **Stall watchdog (7).** While a command runs, watch output growth per worker: the command's own
+   output, plus per-worker logs when `qaWorkerLogs` (a glob) is configured. No growth for
+   `qaStallMinutes` (default 5) names the worker and the last spec it mentioned, stops the whole
+   process group (reuse `groups.stop`), records `stalled`, and exits non-zero with a message that
+   names both. Output must still reach the terminal live.
+2. **Desktop-free (8).** By default the command runs with DISPLAY and WAYLAND_DISPLAY unset and a
+   shim dir first on PATH holding `xclip`, `xsel`, `wl-copy`, `wl-paste`, `pbcopy`, `pbpaste` that
+   fail fast and log the call. Specs whose failure coincides with a shim call are listed as
+   "needs a stub" (`needsStub`), not new failures. `--desktop` opts back in.
+3. **Baseline (4).** `rig qa <sha> --baseline [<base>]` also runs the same command on the merge base
+   (or `<base>`) in a second pinned worktree, parses failure names (node:test, TAP `not ok`, the
+   harness's `FAIL  <name>`, rspec `rspec ./path:line`, Playwright; add a `qaFailurePattern` regex
+   option), and reports only new failures, with known ones listed by where they also fail (here,
+   there, both, when a host ran too). "0 new" is computed from both runs.
+4. **Local CI (3b).** When the repo defines a local CI command (`ciCommand` in config, else a
+   detection rule you choose and document, e.g. `scripts.ci` in package.json or an executable
+   `bin/ci`), `rig qa` runs exactly that command and records kind `ci`, on both machines when a
+   host is set. Record a "CI passed" status the command posts when it can be read (decide; say).
+5. **Second machine (3).** `rig qa <sha> --host <ssh-host>` (or `qaHost` in config) runs the same
+   command there through r55m's `runOnHost`, under a lease (`acquire(root, 'host:<h>', session)`),
+   and prints both tallies side by side. A held lease is refused with the holder's name.
+6. **Repeat (16).** `rig qa <sha> --repeat N --seeds [<list>] --run "<one file>"`: N runs with a
+   seed each (exported as `RIG_SEED`, plus `--seed` passing for known runners: say which), on both
+   machines when a host is set; reports N green or names the failing seeds. Listed seeds always run.
+7. **Timings (9) and baselines (15).** Every stage's wall time goes to `recordTiming` (stages
+   `qa:test`, `qa:negative`, `qa:ci`, `qa:host`, `qa:baseline`). `rig qa` warns when
+   `staleBaselines()` returns anything.
+Checks (each red once): a fake suite that stops writing is stopped and named within the window; one
+that keeps writing is not; "0 new" from two real runs in a fixture (and a new failure shown as new);
+a spec calling a clipboard tool is listed "needs a stub" and the real tool is never reached.
+
+### r55m — Two machines, leases, measured time
+Owns:
+- src/remote.js
+- src/lease.js
+- src/timings.js
+- src/commands/lease.js
+- test/machines-*.test.js
+- test/fixtures/fake-ssh/**
+- docs/review-r55u.md
+- docs/build-report-r55m.md
+
+Task:
+Items 3 (the runner), 9 (the record and the estimate) and 10.
+
+1. `runOnHost` (see stub): sends the commit with `git bundle` over `ssh <host>` (nothing pushed),
+   into a checkout per session under a configurable remote dir (`qaHostDir`, default
+   `~/.rig-qa/<repo>`), checks out exactly the sha, installs deps when the lockfile changed, runs
+   the command with `RIG_TEST_DB=<repo>_<session>` (the per-session test DB name) and the same
+   desktop-free env as local, streams output, honours `limitMs`, and returns the exit. An ssh
+   failure is exit 255 with the reason, never a hang (ConnectTimeout, BatchMode).
+2. Leases (10): `acquire/release/holderOf` for `host:<h>` and `db:<name>`. A host lease lives on the
+   host (an atomic `mkdir` lock plus a JSON holder file over ssh), so two sessions on two machines
+   see the same lease; a local db lease lives under the user's state dir, not a repo. Leases expire
+   (`ttlMin`). `rig lease <resource> --by <id> [--release] [--ttl <min>]` prints the holder on refusal
+   and exits 1.
+3. Timings (9): `.rig/timings.jsonl` via `rigDir`; `estimate()` takes the median per stage, says
+   "no data" for a stage with none and returns totalMs null then.
+Checks (each red once): a second holder is refused (two sessions, a fake ssh host); a lease past its
+ttl is taken over; `runOnHost` on a fake ssh (a script on PATH that runs the remote command in a temp
+"host" dir) checks out exactly the sha and returns its exit, and an unreachable host returns 255
+quickly; `estimate` medians are exact on fixture data and say no data on none.
+
+### r55u — Upstream: drift, rebase, baselines that know their sha
+Owns:
+- src/drift.js
+- src/baselines.js
+- src/commands/rebase.js
+- src/commands/status.js
+- harness/snapshot.js
+- harness/index.js
+- test/upstream-*.test.js
+- test/snapshot.test.js
+- examples/snapshot-fixture.html
+- docs/review-r55w.md
+- docs/build-report-r55u.md
+
+Task:
+Items 11, 12, 15, and `rig status --eta` (9's display).
+
+1. `drift()` (see stub): fetch, then commits on the live base since the merge base, the files they
+   touched mapped to owning slices (via the plan's Owns), owned files untouched listed as safe, and
+   `git merge-tree --write-tree` for whether the head still merges, with conflicting files.
+2. `rig status` prints drift first (`--no-fetch` to skip fetching) and gains `--eta`, which prints
+   r55m's `estimate()` for the stages of a final round and says when there is no data.
+3. `rig rebase <id> [--base <ref>]`: rebase a slice's branch onto the live base. Before resolving
+   anything, when upstream deleted or rewrote (a configurable share of lines, decide) a file the
+   slice changed, stop, write `.rig/rebase-<id>.md` asking the owner what upstream now covers, print
+   it, and exit 3. `--covered "<what upstream covers>"` records the answer and lets the rebase go on,
+   with `--drop <sha>` to drop superseded commits.
+4. `harness/snapshot.js`: platform-neutral snapshot helpers on top of `harness/cdp.js`: pin the user
+   agent, locale and modifier-key hints (Meta vs Control); record auto margins as "auto"; wait for
+   an app-ready signal (a selector, a global or a function) instead of first paint; retake when not
+   ready, with a bounded number of tries. Baselines carry `RECORDED_FROM: <sha>`.
+   `staleBaselines()` finds them (a `snapshotDirs` config or a sensible default) and reports how far
+   the base moved past each. Export the helpers from `harness/index.js` (additions only).
+Checks (each red once): a fixture repo whose base moved, touching an owned file, is flagged and the
+untouched files listed as safe; a non-merging stack is reported; rebase stops on an upstream-deleted
+file; the snapshot helper records "auto", and a not-ready page is retaken.
+
+### r55w — Watching: peers report themselves, briefs say who acts
+Owns:
+- src/commands/job.js
+- src/commands/tell.js
+- src/commands/inbox.js
+- src/inbox.js
+- src/herdr.js
 - src/brief.js
 - src/plan.js
-- src/mindset.js
-- src/commands/review.js
+- src/roll.js
 - src/commands/up.js
 - src/commands/brief.js
-- src/roll.js
 - templates/**
+- test/watch-*.test.js
 - test/brief-five.test.js
-
-Report: docs/build-report-fv1.md
-
-Task:
-You are a frontier model working at agent speed, capable of more than you know. Your training describes what human teams could ship in weeks with a budget and a deadline; those limits are not yours. Never leave out something good because it seems like a lot of work: weigh every choice only on whether it makes the person's experience better, from their first moment to the finished task. Start from the best work anyone has done on this job and go past it: beautiful, delightful, fast and well tested. Ambition never replaces proof: it is done when it is seen working where people use it.
-
-Build the creative prompt into every brief the rig writes.
-
-1. `src/mindset.js` exports `MINDSET`, the paragraph above, byte-exact and on one line. It is the only
-   copy in `src/`.
-2. `briefFor`, `reviewBrief` and `tabBrief` open with `MINDSET` straight after the title line, before
-   the first `## `, exactly once.
-3. `briefFields` learns these anchored headings, with the aliases in brackets:
-   `The feeling` (`The one quality`) → feeling. `The specialist` → specialist.
-   `The best at this job` (`References`) → references, as bullets, plus `antiReferences` from an
-   `Anti-references:` block inside that section or from a `## Anti-references` section.
-   `The bar` → bar. `Where we're starting from` → start. `Freedom` → freedom. `Tools` → tools.
-   `Budget and autonomy` → budget. `What to hand back` → handBack.
-   `What must not happen` also accepts `What must not change` and `What must not happen or change`;
-   when two of those sections exist, their rules are combined.
-4. The slice brief carries each filled section, in the order given under "What done looks like".
-   `<placeholder>` text never reaches a brief.
-5. `missingBrief` also names The feeling, The best at this job and The bar. A new
-   `barHasNoNumber(plan)` is true when the bar has no digit, and `rig up` prints one yellow line for
-   it. Warn, never refuse.
-6. Two new steps join the brief's loop. **The bar is a floor:** put the work beside the references,
-   screenshots side by side for anything visible, and say where it holds up. **Hard numbers are
-   checks:** write the bar as `s.target` with `countInput`, seen to fail once.
-7. When `docs/TASTE.md` exists in the main checkout, the brief says: read it before you design; the
-   ratings outrank your own taste; name the principles behind them in your report.
-8. `reviewBrief` gains a fifth thing to look for: whether the bar is measured by a target check that
-   was seen red, and how the work looks beside the references.
-9. `templates/PLAN.md` gets the new sections in that order, each with a one-line `<placeholder>` in
-   Steve's spirit. The existing sections stay. `templates/ROLL.md` gets an optional `## The bar`.
-
-Test it in `test/brief-five.test.js` with `s.check` + `breaks`. For every check, the control swaps
-the old Rig 4 function back in (copy it into the test), so the check goes red against Rig 4's real
-behaviour.
-
-### fv2 — Hard numbers you can run
-Owns:
-- harness/check.js
-- harness/target.js
-- harness/index.js
-- test/target.test.js
-- examples/target-fixture.html
-
-Report: docs/build-report-fv2.md
+- test/up-guard-init.test.js
+- test/crew.test.js
+- docs/review-r55g.md
+- docs/build-report-r55w.md
 
 Task:
-You are a frontier model working at agent speed, capable of more than you know. Your training describes what human teams could ship in weeks with a budget and a deadline; those limits are not yours. Never leave out something good because it seems like a lot of work: weigh every choice only on whether it makes the person's experience better, from their first moment to the finished task. Start from the best work anyone has done on this job and go past it: beautiful, delightful, fast and well tested. Ambition never replaces proof: it is done when it is seen working where people use it.
+Items 5, 6 and 14.
 
-Turn "a bar with a hard number" into a check that can go red.
-
-1. `Suite#target(name, { measure, atMost, atLeast, unit = '', breaks, timeout })`:
-   - `measure()` returns a finite number. Anything else is a FAIL that names what came back.
-   - The check passes inside the bounds. With neither bound set, it throws a usage error.
-   - With `breaks`, it measures again with the thing broken. If that number is still inside the bar,
-     the check is VOID: "the number stayed inside the bar with the thing broken". If not, it is a
-     PASS. Without `breaks` it is UNPROVEN, exactly as `check` is.
-   - Every line prints the number and the bar, e.g. `PASS  accept a Sunday — 2 taps (≤ 3)`, plus the
-     broken run's number. The result record keeps `value`, `brokenValue`, `bound` and `unit`.
-     `report()` counts targets in the same four states.
-2. `countInput(page)`: wraps the harness's own `tap`, `click`, `type`, `wheel` and `swipe` from
-   `harness/input.js`, so all input stays real `Input.dispatch*`. It counts `taps` (a tap or a
-   click is one), `keys` (characters typed), `gestures` (a wheel or a swipe) and `ms` since it was
-   created or last `reset()`. `counts()` returns `{ taps, keys, gestures, ms }`.
-3. `timeTo(fn)` returns the milliseconds an async fn took, for bars like "found in under 10 s".
-4. Export all three from `harness/index.js`. The existing exports and behaviour don't change.
-5. `examples/target-fixture.html` is a small page where accepting a shift takes 2 taps. The test's
-   `breaks` adds a confirm step that makes it 4. Write `test/target.test.js` with headless Chrome on
-   debugging port 9351. Show four things: a PASS whose break crossed the bar; a VOID whose break
-   didn't move the number; a FAIL over the bar; a non-number from `measure`, reported as a FAIL.
-   Then show that the old `Suite` (no `target`) makes the suite red.
-
-### fv3 — Taste rounds he can click
-Owns:
-- src/commands/taste.js
-- src/taste/**
-- bin/rig.js
-- test/taste.test.js
-- docs/shots/**
-
-Report: docs/build-report-fv3.md
-
-Task:
-You are a frontier model working at agent speed, capable of more than you know. Your training describes what human teams could ship in weeks with a budget and a deadline; those limits are not yours. Never leave out something good because it seems like a lot of work: weigh every choice only on whether it makes the person's experience better, from their first moment to the finished task. Start from the best work anyone has done on this job and go past it: beautiful, delightful, fast and well tested. Ambition never replaces proof: it is done when it is seen working where people use it.
-
-Recognition, not recall: people know great when they see it but can't describe it in advance. Build
-`rig taste`, so Alexander rates real examples by tapping, and agents get his ratings in writing.
-
-1. `rig taste [--from <dir>] [--url <u>]... [--comps <dir> --ask "<question>"] [--port N]
-   [--no-open] [--done]`. Register it in `bin/rig.js`, COMMANDS + USAGE.
-2. References come from three places: image files in `--from`; URLs from `--url`; URLs in the
-   bullets of the plan's `## The best at this job` section, read through `parseSections` and
-   `bullets`. Each URL is captured headless through `harness/cdp.js` at 1440×900 and at 390×844,
-   and the shots go under `.rig/taste/shots/`. Every `.rig` write goes through `rigDir()`. A URL that
-   fails to load is named in the console and skipped, never shown as a blank card.
-3. A zero-dependency local server on 127.0.0.1 (port `--port`, else `cfg.tastePort`, else 5391)
-   serves one self-contained page, with inline CSS and JS. Unless `--no-open` is passed, it opens
-   the page in the default browser (`xdg-open`, or `open` on macOS) and prints the URL.
-4. The page shows one reference at a time, as large as the screen allows (phone shot beside desktop
-   shot where both exist). Below it:
-   - five big rating buttons, 1 to 5, that also answer to the number keys, and advance by themselves;
-   - a note field nobody has to fill;
-   - "3 of 6" progress, and a way back.
-
-   The comps round shows the one question at the top and 3 or 4 comps side by side: tap to rate each
-   one, star the favourite. It works at 390 px wide with no horizontal scroll, every target at least
-   44 px (`meetsTouchTarget`), in light and dark mode. A Done button finishes the round.
-5. Every answer POSTs to the server, which writes `.rig/taste/ratings.json` at once, so a closed tab
-   loses nothing. Done, or `rig taste --done`, writes `docs/TASTE.md` with a date line,
-   `## Ratings` (a table: reference, rating, note), `## Comps — "<question>"` (comp, rating, picked,
-   note) when a comps round ran, and `## Principles` holding the line "<name the principles behind
-   these ratings before any design starts>". The server then exits and prints the path.
-6. `test/taste.test.js`: headless Chrome on debugging port 9352, server on 5391, `--no-open`, and
-   fixture images generated by the test, never personal ones. Drive the page with real input through
-   the harness (`click`/`tap` at points checked with `whatIsAt`). Assert the positive path:
-   ratings.json and TASTE.md hold exactly what was tapped. Controls: break the POST handler, then the
-   rating button, and each assertion must go red.
-
-   The bar (6 references in at most 7 taps, no typing, no scrolling, at 1440×900 and 390×844) is a
-   `s.target` with `countInput`. fv2 is building those. Until fv2 merges, write the walk with your
-   own counter around harness input, and swap it once fv2's API is on main.
-7. Screenshots in `docs/shots/`: desktop and phone, light and dark, of a round in progress and of
-   the comps view.
+1. `rig tell <lead> "<msg>"` writes one message file atomically into the lead's inbox (a state dir:
+   `RIG_INBOX_DIR`, else `$XDG_STATE_HOME/rig/inbox`, else `~/.local/state/rig/inbox`, decide and
+   document; honour an existing `~/.claude/inbox` layout only if you can do it without naming a
+   vendor in the default). The sender comes from `RIG_AGENT_ID`, the slice id, or `CODEX_PERSONA`.
+2. `rig inbox [<lead>] [--wait] [--deadline <min>]` prints new messages and files them under
+   `read/`; `--wait` blocks until one lands or the deadline, polling at most every 5 s (the 60 s bar).
+3. `rig job <pane> "<task>" [--expect <file>] [--deadline <min>]`: brief a pane through
+   `herdr agent prompt`, wait for it to leave idle, then until idle, done or blocked, or the deadline;
+   print the state, the minutes, whether the expected file exists and is non-empty, BLOCKED when it
+   is, and the pane's last lines. The task it sends ends with the tell line. Exit codes per outcome
+   (decide; document). Refuse to prompt a busy pane.
+4. `rig up` prints, and when it can, starts, the lead's inbox watcher (the exact background command
+   `rig inbox <lead> --wait --deadline <min>`), with the lead name from `lead` in config or
+   `RIG_LEAD`. Every brief ends with the tell line: `briefFor` and `tabBrief` are yours; export a
+   `tellLine(lead, id)` helper from `src/brief.js` and r55g calls it at the end of `reviewBrief`.
+   Briefs state item 6 outright: ask the lead, never the human; only permission dialogs, a go,
+   or a taste call go to the human.
+5. Item 14: plans gain a `## Refusals` (refusal → repair) section in `templates/PLAN.md`; `rig up`
+   warns when a plan whose work has a UI over rules lacks it (decide the trigger; an explicit
+   `UI: none` line silences it).
+Checks (each red once): `rig job` exits on idle, done and blocked, and on its deadline against a fake
+`herdr` on PATH whose pane never finishes; `rig inbox --wait` wakes within 60 s of `rig tell`; the
+brief's last line is the tell line; `rig up` warns on a missing refusal matrix.
 
 ## Open questions
-- None for the crew. The lead brings Alexander the release: version bump, tag, Homebrew tap.
+- None for the crew. The lead brings the release.

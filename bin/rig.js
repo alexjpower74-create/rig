@@ -21,6 +21,14 @@ const COMMANDS = {
   taste:
     'a rating round you answer by tapping: references one at a time, 1 to 5, every tap saved; Done writes docs/TASTE.md (--from <dir>, --url <u>, --comps <dir> --ask "<q>", --lan, --no-open, --done)',
   down: 'close this build’s slice tabs, stop processes inside its worktrees, remove the worktrees; refuses over uncommitted work unless --force',
+  fold: 'fold the fix commits into their owning commits once, at the end: every commit walked, the folded tree checked against old tip + fixes, new shas stamped',
+  decision:
+    'record a decision for the build: rig decision "<what was decided>" --source <transcript|thread>; finish refuses while one is open',
+  job: 'brief an agent in another pane and wait until it is idle, done or blocked, or the deadline: rig job <pane> "<task>" --expect <file> --deadline <min>',
+  tell: 'tell the lead something, from any peer: rig tell <lead> "<one line>"',
+  inbox: 'the lead’s inbox: print new messages, or --wait until one lands (--deadline <min>)',
+  lease: 'lease a shared resource (a second machine, a test DB): rig lease <host|db> --by <id>; refused while someone else holds it',
+  rebase: 'rebase a slice onto the live base; stops and asks the slice owner when upstream deleted or rewrote a file the slice changed',
 }
 
 // Per-command usage. Printed by `rig <cmd> --help` BEFORE the command module is imported: a help
@@ -55,6 +63,13 @@ rig roll down   [<rollDir>]   [--force]  closes only this roll's tabs; makes and
   --done writes docs/TASTE.md from the saved ratings (and stops a board still running in this repo).
   Every round is kept in .rig/taste/ratings.json; the same sources again resume the newest round`,
   down: `rig down [--force] [--discard-reports]`,
+  fold: `rig fold [--base <ref>]`,
+  decision: `rig decision "<what was decided>" --source <transcript|thread>`,
+  job: `rig job <pane> "<task>" [--expect <file>] [--deadline <min>]`,
+  tell: `rig tell <lead> "<one line>"`,
+  inbox: `rig inbox [<lead>] [--wait] [--deadline <min>]`,
+  lease: `rig lease <host|db> --by <id>`,
+  rebase: `rig rebase <id> [--base <ref>]`,
 }
 
 const HELP = `rig ${pkg.version} — multi-agent build orchestration
