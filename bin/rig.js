@@ -8,14 +8,16 @@ const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'))
 
 const COMMANDS = {
   init: 'scaffold PLAN.md + AGENTS.md + .rig/config.json, and the app registry file when `apps` is on PATH (--hook installs the pre-commit guard)',
-  up: 'create a worktree + branch per slice, open one GitHub issue per slice, and launch an agent in each (--dry-run, --no-launch, --no-issues, --base <ref>, --launch "<cmd>", --keep-branches)',
-  status: 'per-slice: agent state, commits ahead, uncommitted files, and anything edited outside its slice',
+  up: 'create a worktree + branch per slice, open one GitHub issue per slice, and launch an agent in each (--dry-run, --no-launch, --no-issues, --base <ref>, --launch "<cmd>", --keep-branches, --watch)',
+  status:
+    'per-slice: drift against the live base first, then agent state, commits ahead, uncommitted files, and anything edited outside its slice (--eta for measured stage times)',
   guard: 'refuse work that reaches outside its slice (--staged for hook use, --agent <id>, --base <ref>)',
-  qa: 'grade from a clean QA worktree pinned to an exact commit: rig qa <sha> (--run "<cmd>", --negative "<cmd>", --port, --fresh; qa, qa-2… per run; exits with the command’s status)',
+  qa: 'grade from a clean QA worktree pinned to an exact commit: rig qa <sha> (--run, --negative, --baseline [<base>], --host <h>, --ci, --repeat N --seeds, --stall <min>, --desktop, --fresh; exits with the first non-zero)',
   brief: 'print an agent’s briefing so you can hand it over deliberately',
-  review: 'write a fresh-eyes review brief for a slice’s diff: rig review <id> (--by <slice>, --launch for a new reviewer tab)',
+  review:
+    'a fresh-eyes review brief for a slice: rig review <id>; the second-vendor gate: rig review --vendor <name> --pass "<what ran>" | --fail "<found>" (--sha, --ms); --vendor alone writes the final brief',
   finish:
-    'the done gate: reviewed, merged, QA + negatives green on this sha, tree clean; closes issues, jots, touches the registry on a pass (--no-review, --no-desk, --wrap "<msg>"); writes docs/FINISH.md',
+    'the done gate: drift first; reviewed, merged, QA (+ qaHost, + CI) and negatives green on this sha, 0 new on the baseline, a second-vendor pass, no open decision; closes issues, jots, touches the registry on a pass (--no-review, --no-vendor, --since, --no-fetch, --no-desk, --wrap "<msg>"); writes docs/FINISH.md',
   rule: 'add a learned rule to the project rulebook: rig rule "<rule>"',
   roll: 'a cross-repo crew from one brief: rig roll up <brief.md> | status | finish | down (tabs in this workspace, one list of repos each)',
   taste:
@@ -23,7 +25,7 @@ const COMMANDS = {
   down: 'close this build’s slice tabs, stop processes inside its worktrees, remove the worktrees; refuses over uncommitted work unless --force',
   fold: 'fold the fix commits into their owning commits once, at the end: every commit walked, the folded tree checked against old tip + fixes, new shas stamped',
   decision:
-    'record a decision for the build: rig decision "<what was decided>" --source <transcript|thread>; finish refuses while one is open',
+    'record a decision: rig decision "<what>" --source <transcript|thread>; close it: rig decision <id> --built | --scheduled <round> | --not-in-scope; finish refuses while one of this round is open',
   job: 'brief an agent in another pane and wait until it is idle, done or blocked, or the deadline: rig job <pane> "<task>" --expect <file> --deadline <min>',
   tell: 'tell the lead something, from any peer: rig tell <lead> "<one line>"',
   inbox: 'the lead’s inbox: print new messages, or --wait until one lands (--deadline <min>)',
@@ -36,19 +38,31 @@ const COMMANDS = {
 const USAGE = {
   init: `rig init [--hook] [--slug <slug>] [--name "<Name>"] [--no-registry]
   --hook installs the pre-commit guard; --slug/--name feed the registry file; --no-registry skips \`apps new\``,
-  up: `rig up [--dry-run] [--no-launch] [--no-issues] [--base <ref>] [--launch "<cmd>"] [--keep-branches]
-  one worktree, branch, brief, tab and GitHub issue per slice; --no-issues opens none`,
-  status: `rig status [--base <ref>]`,
+  up: `rig up [--dry-run] [--no-launch] [--no-issues] [--base <ref>] [--launch "<cmd>"] [--keep-branches] [--watch]
+  one worktree, branch, brief, tab and GitHub issue per slice; --no-issues opens none;
+  prints the lead's inbox watcher (rig inbox <lead> --wait); --watch becomes it: run it as a
+  background job, so its exit on the first tell wakes the lead`,
+  status: `rig status [--base <ref>] [--no-fetch] [--eta]
+  drift first: each slice against the live base (fetched; --no-fetch uses the last fetch), the owned
+  files it touched, how many are safe, and whether each still merges (git merge-tree);
+  --eta prints the median of measured stage times for a final round, or "no data"`,
   guard: `rig guard [--staged] [--agent <id>] [--base <ref>]
   --staged checks the index (pre-commit hook); --agent names the slice when it cannot be inferred`,
-  qa: `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--port <n>] [--fresh]
-  --negative "<cmd>" runs the negative-control command in the same pinned tree and records it; --fresh also
-  removes ignored files before the pin (git clean -x: node_modules reinstalls). One worktree per run: qa, qa-2…`,
+  qa: `rig qa [<ref>] [--run "<cmd>"] [--negative "<cmd>"] [--baseline [<base>]] [--host <ssh-host>] [--ci|--no-ci]
+       [--stall <min>] [--timeout <min>] [--port <n>] [--desktop] [--fresh]
+rig qa <ref> --repeat <N> [--seeds <s1,s2>] --run "<one file>" [--host <ssh-host>]
+  Every run is watched (no output for 5 min: stopped and named), desktop-free (no display, clipboard
+  tools fail fast), and recorded per machine. --baseline reports only new failures against the base.
+  One worktree per run: qa, qa-2…`,
   brief: `rig brief <id>`,
-  review: `rig review <id> [--by <slice>] [--base <ref>] [--launch] [--launch-cmd "<cmd>"]`,
-  finish: `rig finish [--base <ref>] [--no-review] [--no-desk] [--no-write] [--wrap "<message>"]
-  --no-review turns the review gate into a warning; --no-desk skips issues, jot and the registry;
-  --wrap "<message>" runs \`wrap\` after a pass and only then`,
+  review: `rig review <id> [--by <slice>] [--base <ref>] [--launch] [--launch-cmd "<cmd>"]
+rig review --vendor <name> [--base <ref>] [--sha <sha>] [--since <ref>]      writes .rig/REVIEW-final.md
+rig review --vendor <name> --pass "<what ran>" | --fail "<what it found>" [--sha <sha>] [--ms <n>]
+  a pass from the builders' own vendor (vendor in .rig/config.json, else the launch command) is refused`,
+  finish: `rig finish [--base <ref>] [--since <ref>] [--no-review] [--no-vendor] [--no-fetch] [--no-desk] [--no-write] [--wrap "<message>"]
+  drift is printed first; --no-review / --no-vendor turn those gates into warnings (FINISH.md says so);
+  --since names where the round started, for decisions (default: where the oldest slice was cut);
+  --no-desk skips issues, jot and the registry; --wrap "<message>" runs \`wrap\` after a pass and only then`,
   rule: `rig rule "<the rule, in one sentence>"`,
   roll: `rig roll up <brief.md>   [--dir <rollsDir>] [--no-launch] [--dry-run] [--launch "<cmd>"]
 rig roll status [<rollDir>]   [--no-fetch]  newest roll by default; exit 1 while any repo is in progress
@@ -63,13 +77,25 @@ rig roll down   [<rollDir>]   [--force]  closes only this roll's tabs; makes and
   --done writes docs/TASTE.md from the saved ratings (and stops a board still running in this repo).
   Every round is kept in .rig/taste/ratings.json; the same sources again resume the newest round`,
   down: `rig down [--force] [--discard-reports]`,
-  fold: `rig fold [--base <ref>]`,
-  decision: `rig decision "<what was decided>" --source <transcript|thread>`,
-  job: `rig job <pane> "<task>" [--expect <file>] [--deadline <min>]`,
-  tell: `rig tell <lead> "<one line>"`,
-  inbox: `rig inbox [<lead>] [--wait] [--deadline <min>]`,
-  lease: `rig lease <host|db> --by <id>`,
-  rebase: `rig rebase <id> [--base <ref>]`,
+  fold: `rig fold [--base <ref>] [--fix <sha>[=<owner>]]... [--each "<cmd>"] [--no-each] [--timeout <min>] [--no-fetch]
+  the folded tree must equal the old tip's or the branch is put back; every commit walked; shas stamped in .rig/fold.json`,
+  decision: `rig decision "<what was decided>" --source <transcript|thread>
+rig decision <id> --built | --scheduled <round> | --not-in-scope | --open
+rig decision --list`,
+  job: `rig job <pane> "<task>" [--expect <file>] [--deadline <min>] [--lead <name>] [--id <name>]
+  exits 0 finished · 3 refused (busy, blocked, unknown) · 4 deadline · 5 BLOCKED
+        6 expected file missing/empty · 7 never started`,
+  tell: `rig tell [<lead>] "<one line>"      (lead: "lead" in .rig/config.json, else RIG_LEAD)`,
+  inbox: `rig inbox [<lead>] [--wait] [--deadline <min>]   exits 0 messages · 4 deadline`,
+  lease: `rig lease <host:<ssh-host>|db:<name>[@<ssh-host>]> --by <id> [--ttl <min>]   take or renew (default ttl 120 min)
+rig lease <resource> --by <id> --release                                    give it back (holder only)
+rig lease <resource>                                                        who holds it
+rig lease --list [--host <ssh-host>]                                        every lease on one machine
+  refused while someone else holds an unexpired lease: prints the holder and exits 1`,
+  rebase: `rig rebase <id> [--base <ref>] [--share <0..1>] [--covered "<what upstream covers>"] [--drop <sha>]... [--no-fetch] [--force]
+  stops before resolving (exit 3, .rig/rebase-<id>.md) when upstream deleted, moved, also created, or
+  rewrote >= share (default 0.5) of a file the slice changed; --covered records the answer and goes on;
+  --drop drops a superseded commit; a failed fetch stops it; a slice whose agent is working is refused`,
 }
 
 const HELP = `rig ${pkg.version} — multi-agent build orchestration

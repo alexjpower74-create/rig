@@ -118,7 +118,7 @@ export function up(args, cfg) {
     }
     mkdirSync(join(rollDir, id), { recursive: true })
     const bp = join(rollDir, id, 'BRIEF.md')
-    writeFileSync(bp, tabBrief(roll, id, tabs[id], { rollDir, reportPath, briefPath: bp }))
+    writeFileSync(bp, tabBrief(roll, id, tabs[id], { rollDir, reportPath, briefPath: bp, lead: cfg.lead || process.env.RIG_LEAD || null }))
     console.log(`  ${id}  ${tabs[id].length} repo(s): ${line}\n       brief ${bp}`)
   }
   if (dry) {
