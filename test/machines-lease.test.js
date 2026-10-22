@@ -198,6 +198,39 @@ await suite('machines: leases on shared resources', async (s) => {
     breaks: swap(() => mutant('lease.js', [['for f in "$dir"/*.json; do', 'for f in; do']])),
   })
 
+  await s.check('acquire answers bad input as a refusal, never a throw, and takes a branch name as its holder (r55q review 2)', {
+    assert: () => {
+      fresh()
+      const tries = [
+        () => L.acquire(one.dir, 'host:box', 'rig/r55q'),
+        () => L.acquire(one.dir, 'host:box', 'bad"quote'),
+        () => L.acquire(one.dir, 'host:box', 'x', { ttlMin: 0 }),
+        () => L.acquire(one.dir, 'nonsense', 'x'),
+        () => L.release(one.dir, 'nonsense', 'x'),
+      ]
+      const got = tries.map((f) => {
+        try {
+          return f()
+        } catch (e) {
+          return { threw: e.message }
+        }
+      })
+      const [branch, quote, ttl, res, rel] = got
+      const refused = (r) => r && r.ok === false && typeof r.why === 'string' && !r.threw
+      const back = L.release(one.dir, 'host:box', 'rig/r55q')
+      return (
+        branch.ok === true && branch.holder?.by === 'rig/r55q' && refused(quote) && refused(ttl) && refused(res) && refused(rel) && back.ok
+      )
+    },
+    // The old answers: a branch name is no holder, and bad input throws.
+    breaks: swap(() =>
+      mutant('lease.js', [
+        ['const BY = /^[A-Za-z0-9._:@/-]{1,80}$/', 'const BY = ID'],
+        ['    return { error: e.message, lines: [] }', '    throw e'],
+      ]),
+    ),
+  })
+
   await s.check('a resource that is neither host: nor db: is an error that says what to use', {
     assert: async () => {
       const r = await rigLease('machine-one', ['box', '--by', 'x'])

@@ -63,6 +63,9 @@ esac
 `
 
 const ID = /^[A-Za-z0-9._:@-]{1,80}$/
+// A holder may also be a branch name (`rig/r55q`, a slice's natural id). `by` only ever reaches the
+// holder file through printf %s; file names come from the resource, so `/` is safe here.
+const BY = /^[A-Za-z0-9._:@/-]{1,80}$/
 
 /**
  * Where a resource's lease lives: `{ host, name }`, host null for this machine.
@@ -79,10 +82,16 @@ export function parseResource(resource) {
   return { host, name: `db_${safeName(db)}`, resource }
 }
 
+/** One lease operation. Bad input is an `error` like any other refusal, never a throw. */
 function call(op, resource, by = '-', ttlSec = 0, connectTimeoutSec = 10) {
-  const r = parseResource(resource)
-  if (op !== 'holder' && op !== 'list' && !ID.test(by))
-    throw new Error(`lease: --by "${by}" must be a session id (letters, digits, . _ : @ -)`)
+  let r
+  try {
+    r = parseResource(resource)
+  } catch (e) {
+    return { error: e.message, lines: [] }
+  }
+  if (op !== 'holder' && op !== 'list' && !BY.test(String(by)))
+    return { error: `lease: --by "${by}" must be a session id or branch name (letters, digits, . _ : @ / -)`, lines: [] }
   const res = shOn(r.host, SCRIPT, [op, r.name, by, String(ttlSec), resource], {
     connectTimeoutSec,
     timeoutMs: (connectTimeoutSec + 20) * 1000,
@@ -115,9 +124,11 @@ const holderFrom = (rec) => (rec ? { by: rec.by, at: rec.at, until: rec.until } 
  *
  * On success `holder` is the new lease. A lease past its ttl is taken over, and `tookOver` names
  * whose it was. An unreachable host is a refusal whose `why` says so: never a lease assumed free.
+ * Bad input (a resource, holder or ttl it cannot use) is a refusal too: acquire and release never throw.
  */
 export function acquire(_root, resource, by, { ttlMin = 120, connectTimeoutSec } = {}) {
-  if (!Number.isFinite(ttlMin) || ttlMin <= 0) throw new Error(`lease: --ttl must be a number of minutes above 0, got ${ttlMin}`)
+  if (!Number.isFinite(ttlMin) || ttlMin <= 0)
+    return { ok: false, holder: null, why: `lease: --ttl must be a number of minutes above 0, got ${ttlMin}`, tookOver: null }
   const ttlSec = Math.max(1, Math.round(ttlMin * 60))
   const { error, lines } = call('acquire', resource, by, ttlSec, connectTimeoutSec)
   if (error) return { ok: false, holder: null, why: error, tookOver: null }

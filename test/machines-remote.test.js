@@ -216,6 +216,52 @@ await suite('machines: the second-machine runner', async (s) => {
     timeout: 60_000,
   })
 
+  await s.target("a caller's abort signal stops the run on the host, not only the wait (r55q review 1)", {
+    // No limitMs: the signal alone must stop it. Measured until the host's last process is gone.
+    measure: async () => {
+      const pidFile = join(w.hostDir('box'), 'aborted.pid')
+      rmSync(pidFile, { force: true })
+      const ac = new AbortController()
+      const t = Date.now()
+      const going = run({ sha: c2, cmd: `sleep 15 & echo $! > ${pidFile}; wait`, signal: ac.signal, session: 'abort' })
+      while (!existsSync(pidFile) && Date.now() - t < 10_000) await new Promise((res) => setTimeout(res, 50))
+      const pid = Number(readFileSync(pidFile, 'utf8'))
+      const asked = Date.now()
+      ac.abort()
+      const r = await going
+      while (alive(pid) && Date.now() - asked < 25_000) await new Promise((res) => setTimeout(res, 100))
+      const pre = new AbortController()
+      pre.abort()
+      const early = await run({ sha: c2, cmd: 'true', signal: pre.signal })
+      return r.exit === 143 && /stopped by the caller/.test(r.why) && !alive(pid) && early.exit === 143 ? Date.now() - asked : Number.NaN
+    },
+    atMost: 5000,
+    unit: 'ms',
+    // ssh killed here, nothing on the host watching for it: the sleeper lives on to its end.
+    breaks: swap([['( cat >/dev/null; kill -TERM -$pid 2>/dev/null; sleep 5; kill -KILL -$pid 2>/dev/null ) >/dev/null 2>&1 &\n', '']]),
+    timeout: 60_000,
+  })
+
+  await s.check('host stubs record each call: rig-qa: stub lines and stubCalls name the tool and its args (r55q review 3)', {
+    assert: async () => {
+      // The spec swallows the stub's stderr, so only the record can say the clipboard was reached.
+      const r = await run({ sha: c2, cmd: 'echo secret | xclip -selection clipboard 2>/dev/null; pbcopy 2>/dev/null; echo done' })
+      const calls = r.stubCalls || []
+      return (
+        r.exit === 0 &&
+        /^rig-qa: stub xclip \d+ -selection clipboard$/m.test(r.log) &&
+        calls.length === 2 &&
+        calls[0].tool === 'xclip' &&
+        calls[0].args === '-selection clipboard' &&
+        Number.isFinite(calls[0].t) &&
+        Math.abs(calls[0].t - Date.now()) < 60_000 &&
+        calls[1].tool === 'pbcopy'
+      )
+    },
+    breaks: swap([['  sed -n "s/^/rig-qa: stub /p" "$calls" >&2\n', '']]),
+    timeout: 30_000,
+  })
+
   await s.check('output streams while the command runs, not at the end', {
     assert: async () => {
       const t = Date.now()
@@ -234,10 +280,7 @@ await suite('machines: the second-machine runner', async (s) => {
     },
     breaks: swap([
       ['      log += s\n      write(s)', '      log += s'],
-      [
-        '      clearTimeout(timer)\n      resolve({ code, log, timedOut })',
-        '      clearTimeout(timer)\n      write(log)\n      resolve({ code, log, timedOut })',
-      ],
+      ['      resolve({ ...r, timedOut, aborted })', '      write(r.log)\n      resolve({ ...r, timedOut, aborted })'],
     ]),
     timeout: 30_000,
   })
