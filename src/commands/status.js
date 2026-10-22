@@ -155,10 +155,15 @@ export function formatEta(est) {
     lines.push(`  ${s.stage.padEnd(12)} ${v}`)
   }
   if (est.totalMs === null || est.totalMs === undefined) {
-    const missing = est.stages.filter((s) => s.medianMs === null || s.medianMs === undefined).map((s) => s.stage)
-    lines.push(
-      `  ${'total'.padEnd(12)} ${YEL('no data')}${missing.length ? DIM(` for ${missing.join(', ')}`) : ''}${est.note ? DIM(` · ${est.note}`) : ''}`,
-    )
+    const has = (s) => s.medianMs !== null && s.medianMs !== undefined
+    const missing = est.stages.filter((s) => !has(s)).map((s) => s.stage)
+    lines.push(`  ${'total'.padEnd(12)} ${YEL('no data')}${DIM(` for ${missing.join(', ') || 'every stage'}`)}`)
+    // The measured part is still a measurement: a floor, never a guess at the rest.
+    const known = est.stages.filter(has)
+    if (known.length)
+      lines.push(
+        `  ${''.padEnd(12)} ${DIM(`at least ${duration(known.reduce((t, s) => t + s.medianMs, 0))} from the ${known.length} measured stage(s)`)}`,
+      )
   } else {
     lines.push(`  ${'total'.padEnd(12)} ${duration(est.totalMs)}`)
   }

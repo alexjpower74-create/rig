@@ -311,6 +311,7 @@ await suite('upstream: drift is known before the round', async (s) => {
         /total\s+2 min 45 s/.test(full) &&
         /fold\s+no data/.test(part) &&
         /total\s+no data for fold/.test(part) &&
+        /at least 2 min 05 s from the 1 measured stage\(s\)/.test(part) &&
         !/total\s+\d/.test(part)
       )
     },
