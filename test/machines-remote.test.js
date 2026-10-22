@@ -7,6 +7,7 @@
 // real ssh would, with a clean environment. Each check is shown red against a mutant of
 // src/remote.js with the guard taken out or the naive behaviour put back.
 
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { suite } from '../harness/check.js'
@@ -248,6 +249,20 @@ await suite('machines: the second-machine runner', async (s) => {
       return r.exit === 1 && /no commit f+ in/.test(r.why) && w.sshLog().split('\n').length === before
     },
     breaks: swap([['if (!full.ok) return done(1', 'if (false) return done(1']]),
+  })
+
+  await s.check("the command line survives the host's login shell: sh, bash, zsh and fish where installed", {
+    assert: () => {
+      // ssh hands the joined line to the host user's login shell, which is not always sh.
+      const shells = ['sh', 'bash', 'zsh', 'fish'].filter((sh) => spawnSync(sh, ['-c', 'exit 0']).status === 0)
+      const args = ["it's", 'two words', '$HOME', '`id`', '"q"', 'a\\b', '*', '']
+      const line = R.remoteCommand('printf "[%s]" "$@"', 'rig', args)
+      const want = args.map((a) => `[${a}]`).join('')
+      return shells.length >= 1 && shells.every((sh) => spawnSync(sh, ['-c', line], { encoding: 'utf8' }).stdout === want)
+    },
+    breaks: swap([
+      ["return ['sh', '-c', shq(script), name, ...args.map(shq)].join(' ')", "return ['sh', '-c', shq(script), name, ...args].join(' ')"],
+    ]),
   })
 
   await s.check('every ssh call carries BatchMode and ConnectTimeout', {
