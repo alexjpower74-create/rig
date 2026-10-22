@@ -134,6 +134,25 @@ await suite('machines: the second-machine runner', async (s) => {
     timeout: 30_000,
   })
 
+  await s.check("the host's own PATH comes first: the extra tool dirs only fill gaps at the end (found on a Mac)", {
+    // On a Mac /opt/homebrew/bin holds a real npm. Put first, it shadowed whatever the host's PATH
+    // chose (the deps check's fake npm in the real-host run), so installs ran the wrong tool.
+    assert: async () => {
+      const r = await run({ sha: c2, cmd: 'printf "PATH=%s\\n" "$PATH"; printf "npm=%s\\n" "$(command -v npm)"', desktop: true })
+      const path = /^PATH=(.*)$/m.exec(r.log)?.[1] ?? ''
+      const extra = path.slice(process.env.PATH.length).split(':').filter(Boolean)
+      return (
+        r.exit === 0 &&
+        path.startsWith(process.env.PATH) &&
+        extra.every((d) => ['/opt/homebrew/bin', '/usr/local/bin'].includes(d)) &&
+        r.log.includes(`npm=${join(w.bin, 'npm')}`)
+      )
+    },
+    // The old line: the extra dirs first. (/usr/local/bin exists on most hosts, so it shows.)
+    breaks: swap([['for d in /opt/homebrew/bin /usr/local/bin; do\n', 'PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\nfor d in; do\n']]),
+    timeout: 30_000,
+  })
+
   await s.check('deps install when the lockfile changed, and only then', {
     assert: async () => {
       const log = join(w.hostDir('box'), 'npm.log')

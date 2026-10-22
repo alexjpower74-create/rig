@@ -41,8 +41,9 @@ check has been seen red.
   own failure, and `why` gives ssh's reason. The result also carries `why`, `sent` and the resolved
   `dir`.
 - The command runs under `bash -o pipefail` when the host has bash (as `rig qa` does locally).
-  `/opt/homebrew/bin` and `/usr/local/bin` go first on PATH, because a non-interactive ssh session on
-  macOS does not have them and `npm` would not be found.
+  `/opt/homebrew/bin` and `/usr/local/bin` are added at the END of PATH when they exist and are
+  missing, because a non-interactive ssh session on macOS does not have them and `npm` would not be
+  found. (Until the fix below they went first, which shadowed the host's own PATH.)
 
 ### Leases
 - One POSIX sh script does every lease. It runs locally for `db:<name>` and over ssh for
