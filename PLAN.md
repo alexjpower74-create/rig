@@ -3,6 +3,18 @@
 One plan file. It is the contract. The seventeen items, the bar and the checks are written out in
 `docs/PLAN-5.5.md`: read that file whole before you start. This file adds the brief and the slices.
 
+## What it's for
+A lead running a crew loses hours to waits nobody watched, upstream drift found after a review round,
+and "green" claims nobody can trace. Rig 5.5 turns each of those into a gate, a watcher or a number.
+
+## What done looks like
+All seventeen items of docs/PLAN-5.5.md built, each check seen red then green, `npm run check` clean
+on both machines, a second-vendor review passed on the final sha, and `rig finish` passing on it.
+The lead writes README, CHANGELOG and releases 5.5.0.
+
+## Where it lives
+This public repo (MIT), installed by `npm link` and the Homebrew tap.
+
 ## The feeling
 The lead never has to be the human's alarm clock. Every wait has a deadline, every peer reports
 itself, every number is measured, and nothing called "ready" turns out stale an hour later.
@@ -70,9 +82,9 @@ their behaviour is described in item 5 and in the r55w task.
   companies or client repos. Examples stay generic. Run `check-no-personal-data` before you call
   it done.
 - No AI credit anywhere: no Co-Authored-By trailers, no "generated with" lines.
-- Every commit's author and committer is the repo owner's identity: use the commit prefix the lead
-  gives you in your first message (the session's environment carries another address) and check
-  `git log -1 --format='%an %ae / %cn %ce'` after each commit.
+- Every commit's author and committer is the repo owner's identity from git config. Commit with
+  `env -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_EMAIL git commit …` (a session's environment may carry
+  another address) and check `git log -1 --format='%an %ae / %cn %ce'` after each commit.
 - Never push, tag or release. The lead merges, releases and publishes.
 - Never type into another agent's pane. Never open a herdr workspace or split a pane.
 - Do not edit files outside your Owns list. `bin/rig.js`, `README.md`, `CHANGELOG.md` and
