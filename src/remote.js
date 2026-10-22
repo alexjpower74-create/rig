@@ -72,7 +72,7 @@ function sshReason(host, err) {
     .map((l) => l.trim())
     .filter(Boolean)
     .pop()
-  return `ssh ${host}: ${line || 'connection failed (exit 255)'}`
+  return `ssh ${host}: ${(line || 'connection failed (exit 255)').replace(/^ssh: /, '')}`
 }
 
 /** A name safe as a directory, a ref component and a database name. */

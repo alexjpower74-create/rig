@@ -41,7 +41,7 @@ export default function lease(args) {
   const ttlMin = ttlArg === null ? 120 : Number(ttlArg)
   const r = acquire(root, resource, by, { ttlMin })
   if (!r.ok) {
-    console.log(r.holder ? `rig lease: refused, ${resource} is ${describe(r.holder)}` : `rig lease: refused, ${r.why}`)
+    console.log(r.holder ? `rig lease: refused, ${resource} is ${describe(r.holder)}` : `rig lease: not taken: ${r.why}`)
     process.exitCode = 1
     return
   }
