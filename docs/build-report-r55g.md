@@ -127,8 +127,11 @@ Totals: gate-finish 20 + 3, gate-vendor 10, gate-fold 7 (+1 unproven in-suite, p
 Both review briefs (`reviewBrief` for a slice, `vendorBrief` for the second vendor) now carry an
 "Ask these" list, `ASK_THESE` in `src/commands/review.js`: (1) what changes between the check and its
 use or delivery, and is it checked again; (2) time edges: daylight saving, time zones, a clock that
-moves, exactly at the boundary; (3) a state that flips off and back on. `test/gate-review-brief.test.js`
-checks both briefs contain it; red by swapping the previous `review.js` (`0ed0253`) back in.
+moves, exactly at the boundary; (3) a state that flips off and back on; (4) with every feature flag
+off, is each new endpoint, action, prop and job unreachable on every surface (UI, API, CLI, tool servers,
+background jobs), and does the old behaviour hold exactly; (5) does the change override a saved user
+preference (theme, locale, notifications). `test/gate-review-brief.test.js` checks both briefs ask all
+five; red by swapping `24ce390`'s `review.js` (the first three only) back in.
 
 **The tell line** is wired: `reviewBrief` and `vendorBrief` end with r55w's `tellLine(lead, id)`
 (id = `--by`, else `rv-<id>`; `rv-<vendor>` for the vendor brief). This branch's own `src/brief.js`

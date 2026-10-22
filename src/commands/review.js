@@ -153,7 +153,11 @@ export const ASK_THESE = `## Ask these
    the boundary (the deadline itself, midnight, the last second of the window). Is a duration
    measured with a clock that cannot jump?
 3. **A state that flips off and back on.** Revoked then restored, removed then re-added, failed
-   then passed: is the second "on" treated as new, or does an old record answer for it?`
+   then passed: is the second "on" treated as new, or does an old record answer for it?
+4. **Every feature flag off.** Is each new endpoint, action, prop and job unreachable on every surface
+   (UI, API, CLI, tool servers, background jobs), and does the old behaviour hold exactly?
+5. **A saved user preference.** Does the change override one (theme, locale, notifications) instead
+   of reading it?`
 
 export const FINAL_BRIEF = join('.rig', 'REVIEW-final.md')
 const STALE_BRIEF_MS = 12 * 3_600_000
