@@ -50,3 +50,30 @@ r55q's files was changed. The watchdog's own internals (`src/qa/watch.js`) were 
   read stays local. r55g reads with its own `runOn()` filter, the same rule.
 - `complete: false` with `why` is exactly what finish needs to refuse to print "0 new"; finish shows
   it as a warning with the reason.
+
+## Verified at 45449c7 (2026-10-22)
+
+r55q's fixes are in `62c00f5` (and `c93631e`, on host stub calls and repeat timings), merged to main at
+`515b118`. I checked each one against its original repro on `rig/r55g` at `45449c7`, the merge of main.
+Each repro has a control that gives the other answer. The repros were scratch scripts, not committed.
+
+1. **Fixed.** The host run uses a fake `runOnHost` that prints `▶ entry.test.js` once and then never
+   returns, with `stallMs` 300. `runHost` returned exit 124 after 306 ms with
+   `stalled: { worker: 'lab-box', spec: 'entry.test.js', quietMs: 302 }` and printed `STALLED`, naming
+   the host and the spec. Control: a host that writes every 100 ms for 900 ms ends with exit 0,
+   `stalled: null`. `hostStage` records `stalled` on the host record.
+2. **Fixed.** Real `rig qa HEAD` in a scratch repo, `ciCommand: "sh ci.sh"`, where the script exits 0
+   after writing `failure lint: 2 errors` to `$RIG_CI_STATUS`. Result: exit 1, `rig qa: NOT green: the
+   CI exited 0 but posted failure`, and the record has `ciStatus.state: 'failure'`. Control: the same
+   with `success` posted exits 0. Residual nit, not blocking: the summary line just above still reads
+   `rig qa: ci exit 0 at <sha>`. The `NOT green` line follows it, and finish fails on the record either way.
+3. **Fixed.** `ciOnHost(cmd)` sets `RIG_CI_STATUS` inside the checkout's `.git` and prints the posted
+   status as a `rig-qa-ci-status:` line. A fake host log carrying `rig-qa-ci-status: failure lint: 2
+   errors` came back as `ciStatus: { state: 'failure', text: 'lint: 2 errors' }`, and `hostStage`
+   records it on the host's `ci` record.
+4. **Settled.** r55q's build report names one shape: the baseline is its own `kind: 'baseline'` record
+   on the head sha. Finish reads that, and it still reads a `baseline` field if one ever appears.
+5. **Fixed.** `compareBaseline` on a run cut at exit 124 that named one failure known on the base gives
+   `complete: false` with `why: "test here did not finish (exit 124)"`. A run cut at exit 143 is also
+   incomplete. Control: the same names with exit 1 give `complete: true`. Finish keeps its own guard
+   (124/137/143 and `stalled` are never green).

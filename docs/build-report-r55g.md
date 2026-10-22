@@ -133,13 +133,10 @@ background jobs), and does the old behaviour hold exactly; (5) does the change o
 preference (theme, locale, notifications). `test/gate-review-brief.test.js` checks both briefs ask all
 five; red by swapping `24ce390`'s `review.js` (the first three only) back in.
 
-**The tell line** is wired: `reviewBrief` and `vendorBrief` end with r55w's `tellLine(lead, id)`
-(id = `--by`, else `rv-<id>`; `rv-<vendor>` for the vendor brief). This branch's own `src/brief.js`
-does not export it yet, so the call is guarded with `typeof`, and the brief has no tell line until r55w
-merges. Nothing for the lead to wire: the same test loads r55w's `brief.js` and `plan.js` from
-`5acc1e1` into a copy of `src/` and asserts the last line of both briefs is the tell line (red with the
-scaffold's `brief.js`, `3ef17d0`, which has none). Merged with `rig/r55w` in a scratch tree, the new
-test, brief-five, crew, up-guard-init and gate-vendor all pass.
+**The tell line**: since main was merged in (`45449c7`, with r55w), `review.js` imports `tellLine`
+from `src/brief.js` directly, and both briefs end with it: id = `--by`, else `rv-<id>`; `rv-<vendor>`
+for the vendor brief. `test/gate-review-brief.test.js` asserts it is the last line of both, red with
+the scaffold's `brief.js` (`3ef17d0`), which has no `tellLine`.
 
 ## Lead's follow-up: after the fold, and the detected CI command
 
@@ -246,11 +243,9 @@ README paragraph:
 
 ## What's left, and what I need
 
-- **r55w**: `reviewBrief` and `vendorBrief` call `tellLine` through a `typeof` check so this branch runs
-  on its own; once r55w is merged it can become a plain import (their review said so). It is not in my
-  way either way.
-- **r55q**: the five findings in `docs/review-r55q.md`; finish already guards its side of 2 and 5.
-  Finding 4 (baseline as its own record vs. a field) needs one shape named for the README.
+- **r55w**: done. `tellLine` is a plain import since main was merged in.
+- **r55q**: all five findings in `docs/review-r55q.md` verified fixed or settled at `45449c7` (see its
+  "Verified" section); one non-blocking nit is left there (the `ci exit 0` summary line).
 - **Not built**: `git rebase --update-refs` for stacked branches is off (it would move other slices'
   branches). The fold check and detected CI are now built (section above).
 - **For the owner**: nothing to send or press. The lead merges (order m, u, w, q, g), releases 5.5.0.

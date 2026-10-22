@@ -73,8 +73,8 @@ await suite('rig 5.5, what every review brief asks (r55g)', async (s) => {
     breaks: swapOld,
   })
 
-  // r55w's export (rig/r55w at 5acc1e1) merged in: both briefs end with its tell line.
-  const merged = srcWith('merged', { 'brief.js': '5acc1e1', 'plan.js': '5acc1e1' })
+  // r55w's tellLine is merged (main at 515b118) and imported plainly: both briefs end with it.
+  const merged = join(RIG, 'src')
   let withTell = merged
   await s.check('with r55w’s tellLine, every brief ends with it, naming the reviewer', {
     assert: async () => {

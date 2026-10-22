@@ -6,7 +6,7 @@ import { tryGit } from '../sh.js'
 import { terminal } from '../terminal.js'
 import { rigDir } from '../rigdir.js'
 import { MINDSET } from '../mindset.js'
-import * as briefs from '../brief.js'
+import { tellLine } from '../brief.js'
 import { recordTiming } from '../timings.js'
 import { builderVendor, recordVerdict, sameVendorReason, vendorOf } from '../vendor.js'
 import { roundStart } from '../decisions.js'
@@ -75,11 +75,6 @@ export default function review(args) {
 
 const VALUE_FLAGS = new Set(['--base', '--by', '--launch-cmd', '--vendor', '--pass', '--fail', '--sha', '--ms', '--since'])
 const leadOf = (cfg) => cfg.lead || process.env.RIG_LEAD || null
-
-/** r55w's tell line, when that module has it: the last line of every brief. */
-function tellLine(lead, id) {
-  return typeof briefs.tellLine === 'function' ? briefs.tellLine(lead, id) : null
-}
 
 /**
  * `rig review --vendor`: write the second-vendor brief, or record its verdict on a sha. A pass from
@@ -224,7 +219,9 @@ Record it on this sha, one line each, with what you ran or what you found:
     rig review --vendor ${vendor} --fail "<file:line — what goes wrong>" --sha ${short}
 
 A pass on any other sha does not count. Findings beyond one line go to \`docs/review-final.md\`.
-${tell ? `\n${tell}\n` : ''}`
+
+${tell}
+`
   return { text, files, from }
 }
 function firstBare(args) {
@@ -295,9 +292,8 @@ ${rules.length ? `## What must not happen (from the plan)\n${rules.map((r) => '-
 Write \`${out}\`: actionable findings only, each with the file and line, the concrete input or state
 that goes wrong, and what the author should check. Say "no findings" if there are none; do not pad it.
 Commit only that file.
-${(() => {
-  const tell = tellLine(lead, by || `rv-${agent.id}`)
-  return tell ? `\n${tell}\n` : ''
-})()}`
+
+${tellLine(lead, by || `rv-${agent.id}`)}
+`
   return { text, files, out }
 }
