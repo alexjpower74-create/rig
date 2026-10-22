@@ -240,6 +240,15 @@ follows `working`:
 - Three older controls were moved onto the new loop's text (blocked, short turn, never started).
   All still red.
 
+## QA on 5acc1e1: NOT green, one VOID in a control of mine
+
+`rig qa 5acc1e1 --run "npm ci --silent && npm run check"`: `rig qa: test exit 1 at 5acc1e1 (NOT
+green)`. The failure was a VOID, not a failure in the code. The control for "two rig tell commands
+back to back are read in that order" built names from `1e6 - pid`. In the QA run the pids were past
+1,000,000, so that number was negative, sorted the right way round, and the control passed. The new
+control sorts newest first whatever the pid (`9e15 - Date.now()`). Fixed in its own commit; QA
+re-runs on the head.
+
 ## Shown
 
 `rig up --dry-run` on a fixture plan with a claim form that "refuses claims over the limit":

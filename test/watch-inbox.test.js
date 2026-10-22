@@ -500,12 +500,13 @@ Do b.
       }
       return true
     },
-    // Names that sort the wrong way round whenever both land in one second.
+    // Names that always sort newest first. (The first control, `1e6 - pid`, went VOID under rig qa:
+    // past pid 1,000,000 that number is negative and sorts the right way round.)
     breaks: broken([
       [
         'src/inbox.js',
         "`${stamp(now)}-${String(seq++).padStart(6, '0')}-${process.pid}-",
-        '`${stamp(now).slice(0, 15)}-${String(1e6 - process.pid)}-',
+        '`${String(9e15 - now.getTime())}-${process.pid}-',
       ],
     ]),
     timeout: 30_000,
