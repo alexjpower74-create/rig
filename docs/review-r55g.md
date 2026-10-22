@@ -42,8 +42,8 @@ the tip, `24ce390`, unpacked with `git archive`: gate-vendor 10/10, gate-finish 
 gate-review-brief 3/3, 0 void.
 
 My repros, against `24ce390`'s `src/vendor.js`, with builders from `claude --model opus`:
-- **1. Unknown vendor names: FIXED.** `--vendor me`, `reviewer`, and the persona names `zyro` and
-  `cobalt` are all refused ("not a vendor the rig knows … list it under \"vendors\""). `openai`,
+- **1. Unknown vendor names: FIXED.** `--vendor me`, `reviewer`, and two made-up persona names are
+  all refused ("not a vendor the rig knows … list it under \"vendors\""). `openai`,
   `codex` and `gpt-6-astra` still count, and so does `acme` once it is listed under `vendors`.
   `vendorGate` runs the same check at finish, so a `me` pass already in reviews.jsonl is refused there too.
 - **2. Mixed crews: FIXED.** With `vendor: ["claude", "codex"]`, a pass from `openai` or `codex` is
