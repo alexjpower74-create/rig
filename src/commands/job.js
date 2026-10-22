@@ -82,17 +82,38 @@ export default async function job(args) {
   say(`briefed ${pane}; waiting up to ${minutes} min for idle, done or blocked`)
 
   const until = start + minutes * 60_000
-  let left = false
+  // Never trust a stale status. The pane's last status (often "done" from its previous turn) is still
+  // what herdr reports for a moment after the prompt, and herdr may bump its counter once (done → idle)
+  // before the new turn starts: on 2026-10-22 a job read that as finished, at 0 min, with the output
+  // MISSING while the member was just starting. A turn is finished only when one of these is seen
+  // after the prompt:
+  //   - completion_seq moved past its value before the prompt, and the pane is stopped;
+  //   - a new working (or blocked) was seen, then a stopped state at a later state_change_seq;
+  //   - state_change_seq moved by 2 or more and the pane is stopped (a whole turn between two polls).
+  let started = false
+  let sawWorking = false
+  let workingSeq = null
   let now = before
+  let finished = false
   let timedOut = false
   for (;;) {
     await sleep(pollMs)
     const info = agentInfo(pane)
     if (info) now = info
-    const changed = now.seq != null && before.seq != null && now.seq !== before.seq
-    if (now.status === 'working' || now.status === 'blocked' || changed) left = true
-    if (left && STOPPED.has(now.status)) break
-    if (!left && Date.now() - start >= startMs) break
+    const moved = now.seq != null && before.seq != null ? now.seq - before.seq : 0
+    const completed = now.completion != null && before.completion != null && now.completion !== before.completion
+    if (now.status === 'working' && !sawWorking) {
+      started = sawWorking = true
+      workingSeq = now.seq
+    }
+    if (now.status === 'blocked') started = true
+    if (completed || moved >= 2) started = true
+    finished =
+      now.status === 'blocked' ||
+      (STOPPED.has(now.status) &&
+        (completed || moved >= 2 || (sawWorking && (workingSeq == null || now.seq == null || now.seq !== workingSeq))))
+    if (finished) break
+    if (!started && Date.now() - start >= startMs) break
     if (Date.now() >= until) {
       timedOut = true
       break
@@ -104,7 +125,7 @@ export default async function job(args) {
   if (timedOut) {
     say(`${pane} is ${now.status} after ${mins} min: DEADLINE (${minutes} min) passed`)
     code = EXIT.deadline
-  } else if (!left) {
+  } else if (!finished) {
     say(`${pane} never started: still ${now.status} ${Math.round(startMs / 1000)} s after the prompt`)
     code = EXIT.neverStarted
   } else say(`${pane} is ${now.status} after ${mins} min`)

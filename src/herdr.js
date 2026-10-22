@@ -169,10 +169,18 @@ export function readHint(name, sliceIds) {
 // Briefing one agent (`rig job`). The one place the rig submits a prompt: to an IDLE agent, between
 // turns, which is what `herdr agent prompt` exists for. A working or blocked agent is never prompted.
 
-/** The agent in a pane: { status, seq, dir (its cwd), ... } with herdr's agent_status and state_change_seq, or null. */
+/** The agent in a pane: { status, seq, completion (completion_seq), dir (its cwd), ... } with herdr's agent_status and state_change_seq, or null. */
 export function agentInfo(target) {
   const a = json(['agent', 'get', target])?.agent
-  return a ? { ...a, status: a.agent_status ?? 'unknown', seq: a.state_change_seq ?? null, dir: a.foreground_cwd ?? a.cwd ?? null } : null
+  return a
+    ? {
+        ...a,
+        status: a.agent_status ?? 'unknown',
+        seq: a.state_change_seq ?? null,
+        completion: a.completion_seq ?? null,
+        dir: a.foreground_cwd ?? a.cwd ?? null,
+      }
+    : null
 }
 
 export function agentPrompt(target, text) {

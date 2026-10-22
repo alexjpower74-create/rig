@@ -210,6 +210,36 @@ Every fix has a check whose control swaps the ef60454 code back in, and every co
      and says so" (red: default 60), and "a 10-minute poll asked for is clamped: idle noticed within
      6 s" (measured with `r.ms`; red: cap 60 s).
 
+## Fix: `rig job` never trusts a stale status (lead's report, 2026-10-22)
+
+The lead's bug, seen with the bash script: the pane's last status was `done`. After the prompt, the
+wait returned before the agent switched, so the job saw the stale `done` and exited at 0 min with
+the output MISSING. The 5acc1e1 loop had the same hole in another form: any `state_change_seq` bump
+counted as "left idle". herdr can bump it once (done → idle) before the new turn starts, and that
+bump plus a stopped status ended the job.
+
+Now `rig job` records `state_change_seq` and `completion_seq` before it prompts. A turn is finished
+only when one of these holds:
+- `completion_seq` moved and the pane is stopped;
+- a new `working` (or `blocked`) was seen, then a stopped state at a later `state_change_seq`;
+- `state_change_seq` moved by 2 or more and the pane is stopped (a whole turn between two polls).
+
+A single bump with no turn reads as "never started" (exit 7) after 60 s.
+
+Checks in `test/watch-job.test.js` (19 checks, all green, every control red). The fake pane can now
+write its output file when it finishes, and it reports `completion_seq`, which counts only a stop that
+follows `working`:
+- **previous status done, a done → idle bump at 50 ms, working at 2.5 s, done (writes the output) at
+  3.5 s:** waits for the real finish, and the output is found. **Seen red against the 5acc1e1 loop
+  before the fix: exit 6, output MISSING, after 288 ms.** The control is that loop again.
+- previous status done, no counter change, working late: still waits. Red: the status trusted as it
+  reads (codex-job's logic).
+- only the stale bump and no turn: exit 7, not done. Red: a bump plus a stopped status counted as done.
+- `completion_seq` moving is a finished turn even with no `state_change_seq` and no `working` seen
+  by the poll. Red: completion ignored (exit 7).
+- Three older controls were moved onto the new loop's text (blocked, short turn, never started).
+  All still red.
+
 ## Shown
 
 `rig up --dry-run` on a fixture plan with a claim form that "refuses claims over the limit":

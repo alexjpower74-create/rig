@@ -34,16 +34,28 @@ const st = JSON.parse(fs.readFileSync(S, 'utf8'))
 const [noun, verb, target, text] = process.argv.slice(2)
 fs.appendFileSync(${JSON.stringify(herdrLog)}, JSON.stringify(process.argv.slice(2)) + '\\n')
 const p = st.panes[target]
+// A step may also write a file (the member's output, written as it finishes). completion_seq counts
+// the turns that finished; a pane with noSeq has no state_change_seq, a pane with completion has one.
 const now = () => {
-  let status = p.status, seq = p.seq
-  if (p.promptedAt) for (const [ms, s] of p.script) if (Date.now() - p.promptedAt >= ms) { status = s; seq++ }
-  return { status, seq }
+  let status = p.status, seq = p.seq, done = p.completion ?? 0, prev = p.status
+  if (p.promptedAt)
+    for (const [ms, s, file] of p.script)
+      if (Date.now() - p.promptedAt >= ms) {
+        status = s; seq++
+        if ((s === 'idle' || s === 'done') && prev === 'working') done++
+        prev = s
+        if (file && !fs.existsSync(file)) fs.writeFileSync(file, 'output\\n')
+      }
+  return { status, seq, done }
 }
 if (noun !== 'agent') process.exit(1)
 if (!p) { console.error('{"error":{"code":"agent_not_found"}}'); process.exit(1) }
 if (verb === 'get') {
   const n = now()
-  console.log(JSON.stringify({ result: { agent: { pane_id: target, agent: 'fake', agent_status: n.status, state_change_seq: n.seq, cwd: p.cwd, foreground_cwd: p.cwd } } }))
+  const agent = { pane_id: target, agent: 'fake', agent_status: n.status, cwd: p.cwd, foreground_cwd: p.cwd }
+  if (!p.noSeq) agent.state_change_seq = n.seq
+  if (p.completion != null) agent.completion_seq = n.done
+  console.log(JSON.stringify({ result: { agent } }))
 } else if (verb === 'prompt') {
   const n = now()
   if (n.status === 'working' || n.status === 'blocked') { console.error('{"error":{"code":"agent_' + n.status + '"}}'); process.exit(1) }
@@ -57,7 +69,7 @@ if (verb === 'get') {
 )
 chmodSync(join(bin, 'herdr'), 0o755)
 
-const pane = (status, script, seq = 10, cwd) => ({ status, script, seq, cwd })
+const pane = (status, script, seq = 10, cwd, extra = {}) => ({ status, script, seq, cwd, ...extra })
 const setPanes = (panes) => {
   writeFileSync(statePath, JSON.stringify({ panes }))
   writeFileSync(herdrLog, '')
@@ -190,7 +202,10 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
       const r = await job(['p1', 'do it', '--deadline', '0.1'])
       return expectCode(r, 5, () => /BLOCKED/.test(r.out) && r.out.includes('p1 is blocked'))
     },
-    breaks: broken([['src/commands/job.js', "new Set(['idle', 'done', 'blocked'])", "new Set(['idle', 'done'])"]]),
+    breaks: broken([
+      ['src/commands/job.js', "new Set(['idle', 'done', 'blocked'])", "new Set(['idle', 'done'])"],
+      ['src/commands/job.js', "      now.status === 'blocked' ||\n", ''],
+    ]),
   })
 
   await s.check('a pane that never finishes hits the deadline: exit 4, DEADLINE named, within a poll of it', {
@@ -243,7 +258,8 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
       return expectCode(r, 0, () => r.out.includes('p1 is idle'))
     },
     breaks: broken([
-      ['src/commands/job.js', " || now.status === 'blocked' || changed) left = true", " || now.status === 'blocked') left = true"],
+      ['src/commands/job.js', 'if (completed || moved >= 2) started = true', 'if (completed) started = true'],
+      ['src/commands/job.js', '(completed || moved >= 2 || (sawWorking', '(completed || (sawWorking'],
     ]),
   })
 
@@ -254,7 +270,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
       return expectCode(r, 7, () => r.out.includes('p1 never started'))
     },
     // Rig 5.0's codex-job: wait for working (which never came), then for idle, which matched at once.
-    breaks: broken([['src/commands/job.js', '} else if (!left) {', '} else if (false) {']]),
+    breaks: broken([['src/commands/job.js', '} else if (!finished) {', '} else if (false) {']]),
   })
 
   await s.check('the task it sends ends with the tell line, naming the lead and the id', {
@@ -349,6 +365,102 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
       return expectCode(r, 0, () => r.out.includes(`expected output ready: ${join(member, 'docs', 'review.md')}`))
     },
     breaks: broken([['src/commands/job.js', 'resolve(now.dir || before.dir || process.cwd(), expect)', 'resolve(process.cwd(), expect)']]),
+  })
+
+  // ---------------------------------------------------------------------------------------------
+  // A stale status never counts (the lead's bug, 2026-10-22): the pane was "done" from its last turn,
+  // the switch to working came late, and the job saw the old "done" and exited at 0 min with the
+  // output MISSING while the member was just starting. Here herdr also bumps its counter once right
+  // after the prompt (done → idle) before the real turn begins: a bump that is not a new turn.
+  const late = (out) =>
+    pane(
+      'done',
+      [
+        [50, 'idle'],
+        [2500, 'working'],
+        [3500, 'done', out],
+      ],
+      10,
+      undefined,
+      { completion: 4 },
+    )
+
+  await s.check('a pane whose last status was done and whose switch to working is late: waits for the new turn, output found', {
+    assert: async () => {
+      const out = join(work, 'late-output.md')
+      rmSync(out, { force: true })
+      setPanes({ p1: late(out) })
+      const r = await job(['p1', 'start late', '--expect', out, '--deadline', '0.5'], { env: { RIG_JOB_POLL_MS: '100' } })
+      return expectCode(r, 0, () => r.ms >= 3500 && r.out.includes(`expected output ready: ${out}`) && r.out.includes('p1 is done'))
+    },
+    // 5acc1e1's loop: any counter bump counted as having left idle, so the done → idle bump ended it.
+    breaks: broken([
+      [
+        'src/commands/job.js',
+        '    finished =\n',
+        "    if (now.seq !== before.seq || now.status === 'working') started = true\n    if (started && STOPPED.has(now.status)) { finished = true; break }\n    finished =\n",
+      ],
+    ]),
+  })
+
+  await s.check('stale done with no counter change at all: still waits for the late turn', {
+    assert: async () => {
+      const out = join(work, 'late-output-2.md')
+      rmSync(out, { force: true })
+      setPanes({
+        p1: pane('done', [
+          [2500, 'working'],
+          [3500, 'done', out],
+        ]),
+      })
+      const r = await job(['p1', 'start late', '--expect', out, '--deadline', '0.5'])
+      return expectCode(r, 0, () => r.ms >= 3500 && r.out.includes('expected output ready'))
+    },
+    // codex-job's logic: the status as it reads now, trusted at once.
+    breaks: broken([
+      ['src/commands/job.js', '    finished =\n', '    if (STOPPED.has(now.status)) { finished = true; break }\n    finished =\n'],
+    ]),
+  })
+
+  await s.check('only a stale bump and no turn: "never started" (exit 7), not done', {
+    assert: async () => {
+      setPanes({ p1: pane('done', [[50, 'idle']], 10, undefined, { completion: 4 }) })
+      const r = await job(['p1', 'x', '--deadline', '1'], { env: { RIG_JOB_START_MS: '1500' } })
+      return expectCode(r, 7, () => r.out.includes('p1 never started'))
+    },
+    breaks: broken([
+      [
+        'src/commands/job.js',
+        '    finished =\n',
+        '    if (now.seq !== before.seq && STOPPED.has(now.status)) { finished = true; break }\n    finished =\n',
+      ],
+    ]),
+  })
+
+  await s.check('completion_seq advancing is a finished turn, even when the poll saw no working and herdr gives no state counter', {
+    assert: async () => {
+      setPanes({
+        p1: pane(
+          'idle',
+          [
+            [30, 'working'],
+            [60, 'idle'],
+          ],
+          10,
+          undefined,
+          { completion: 7, noSeq: true },
+        ),
+      })
+      const r = await job(['p1', 'quick', '--deadline', '1'], { env: { RIG_JOB_POLL_MS: '700', RIG_JOB_START_MS: '3000' } })
+      return expectCode(r, 0, () => r.out.includes('p1 is idle'))
+    },
+    breaks: broken([
+      [
+        'src/commands/job.js',
+        'const completed = now.completion != null && before.completion != null && now.completion !== before.completion',
+        'const completed = false',
+      ],
+    ]),
   })
 })
 
