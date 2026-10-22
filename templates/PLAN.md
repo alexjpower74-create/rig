@@ -27,6 +27,15 @@ Anti-references:
 ## What done looks like
 <the screen you want to see, the number you want to read, the thing that happens — concrete>
 
+## Refusals
+<every refusal a screen can hit, and its repair: the field to fill, or the message that names who acts>
+A refusal with no repair is a dead end, and dead ends are the commonest defect a review finds. One row
+per refusal. No screen, or no rules behind it? Replace this section with the line `UI: none`.
+
+| Refusal (what is refused, where) | Repair (the field to fill, or who acts) |
+|---|---|
+| <"Submit" on the claim form: the amount is over the approved limit> | <the message names who acts: "Ask your approver to raise the limit"> |
+
 ## Where we're starting from
 <what exists today, its commit, and what is wrong with it: the honest before picture>
 

@@ -1,7 +1,7 @@
 import { existsSync, copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { MINDSET } from './mindset.js'
-import { withoutPlaceholders } from './plan.js'
+import { withoutPlaceholders, refusalRows } from './plan.js'
 import { rigDir } from './rigdir.js'
 
 /**
@@ -56,6 +56,29 @@ export function taskText(task) {
     .trim()
 }
 
+/**
+ * The tell line: the last line of every brief, so the one thing a peer cannot miss is how to reach
+ * the lead. With no lead named it leaves the name out, and `rig tell` looks it up (config, RIG_LEAD).
+ */
+export function tellLine(lead, id) {
+  return `When you finish, get blocked or have a question, tell the lead, never the human: \`rig tell ${lead ? lead + ' ' : ''}"${id}: done|blocked|question — <one line>"\``
+}
+
+/**
+ * Item 6, said outright: a question left in a peer's own pane reaches nobody. Ends with the tell
+ * line, and every brief ends with this block.
+ */
+export function askTheLead(lead, id) {
+  return `## Ask the lead, never the human
+A question left in your own pane reaches nobody: nobody is reading it. Ask the lead. Only three
+things go to the human, because they need the human's own hands: a permission dialog, a go (for
+anything that leaves the machine), and a taste call. Everything else (a question, a decision you
+cannot make alone, a blocker, "done") goes to the lead, and the lead answers or escalates.
+
+${tellLine(lead, id)}
+`
+}
+
 /** The standing orders every agent gets, plus the plan's brief and its own slice. */
 export function briefFor(plan, agent, ctx) {
   // A slice still holding the template's <slice title> or <task> reads as not stated, not as text.
@@ -87,7 +110,9 @@ ${ctx.issue ? `Your issue: #${ctx.issue.number}${ctx.issue.url ? ' ' + ctx.issue
 ${section("What it's for", plan.purpose)}${section('The feeling', plan.feeling)}${section('The specialist', specialistFor(plan, agent))}${best}${section(
   'The bar',
   plan.bar,
-)}${section('Who uses it, on what', plan.users)}${section('What done looks like', plan.done)}${section("Where we're starting from", plan.start)}${
+)}${section('Who uses it, on what', plan.users)}${section('What done looks like', plan.done)}${
+  refusalRows(plan.refusals).length ? section('Refusals (every one has a repair)', plan.refusals) : ''
+}${section("Where we're starting from", plan.start)}${
   mustNot.length
     ? `## What must not happen — hard rules, from the plan
 ${mustNot.map((r) => '- ' + r).join('\n')}
@@ -159,7 +184,7 @@ they win. In your report, name the principles behind them that you designed to.
 ## House rules
 
 - **You will not be messaged by keystrokes.** Nobody types into your pane. If you need something,
-  put it in your report.
+  ask the lead with \`rig tell\` (the last line of this brief), and put it in your report.
 - **Keep scratch files inside your own worktree.** Reading or writing outside the working directory
   triggers a permission prompt, and a prompt stops you dead until a human notices.
 - **Stop only what you started.** Never \`pkill\`/\`killall\` a server by name, and never free a port
@@ -178,5 +203,6 @@ Mark items DONE or REJECTED in place. This file is a record, not a queue.
 
 **Commit it along with your work.** It is a tracked file, deliberately: your reasoning is worth
 more than your diff to whoever picks this up, and it should survive your worktree being removed.
-`
+
+${askTheLead(ctx.lead, agent.id)}`
 }

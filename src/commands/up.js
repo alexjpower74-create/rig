@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync, existsSync, lstatSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
-import { loadPlan, missingBrief, barHasNoNumber, droppedNumbers } from '../plan.js'
+import { loadPlan, missingBrief, barHasNoNumber, droppedNumbers, refusalsGap } from '../plan.js'
 import { ensureWorktree } from '../worktrees.js'
 import { briefFor, shareTaste } from '../brief.js'
 import { openSliceIssues } from '../issues.js'
@@ -9,10 +9,12 @@ import { reportPath } from '../reports.js'
 import { terminal } from '../terminal.js'
 import { git } from '../sh.js'
 import { rigDir } from '../rigdir.js'
+import { inboxRoot, leadName, leadDir, watcherState, freshInboxNote, DEFAULT_WAIT_MIN } from '../inbox.js'
+import inbox from './inbox.js'
 
 const YEL = (s) => `\x1b[33m${s}\x1b[0m`
 
-export default function up(args) {
+export default async function up(args) {
   const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
@@ -39,6 +41,18 @@ export default function up(args) {
   for (const d of droppedNumbers(plan))
     console.log(YEL(`read as a placeholder and left out of the briefs, though it has a number (## ${d.heading}): `) + d.line)
   if (barHasNoNumber(plan)) console.log(YEL('the bar has no number: nothing can measure it, so nothing can say it was missed.') + '\n')
+  const refusals = refusalsGap(plan)
+  if (refusals)
+    console.log(
+      YEL('the plan has a UI over rules and no ## Refusals matrix') +
+        ` (${refusals}).\n  List every refusal a screen can hit and its repair: the field to fill, or the message naming who acts.\n  A refusal with no repair is a dead end. No UI here? Add the line \`UI: none\` to the plan.\n`,
+    )
+  const lead = leadName(cfg)
+  if (!lead)
+    console.log(
+      YEL('no lead named: ') +
+        'set "lead" in .rig/config.json (or export RIG_LEAD). Peers tell the lead when they finish or block, and the tell line in each brief needs the name.\n',
+    )
 
   for (const agent of plan.agents) {
     if (dry) {
@@ -63,6 +77,7 @@ export default function up(args) {
 
   if (dry) {
     console.log('\ndry run — nothing created')
+    watcherNote(cfg, lead)
     return
   }
 
@@ -85,6 +100,7 @@ export default function up(args) {
       reportPath: reportPath(m.agent),
       issue: opened.issues[m.agent.id] || null,
       taste: shareTaste(root, m.wt.path),
+      lead,
     })
     writeFileSync(join(m.wt.path, '.rig', 'BRIEF.md'), brief)
   }
@@ -118,7 +134,35 @@ export default function up(args) {
     }
   }
 
+  const watch = watcherNote(cfg, lead)
   console.log(`\nnext: \`rig status\` to watch slices, \`rig qa <sha>\` to grade a commit.`)
+  // --watch: `rig up` becomes the watcher itself. Run `rig up --watch` as a background job and its
+  // exit, on the first message or the deadline, wakes the lead.
+  if (watch && args.includes('--watch')) {
+    console.log(`\nwatching: ${watch.join(' ')}`)
+    await inbox(watch.slice(2))
+  }
+}
+
+/**
+ * The lead's inbox watcher: whether one is armed, and the exact background command when not.
+ * Returns that command as argv (['rig', 'inbox', lead, …]), or null when there is no lead to watch for.
+ */
+function watcherNote(cfg, lead) {
+  if (!lead) return null
+  const minutes = cfg.inboxDeadline ?? DEFAULT_WAIT_MIN
+  const cmd = ['rig', 'inbox', lead, '--wait', '--deadline', String(minutes)]
+  const root = inboxRoot(cfg)
+  const w = watcherState(root, lead)
+  console.log(`\nlead inbox: ${lead}  (${leadDir(root, lead)})`)
+  const note = freshInboxNote(cfg, process.env, lead)
+  if (note) console.log(`  ${note}`)
+  if (w) console.log(`  watcher armed: pid ${w.pid}, until ${new Date(w.until).toTimeString().slice(0, 5)}`)
+  else {
+    console.log(`  ${YEL('no watcher armed.')} Run this as a background job; it exits when a peer tells you something. Re-arm after each:`)
+    console.log(`    ${cmd.join(' ')}`)
+  }
+  return cmd
 }
 
 /**
