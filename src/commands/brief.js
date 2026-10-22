@@ -4,6 +4,7 @@ import { loadPlan } from '../plan.js'
 import { worktreePath } from '../worktrees.js'
 import { briefFor, shareTaste } from '../brief.js'
 import { reportPath } from '../reports.js'
+import { leadName } from '../inbox.js'
 
 // Prints the briefing so you can hand it over deliberately — paste it, or send it with whatever
 // message channel your agents use. The rig will not type into a pane on your behalf.
@@ -31,6 +32,7 @@ export default function brief(args) {
       planPath: cfg.plan,
       reportPath: reportPath(agent),
       taste: shareTaste(root, path),
+      lead: leadName(cfg),
     }),
   )
 }

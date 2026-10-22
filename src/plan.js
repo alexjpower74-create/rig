@@ -133,7 +133,7 @@ export function parsePlan(text) {
   for (const a of agents) a.task = a.task.join('\n').trim()
   const sections = parseSections(lines)
   const fields = briefFields(sections)
-  return { title, agents, sections, ...fields, negativeCommand: negativeCommand(fields.checks) }
+  return { title, agents, sections, ...fields, ui: uiLine(text), negativeCommand: negativeCommand(fields.checks) }
 }
 
 /**
@@ -238,7 +238,76 @@ export function briefFields(sections) {
     tools: find(/^tools\b/i),
     budget: find(/^budget (and|&) autonomy\b/i),
     handBack: find(/^what to hand back\b/i),
+    refusals: find(/^refusals\b/i),
   }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Item 14: the refusal → repair matrix. Dead ends (a move refused with no way to fix it) were the
+// largest class of defects found in one review round, so a plan whose work is a UI over rules lists
+// every refusal a screen can hit and its repair: the field to fill, or the message naming who acts.
+
+/** The plan's own `UI:` line (`UI: none`, `UI: web`…), lower-cased, or null when it has none. */
+export function uiLine(text) {
+  const m = (text || '').match(/^\s*[-*]?\s*\**UI\**:\**\s*(.+?)\s*$/m)
+  return m ? m[1].replace(/[`*.]/g, '').trim().toLowerCase() : null
+}
+
+// A file a person looks at: markup, styles, components, screens.
+const UI_PATH =
+  /\.(html?|css|scss|jsx|tsx|vue|svelte|astro|swift|kt|xib|storyboard)\b|(^|\/)(ui|web|views?|pages|screens|components|app\/routes|public)(\/|$)/i
+// Words that say there is a screen…
+const UI_WORDS = /\b(screens?|pages?|forms?|buttons?|dialogs?|modals?|taps?|clicks?|UI)\b/
+// …and words that say it enforces rules (refuses some moves).
+const RULE_WORDS =
+  /\b(rules?|refus\w*|reject\w*|validat\w*|permissions?|approv\w*|not allowed|allow(ed|s)?|forbid\w*|blocked|limits?|quota|eligib\w*|disabled?)\b/i
+
+/** The refusal rows of a `## Refusals` body that are filled in: table rows or bullets, not the template's. */
+export function refusalRows(body) {
+  const rows = []
+  for (const raw of (body || '').split('\n')) {
+    const l = raw.trim()
+    if (!l) continue
+    let cells
+    if (l.startsWith('|')) {
+      cells = l
+        .replace(/^\||\|$/g, '')
+        .split('|')
+        .map((c) => c.trim())
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c) || c === '')) continue // the separator row
+      if (/^refusal\b/i.test(cells[0])) continue // the header row
+    } else if (/^[-*]\s+/.test(l)) cells = l.replace(/^[-*]\s+/, '').split(/\s*(?:→|->)\s*/)
+    else continue
+    if (cells.every((c) => /^<.*>$/.test(c) || c === '')) continue // the template's own example
+    rows.push(cells.join(' → '))
+  }
+  return rows
+}
+
+/**
+ * Why this plan needs a `## Refusals` matrix it does not have, as a sentence, or null when it has
+ * one or needs none. The trigger: the plan's work has a UI (a slice owns UI files, the brief or a task
+ * talks about screens, or a `UI:` line says so) and that UI enforces rules (the brief or a task talks
+ * about rules, refusals, validation, permissions, limits). A `UI: none` line silences it. The hard
+ * rules for the agents (What must not happen, Rules) do not count as rules the product enforces.
+ */
+export function refusalsGap(plan) {
+  const ui = plan.ui ?? null
+  if (ui === 'none' || ui === 'no') return null
+  if (refusalRows(plan.refusals).length) return null
+  const prose = [plan.purpose, plan.users, plan.done, plan.feeling, plan.bar, plan.start, ...plan.agents.map((a) => a.task)]
+    .map((t) => withoutPlaceholders(t || ''))
+    .join('\n')
+  // Test fixtures and examples are pages nobody uses.
+  const uiPath = plan.agents
+    .flatMap((a) => a.owns)
+    .find((o) => UI_PATH.test(o) && !/(^|\/)(tests?|examples?|fixtures?|__tests__)\//.test(o))
+  const uiWord = prose.match(UI_WORDS)?.[0]
+  const why = ui ? `its UI: line says "${ui}"` : uiPath ? `a slice owns ${uiPath}` : uiWord ? `it talks about "${uiWord}"` : null
+  if (!why) return null
+  const rule = prose.match(RULE_WORDS)?.[0]
+  if (!ui && !rule) return null
+  return `${why}${rule ? ` and "${rule}"` : ''}`
 }
 
 /** A references body split at its `Anti-references:` line: what to start from, and what not to make. */
