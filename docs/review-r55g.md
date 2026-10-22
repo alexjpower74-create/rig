@@ -34,3 +34,23 @@ I did not review finish.js, fold.js or decisions.js line by line: those findings
   both `reviewBrief` and `vendorBrief`. The `typeof briefs.tellLine === 'function'` fallback can now
   go: r55w's commit `ef60454` exports it.
 - Lead resolution matches r55w (`cfg.lead || RIG_LEAD`).
+
+## Verified at 24ce390 (2026-10-22, r55w)
+
+Read `git show 1f0a290` (src/vendor.js, src/commands/review.js, the gate tests) and ran its checks at
+the tip, `24ce390`, unpacked with `git archive`: gate-vendor 10/10, gate-finish 20/20 + 3/3,
+gate-review-brief 3/3, 0 void.
+
+My repros, against `24ce390`'s `src/vendor.js`, with builders from `claude --model opus`:
+- **1. Unknown vendor names: FIXED.** `--vendor me`, `reviewer`, and the persona names `zyro` and
+  `cobalt` are all refused ("not a vendor the rig knows … list it under \"vendors\""). `openai`,
+  `codex` and `gpt-6-astra` still count, and so does `acme` once it is listed under `vendors`.
+  `vendorGate` runs the same check at finish, so a `me` pass already in reviews.jsonl is refused there too.
+- **2. Mixed crews: FIXED.** With `vendor: ["claude", "codex"]`, a pass from `openai` or `codex` is
+  refused ("one of the vendors that built this round") and one from `gemini` counts.
+- **3. Hand-over id: FIXED.** The line is now `rig job <pane> "Read .rig/REVIEW-final.md and follow it." --id rv-<vendor>`.
+  That matches r55w's `--id`, so the inbox reads `rv-openai: …`.
+
+Left, low and not blocking: a mixed crew is only seen when `vendor` lists it. With `vendor` unset,
+the launch command names one vendor, and a Codex member briefed through `rig job` is not counted.
+Worth one line in the README beside `vendor`.
