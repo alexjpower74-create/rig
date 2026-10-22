@@ -278,6 +278,8 @@ Owns:
 - test/upstream-*.test.js
 - test/snapshot.test.js
 - examples/snapshot-fixture.html
+- test/taste.test.js
+- src/taste/**
 - docs/review-r55w.md
 - docs/build-report-r55u.md
 
