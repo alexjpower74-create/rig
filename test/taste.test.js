@@ -24,9 +24,10 @@ import { createServer, request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { crc32, deflateSync } from 'node:zlib'
+import { crc32, deflateSync, inflateSync } from 'node:zlib'
 import * as H from '../harness/index.js'
 import { policy, runTaste } from '../src/commands/taste.js'
+import { captureAll } from '../src/taste/capture.js'
 import { guards, handlers, lanAddresses, view } from '../src/taste/server.js'
 import { localDay, tasteMarkdown } from '../src/taste/store.js'
 
@@ -155,6 +156,35 @@ function makeFixtures(dir) {
   return { refs, comps }
 }
 
+/**
+ * The top-left pixel of a PNG, as [r, g, b]. Row 0's first pixel reads the same under every PNG
+ * filter (its left and upper neighbours are zero), so no unfiltering is needed for it.
+ */
+function firstPixel(png) {
+  const type = png[25]
+  const bpp = type === 6 ? 4 : type === 2 ? 3 : null
+  if (!bpp || png[24] !== 8) throw new Error(`firstPixel: an 8-bit RGB or RGBA PNG, not type ${type}`)
+  const idat = []
+  for (let at = 8; at < png.length; ) {
+    const len = png.readUInt32BE(at)
+    if (png.toString('ascii', at + 4, at + 8) === 'IDAT') idat.push(png.subarray(at + 8, at + 8 + len))
+    at += 12 + len
+  }
+  const raw = inflateSync(Buffer.concat(idat))
+  return [raw[1], raw[2], raw[3]]
+}
+
+/** src/taste as it stood before the load fix (3de1d59), unpacked once, for the capture control. */
+let oldTasteDir = null
+function oldTaste() {
+  if (!oldTasteDir) {
+    oldTasteDir = realpathSync(mkdtempSync(join(tmpdir(), 'rig-taste-old-')))
+    roots.push(oldTasteDir)
+    spawnSync('sh', ['-c', `git -C "${join(here, '..')}" archive 3de1d59 src harness | tar -x -C "${oldTasteDir}"`])
+  }
+  return oldTasteDir
+}
+
 /** A local site for the --url path: one real page, and one that hangs up without answering. */
 function siteServer() {
   const page = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio</title>
@@ -165,6 +195,14 @@ h1{font-size:clamp(34px,6vw,72px);margin:8vh 6vw 2vh;font-weight:500}p{margin:0 
 <p>A made-up interiors studio, served by the test so a URL can be captured.</p><div class="grid"><div></div><div></div><div></div></div>`
   const s = createServer((req, res) => {
     if (req.url === '/dead') return req.socket.destroy()
+    // A page that fills in late, as a real one does from its API: white until its data comes, 1.2 s on.
+    if (req.url === '/late') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      return res.end(
+        '<!doctype html><title>Late</title><body style="margin:0;background:#fff"><script>fetch("/late-data").then(() => { document.body.style.background = "rgb(58, 143, 143)" })</script>',
+      )
+    }
+    if (req.url === '/late-data') return setTimeout(() => res.end('{}'), 1200)
     if (req.url === '/missing') {
       res.writeHead(404, { 'content-type': 'text/html; charset=utf-8' })
       return res.end('<!doctype html><title>Not found</title><h1>Page not found</h1>')
@@ -205,11 +243,21 @@ async function pointOn(page, selector) {
   })()`)
 }
 
+/**
+ * Tap or click the centre of `selector`, and resolve whether a click came of it. The page counts every
+ * click it is given (openBoard installs the counter ahead of the page's own script, and of any
+ * control's), so "did my tap register?" is a fact, not a wait: a tap a fling swallowed never becomes
+ * a click, and a dead button gets its click and does nothing with it.
+ */
 async function press(page, input, selector, { touch }) {
   const p = await pointOn(page, selector)
   if (!p) throw new Error(`${selector} is not hittable`)
+  const before = await clicks(page)
   await (touch ? input.tap(p.x, p.y) : input.click(p.x, p.y))
+  return waitFor(async () => (await clicks(page)) > before)
 }
+const clicks = (page) => page.eval('window.__rigClicks || 0')
+const CLICK_COUNTER = `window.__rigClicks = 0; window.addEventListener('click', () => { window.__rigClicks++ }, true)`
 
 /** One key, as a keyboard sends it: key, code and key code set, down then up. */
 async function pressKey(page, key) {
@@ -221,8 +269,26 @@ async function pressKey(page, key) {
 
 const progress = (page) => page.eval('document.getElementById("progress")?.textContent || ""')
 const onEnd = (page) => page.eval('!!document.getElementById("end")')
+const header = (page) => page.eval('document.getElementById("save")?.textContent || ""')
+/**
+ * The page's own word that every answer it took is on disk: "Saved" shows only once its queue is
+ * empty, and an answer leaves the queue only when the server says it wrote it. The barrier to read
+ * the disk after, in place of a sleep that guessed how long a save takes.
+ */
+const saved = (page) => waitFor(async () => (await header(page)) === 'Saved')
+/** One painted frame and the task after it: what a page does at once in answer to input has been done. */
+const frame = (page) => page.eval('new Promise((r) => requestAnimationFrame(() => setTimeout(() => r(true), 0)))')
 
-async function waitFor(fn, ms = 2000) {
+/**
+ * Wait until `fn` holds, and return true the moment it does. `ms` is a hang guard, not a budget: no
+ * check here may pass or fail on how fast this machine is. Every wait used to carry its own window
+ * (0.9 to 5 s) for a save, a swipe or a page to move on, and under a crew's load those windows went
+ * red on boards that were right: "a rating tapped straight after a swipe" found B on disk at 4, just
+ * after its 2 s ran out. A wait that must decide that something did NOT happen says how it knows
+ * (walk() does), and never leans on a window.
+ */
+const GUARD = 10_000
+async function waitFor(fn, ms = GUARD) {
   const until = Date.now() + ms
   while (Date.now() < until) {
     if (await fn()) return true
@@ -275,6 +341,7 @@ async function openBoard(browser, url, vp, { dark = false, before = null } = {})
   const page = await browser.newPage(null, { width: vp.width, height: vp.height, dpr: vp.dpr, mobile: vp.mobile })
   if (vp.touch) await page.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
   await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: dark ? 'dark' : 'light' }] })
+  await page.send('Page.addScriptToEvaluateOnNewDocument', { source: CLICK_COUNTER })
   // `before` runs ahead of the page's own script on every load (a skewed clock, for one).
   if (before) await page.send('Page.addScriptToEvaluateOnNewDocument', { source: before })
   await page.goto(url)
@@ -320,16 +387,20 @@ async function walk(page, ratings, { touch, notes = {}, shots = null }) {
       await press(page, input, '#note', { touch })
       await input.type(notes[i])
     }
-    await press(page, input, `.rate[data-rating="${ratings[i]}"]`, { touch })
-    const moved = await waitFor(async () => (await progress(page)) !== before || (await onEnd(page)), 900)
-    if (!moved && (await pointOn(page, '#next'))) {
-      await press(page, input, '#next', { touch })
-      await waitFor(async () => (await progress(page)) !== before || (await onEnd(page)), 900)
-    }
+    const landed = await press(page, input, `.rate[data-rating="${ratings[i]}"]`, { touch })
+    // What the tap did is known one frame after its click, never from a window: the board marks the
+    // rating pressed in the click itself and moves on 160 ms later; the old board (a control) marks it
+    // and waits for Next; a dead button does nothing at all, and the walk goes on, a tap the poorer.
+    await frame(page)
+    const moves = async () => (await progress(page)) !== before || (await onEnd(page))
+    const answered =
+      landed && ((await moves()) || (await page.eval(`!!document.querySelector('.rate[data-rating="${ratings[i]}"][aria-pressed=true]')`)))
+    if (answered && !(await moves()) && (await pointOn(page, '#next'))) await press(page, input, '#next', { touch })
+    if (answered) await waitFor(moves)
   }
   if (shots) await shots(page, 'end')
   await press(page, input, (await pointOn(page, '#finish')) ? '#finish' : '#done', { touch })
-  const closed = await waitFor(() => page.eval('!!document.getElementById("closed")'), 4000)
+  const closed = await waitFor(() => page.eval('!!document.getElementById("closed")'))
   return { ...input.counts(), closed, fits: fits.every((f) => f === true) ? true : fits.find((f) => f !== true) }
 }
 
@@ -349,6 +420,7 @@ const MISSING = `${site.base}/missing`
 const browser = await launch({ headless: true })
 const ARGS = ['--from', fx.refs, '--url', STUDIO, '--url', DEAD, '--url', MISSING, '--port', '0', '--no-open']
 const COMPS_ARGS = [...ARGS, '--comps', fx.comps, '--ask', 'Which header feels calm?']
+const LAN_ARGS = ['--from', fx.refs, '--port', '0', '--no-open']
 const RATINGS = [5, 2, 4, 1, 3, 5]
 const NAMES = ['ember', 'harbor', 'meadow', 'slate.png', 'tide.svg', STUDIO]
 const NOTE = 'calm, but the type is too small'
@@ -383,7 +455,7 @@ async function round(vp, { notes = {}, ratings = RATINGS, dark = false, shots = 
   try {
     page = await openBoard(browser, b.url, VIEWPORTS[vp], { dark })
     const counts = await walk(page, ratings, { touch: VIEWPORTS[vp].touch, notes, shots })
-    const path = await Promise.race([b.finished, sleep(4000).then(() => null)])
+    const path = await Promise.race([b.finished, sleep(GUARD).then(() => null)])
     return { ...counts, tastePath: path, json: ratingsJson(b.root), md: read(join(b.root, 'docs', 'TASTE.md')), refs: b.round.refs }
   } finally {
     await page?.close()
@@ -441,6 +513,12 @@ const pageBreak = (script) => () => {
 }
 
 await suite('rig taste', async (s) => {
+  // A check's timeout here is a hang guard. The harness's 10 s default was a budget every check that
+  // starts a board (Chrome, three URLs) paid out of, and under a crew's load the --lan check went red
+  // inside it with nothing wrong. Every wait inside a check is a guard on a real condition (waitFor).
+  const check = s.check.bind(s)
+  s.check = (name, o) => check(name, { timeout: 90_000, ...o })
+
   // Capture once up front, and keep what was said about the URLs that did not load.
   const warned = []
   const first = await board(ARGS, freshRepo(), { log: () => {}, warn: (m) => warned.push(String(m)) })
@@ -479,6 +557,29 @@ await suite('rig taste', async (s) => {
         st.shots.phone = keep
       }
     },
+  })
+
+  // 5.0 waited a fixed 700 ms per shot: most of the time a round took to open, and a page that filled
+  // in later than that was shot blank. A shot is now taken once the page is quiet.
+  let capture = captureAll
+  await s.check('a page that fills in after load is shot filled in, not as its first blank paint', {
+    assert: async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'rig-taste-late-'))
+      roots.push(dir)
+      const card = { id: 'late', name: 'late', url: `${site.base}/late`, source: 'url', shots: {} }
+      const { ok } = await capture([card], dir, { log: () => {} })
+      const px = ok[0] && firstPixel(readFileSync(ok[0].shots.desktop))
+      if (px?.join() !== '58,143,143') console.log(`        first pixel of the shot: ${px?.join() ?? 'no shot'}`)
+      return px?.join() === '58,143,143'
+    },
+    // The control: capture as it was at 3de1d59, with its fixed 700 ms pause.
+    breaks: async () => {
+      capture = (await import(join(oldTaste(), 'src', 'taste', 'capture.js'))).captureAll
+      return () => {
+        capture = captureAll
+      }
+    },
+    timeout: 60_000,
   })
 
   // ── the bar ──
@@ -533,7 +634,7 @@ await suite('rig taste', async (s) => {
         await press(page, input, '#note', { touch: false })
         await input.type('closed too soon', { ms: 0 })
         await page.send('Page.navigate', { url: 'about:blank' })
-        await waitFor(() => newest(ratingsJson(b.root)).ratings?.[b.round.refs[0].id]?.note === 'closed too soon', 2000)
+        await waitFor(() => newest(ratingsJson(b.root)).ratings?.[b.round.refs[0].id]?.note === 'closed too soon')
         return newest(ratingsJson(b.root)).ratings?.[b.round.refs[0].id]?.note === 'closed too soon'
       } finally {
         await page.close()
@@ -572,8 +673,8 @@ await suite('rig taste', async (s) => {
         await offline(page, true)
         await press(page, input, '.rate[data-rating="4"]', { touch: false })
         await waitFor(async () => (await progress(page)) === '2 of 6')
-        await sleep(200)
-        const whileOffline = await page.eval('document.getElementById("save").textContent')
+        await waitFor(async () => (await header(page)) === 'Not saved')
+        const whileOffline = await header(page)
         // The tab is hidden (switched away, phone locked) and shown again.
         await page.eval(`(() => {
           Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
@@ -588,9 +689,9 @@ await suite('rig taste', async (s) => {
           const rd = newest(ratingsJson(b.root))
           return rd.ratings?.[r0]?.rating === 4 && rd.ratings?.[r1]?.rating === 2
         }
-        await waitFor(async () => both(), 5000)
-        await sleep(200)
-        const after = await page.eval('document.getElementById("save").textContent')
+        await waitFor(async () => both())
+        await saved(page)
+        const after = await header(page)
         const rd = newest(ratingsJson(b.root))
         if (!both() || after !== 'Saved' || whileOffline !== 'Not saved')
           console.log(
@@ -640,9 +741,10 @@ await suite('rig taste', async (s) => {
           document.dispatchEvent(new Event('visibilitychange'))
           delete document.visibilityState
         })()`)
-        await waitFor(async () => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 2, 3000)
+        await waitFor(async () => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 2)
         await page.send('Fetch.continueRequest', { requestId: held })
-        await sleep(400)
+        // The held answer leaves the queue only when the server has taken it: then it has landed.
+        await saved(page)
         const final = newest(ratingsJson(b.root)).ratings?.[r0]?.rating
         if (final !== 2) console.log(`        card 1 ended at ${final}`)
         return final === 2
@@ -698,14 +800,14 @@ await suite('rig taste', async (s) => {
       })
       try {
         await press(desk, countInput(desk), '.rate[data-rating="5"]', { touch: false })
-        await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 5, 2000)
+        await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 5)
         await press(phone, countInput(phone), '.rate[data-rating="2"]', { touch: true })
-        await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 2, 2000)
-        await sleep(200)
+        await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r0]?.rating === 2)
+        await saved(phone)
         const final = newest(ratingsJson(b.root)).ratings?.[r0]?.rating
-        const header = await phone.eval('document.getElementById("save").textContent')
-        if (final !== 2) console.log(`        card 1 on disk: ${final}, the phone's header: "${header}"`)
-        return final === 2 && header === 'Saved'
+        const said = await header(phone)
+        if (final !== 2) console.log(`        card 1 on disk: ${final}, the phone's header: "${said}"`)
+        return final === 2 && said === 'Saved'
       } finally {
         await desk.close()
         await phone.close()
@@ -736,8 +838,8 @@ await suite('rig taste', async (s) => {
         const p3 = await pointOn(page, '.rate[data-rating="3"]')
         await input.click(p5.x, p5.y)
         await input.click(p3.x, p3.y) // inside the 160 ms the board takes to move on
-        await waitFor(async () => (await progress(page)) === '3 of 6', 2000)
-        await sleep(300)
+        await waitFor(async () => (await progress(page)) === '3 of 6')
+        await saved(page)
         const rd = newest(ratingsJson(b.root))
         return rd.ratings?.[b.round.refs[0].id]?.rating === 5 && rd.ratings?.[b.round.refs[1].id]?.rating === 3
       } finally {
@@ -764,9 +866,12 @@ await suite('rig taste', async (s) => {
         for (const k of ['4', '2']) {
           const before = await progress(page)
           await pressKey(page, k)
-          await waitFor(async () => (await progress(page)) !== before, 900)
+          await frame(page)
+          // The key is answered in its own keydown (the rating marked) or not at all.
+          const marked = await page.eval(`!!document.querySelector('.rate[data-rating="${k}"][aria-pressed=true]')`)
+          if (!marked || !(await waitFor(async () => (await progress(page)) !== before))) break
         }
-        await sleep(200)
+        await saved(page)
         const rd = newest(ratingsJson(b.root))
         return (await progress(page)) === '3 of 6' && b.round.refs.slice(0, 2).every((c, i) => rd.ratings[c.id]?.rating === [4, 2][i])
       } finally {
@@ -850,7 +955,7 @@ await suite('rig taste', async (s) => {
         await press(page, input, `.rate[data-rating="${r}"]`, { touch: false })
         await waitFor(async () => (await progress(page)) !== before)
       }
-      await sleep(150)
+      await saved(page)
       await page.close()
       await b1.stop()
       // Round 2: the comps alone, as `rig taste --comps … --ask …` with no --from.
@@ -898,7 +1003,7 @@ await suite('rig taste', async (s) => {
         await press(page, input, `.rate[data-rating="${r}"]`, { touch: false })
         await waitFor(async () => (await progress(page)) !== before)
       }
-      await sleep(150)
+      await saved(page)
       await page.close()
       await b.stop()
       const out = spawnSync(process.execPath, [RIG, 'taste', '--done'], { cwd: b.root, encoding: 'utf8' })
@@ -929,9 +1034,10 @@ await suite('rig taste', async (s) => {
         )
         try {
           await press(page, input, '.rate[data-rating="4"]', { touch: false })
-          const shown = await waitFor(() => page.eval('/round has ended/.test(document.getElementById("ended")?.textContent || "")'), 3000)
+          const shown = await waitFor(() => page.eval('/round has ended/.test(document.getElementById("ended")?.textContent || "")'))
           await press(page, input, '#done', { touch: false })
-          await sleep(400)
+          // Done on an ended round answers at once or not at all: one frame later is the answer.
+          await frame(page)
           const doneIdle = await page.eval('document.getElementById("done").textContent === "Done"')
           return shown && doneIdle
         } finally {
@@ -1068,7 +1174,7 @@ await suite('rig taste', async (s) => {
           body: JSON.stringify({ kind: 'ref', id, rating: 4 }),
         })
         const done = spawnSync(process.execPath, [...cliPreload, RIG, 'taste', '--done'], { cwd: root, encoding: 'utf8' })
-        const code = await Promise.race([exited, sleep(5000).then(() => 'still running')])
+        const code = await Promise.race([exited, sleep(GUARD).then(() => 'still running')])
         if (code === 'still running') child.kill()
         const md = read(join(root, 'docs', 'TASTE.md'))
         const ok = answer.ok && done.status === 0 && code === 0 && /Wrote .*docs\/TASTE\.md/.test(out) && tableRows(md)[0]?.[1] === '4 / 5'
@@ -1092,7 +1198,9 @@ await suite('rig taste', async (s) => {
     assert: async () => {
       const ip = lanAddresses()[0]
       if (!ip) throw new Error('this machine has no LAN address to test on')
-      const local = await board()
+      // A board of images alone: what is under test is where it listens, not capturing URLs, which
+      // took two Chromes and most of this check's time.
+      const local = await board(LAN_ARGS)
       const reach = (u) =>
         fetch(u, { signal: AbortSignal.timeout(1500) }).then(
           (r) => r.status,
@@ -1100,7 +1208,7 @@ await suite('rig taste', async (s) => {
         )
       const viaLanDefault = await reach(`http://${ip}:${local.port}/?t=${local.token}`)
       await local.stop()
-      const lan = await board([...ARGS, '--lan'])
+      const lan = await board([...LAN_ARGS, '--lan'])
       try {
         const viaLan = await reach(lan.lanUrls[0] || 'http://0.0.0.0:1/')
         const noToken = await reach(`http://${ip}:${lan.port}/`)
@@ -1111,12 +1219,15 @@ await suite('rig taste', async (s) => {
     },
     // The control: a default board that listens on every interface, as --lan does.
     breaks: () => {
-      ARGS.push('--lan')
-      return () => ARGS.pop()
+      LAN_ARGS.push('--lan')
+      return () => LAN_ARGS.pop()
     },
   })
 
   // ── the comps round ──
+  /** Which comp the phone view shows, and what each chip says. */
+  const shownComp = (page) => page.eval('document.querySelector("#grid .comp")?.dataset.id')
+  const chipText = (page, k) => page.eval(`document.querySelector('.chip[data-k="${k}"]')?.innerText.replace(/\\s+/g, ' ').trim()`)
   /** A comps board on a phone, references already rated, ready on the comps view. */
   async function compsBoard(vp = 'phone', dark = false) {
     const b = await board(COMPS_ARGS)
@@ -1137,14 +1248,14 @@ await suite('rig taste', async (s) => {
         if (!(await progress(page)).startsWith('Comps')) return false
         const q = await page.eval('document.getElementById("name")?.textContent')
         for (const r of [2, 5, 3, 4]) await press(page, input, `.rate[data-rating="${r}"]`, { touch: true })
-        await sleep(300)
+        await waitFor(() => Object.keys(newest(ratingsJson(b.root)).compRatings || {}).length === 4)
         // One comp at a time on a phone: B's chip, then its star.
         await press(page, input, '.chip[data-k="1"]', { touch: true })
-        await sleep(100)
+        await waitFor(async () => (await shownComp(page)) === b.round.comps[1].id)
         await press(page, input, '.comp .star', { touch: true })
-        await sleep(150)
+        await saved(page)
         await press(page, input, '#done', { touch: true })
-        const path = await Promise.race([b.finished, sleep(4000).then(() => null)])
+        const path = await Promise.race([b.finished, sleep(GUARD).then(() => null)])
         const md = path ? readFileSync(path, 'utf8') : ''
         const want = [
           ['header-a.svg', '2 / 5', '', ''],
@@ -1189,19 +1300,17 @@ await suite('rig taste', async (s) => {
     timeout: 60_000,
   })
 
-  /** Which comp the phone view shows, and what each chip says. */
-  const shownComp = (page) => page.eval('document.querySelector("#grid .comp")?.dataset.id')
-  const chipText = (page, k) => page.eval(`document.querySelector('.chip[data-k="${k}"]')?.innerText.replace(/\\s+/g, ' ').trim()`)
-
   await s.check('comps on a phone: tapping a chip shows that comp, and the chip carries its rating', {
     assert: async () => {
       const { b, page, input, close } = await compsBoard()
       try {
         await press(page, input, '.chip[data-k="2"]', { touch: true })
-        await waitFor(async () => (await shownComp(page)) === b.round.comps[2].id, 1000)
+        await frame(page) // a chip shows its comp in its own click
         const showsC = (await shownComp(page)) === b.round.comps[2].id
-        await press(page, input, '.rate[data-rating="4"]', { touch: true })
-        await sleep(300)
+        if (showsC) {
+          await press(page, input, '.rate[data-rating="4"]', { touch: true })
+          await waitFor(async () => (await chipText(page, 2)) === 'C 4 / 5')
+        }
         const chip = await chipText(page, 2)
         if (!showsC || chip !== 'C 4 / 5') console.log(`        shows C: ${showsC}; chip C reads "${chip}"`)
         return showsC && chip === 'C 4 / 5'
@@ -1221,12 +1330,13 @@ await suite('rig taste', async (s) => {
         const box = await page.eval(
           '(() => { const r = document.querySelector("#grid .comp .pick").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()',
         )
+        // The board changes comp in the swipe's own touchend: one frame later it has, or it never will.
         const start = await shownComp(page)
         await input.swipe({ x: box.x + 100, y: box.y, dx: -200, dy: 0 })
-        await waitFor(async () => (await shownComp(page)) !== start, 1000)
+        await frame(page)
         const next = await shownComp(page)
         await input.swipe({ x: box.x - 100, y: box.y, dx: 200, dy: 0 })
-        await waitFor(async () => (await shownComp(page)) !== next, 1000)
+        await frame(page)
         const back = await shownComp(page)
         const ids = b.round.comps.map((c) => c.id)
         const ok = start === ids[0] && next === ids[1] && back === ids[0]
@@ -1257,9 +1367,11 @@ await suite('rig taste', async (s) => {
           '(() => { const r = document.querySelector("#grid .comp .pick").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()',
         )
         await input.swipe({ x: box.x + 100, y: box.y, dx: -200, dy: 0 })
-        await waitFor(async () => (await shownComp(page)) === B, 1000)
-        await press(page, input, '.rate[data-rating="4"]', { touch: true })
-        const saved = await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4, 2000)
+        await frame(page)
+        if ((await shownComp(page)) !== B) throw new Error(`the swipe did not reach B (shows ${await shownComp(page)})`)
+        // The bug this guards: the browser's fling ate the tap, so no click ever came of it.
+        const landed = await press(page, input, '.rate[data-rating="4"]', { touch: true })
+        const saved = landed && (await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4))
         if (!saved)
           console.log(
             `        after the swipe the board shows ${await shownComp(page)}; B on disk: ${newest(ratingsJson(b.root)).compRatings?.[B]?.rating ?? 'nothing'}`,
@@ -1309,7 +1421,7 @@ await suite('rig taste', async (s) => {
     waitFor(async () => {
       const v = await viewer(page)
       return !!v && v.id === id && v.src.includes(`/img/${encodeURIComponent(id)}/${view}`) && v.ready && (!big || v.big)
-    }, 3000)
+    })
 
   await s.check('full screen: Enlarge opens a comp across 90% of the window, → steps to the next, a key rates it there, Esc closes', {
     assert: async () => {
@@ -1321,11 +1433,11 @@ await suite('rig taste', async (s) => {
         await pressNamed(page, 'ArrowRight')
         const onB = await shows(page, B)
         await pressKey(page, '4')
-        const saved = await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4, 3000)
+        const saved = await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4)
         // Rated, it moves on to the next comp still unrated, as the board does.
         const onC = await shows(page, C)
         await pressNamed(page, 'Escape')
-        const closed = await waitFor(async () => (await viewer(page)) === null, 2000)
+        const closed = await waitFor(async () => (await viewer(page)) === null)
         // The board is in reach again, and shows what was given in the viewer.
         const board = closed && !!(await pointOn(page, '.rate[data-rating="1"]'))
         const score = await page.eval(`document.querySelector('.comp[data-id="${B}"] .score')?.textContent`)
@@ -1360,12 +1472,12 @@ await suite('rig taste', async (s) => {
           await press(page, input, '#vnext', { touch: true })
           const on1 = await shows(page, r1, { view: 'phone', big: false })
           await press(page, input, '.vrate[data-rating="5"]', { touch: true })
-          const saved = await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r1]?.rating === 5, 3000)
+          const saved = await waitFor(() => newest(ratingsJson(b.root)).ratings?.[r1]?.rating === 5)
           const on2 = await shows(page, r2, { view: 'phone', big: false })
           await input.swipe({ x: 100, y: 380, dx: 200, dy: 0 })
           const back1 = await shows(page, r1, { view: 'phone', big: false })
           await press(page, input, '#vclose', { touch: true })
-          const closed = await waitFor(async () => (await viewer(page)) === null, 2000)
+          const closed = await waitFor(async () => (await viewer(page)) === null)
           // Closed on the second reference: the board is there, with its 5 shown.
           const where = await progress(page)
           const given = await page.eval('document.querySelector(".rate[aria-pressed=true]")?.dataset.rating')
