@@ -33,17 +33,22 @@ export function readQa(root) {
 }
 
 /**
- * The newest run of this `kind` on exactly this commit (full sha), or null. Entries written before
- * kinds existed are test runs. A green run on any other sha does not count: formatting moves the
- * strings a source-patching control anchors on, the sha changes, and so must the record.
+ * The newest run of this `kind` on exactly this commit (full sha), on this `host`, or null. Entries
+ * written before kinds existed are test runs; entries written before hosts existed ran here
+ * ('local'). A green run on any other sha does not count: formatting moves the strings a
+ * source-patching control anchors on, the sha changes, and so must the record. Nor does a run on
+ * another machine: the second machine's pass is its own fact, asked for by its host name.
  */
-export function lastQaOn(root, sha, kind = 'test') {
+export function lastQaOn(root, sha, kind = 'test', { host = 'local' } = {}) {
   return (
     readQa(root)
-      .filter((e) => e.sha === sha && (e.kind || 'test') === kind)
+      .filter((e) => e.sha === sha && (e.kind || 'test') === kind && (e.host || 'local') === host)
       .pop() || null
   )
 }
+
+/** The newest baseline comparison recorded for this commit, or null. */
+export const lastBaselineOn = (root, sha) => lastQaOn(root, sha, 'baseline')
 
 /** The newest negative-control run on this commit, or null. */
 export const lastNegativeOn = (root, sha) => lastQaOn(root, sha, 'negative')
