@@ -235,6 +235,15 @@ rig lease: not taken: ssh unreachable: connect to host unreachable port 22: Conn
 - **Anti-reference, a watchdog that only checks the process is alive.** The limit target measures
   until the last process of the run is gone, not until ssh returns.
 
-## Verification run
-- `npm run check`: see the final line under "Final" below.
-- `rig qa <sha> --run "npm test"`: see "Final".
+## Verification run (code sha fcaba91; every later commit changes docs only)
+- `npm run check` on fcaba91: **exit 0**. That covers `biome ci .`, `test/run.js: 19 file(s) green`,
+  and `check-no-personal-data` clean.
+  - A first run, made while my runner suite was also running, failed one `taste.test.js` check
+    ("t2 report names every repo"). Run alone it is 36/36, and the clean re-run above is green.
+    That test is load-sensitive; it is not mine and I did not touch it.
+- `rig qa fcaba917dbfe1360804da6900037dbc82e0616df --run "npm test"`:
+  - `rig qa: test exit 0 at fcaba91` and `rig qa: negative exit 0 at fcaba91`;
+  - the three machines suites inside it: 10, 14 and 7 passed, 0 void.
+- Review of r55u: all six findings verified fixed at ac55143 (`docs/review-r55u.md`, c74a91e).
+- Review of r55m (by r55q): brief written with `rig review r55m --by r55q` (`.rig/REVIEW-r55m.md`
+  in the main checkout). No findings yet; I verify any fixes when they come.
