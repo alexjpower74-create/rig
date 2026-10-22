@@ -63,3 +63,29 @@ This needs no vendor name in the default. If you leave it as is, a line in the r
 
 ## Verify
 I'll verify the fixes for 1 and 2 when they land: the plan fixture gives no warning, and the same-second order holds over many runs.
+
+## Verified at 44d006c (2026-10-22, by r55u)
+Read `git diff ef60454 44d006c -- src/`, covering 5acc1e1, 9a1c4f2 and 44d006c. Ran `test/watch-inbox.test.js` (27 passed,
+0 void) and `test/watch-job.test.js` (19 passed, 0 void) at 44d006c in a detached worktree, plus my
+own repros against the same code.
+
+| finding | verdict | how I checked |
+|---|---|---|
+| 1. refusal warning on this CLI plan | **fixed** | `refusalsGap` on PLAN.md at 14a1ad6 and at main: `null` (was `it talks about "page" and "blocked"`). A UI over rules still warns: a slice owning `web/**` that "approves or rejects" does; so does "a claim form that refuses claims over the limit" in one sentence, and a `UI: web` line. A CLI that "rejects" messages does not. r55w's check reads PLAN.md from git at 14a1ad6. |
+| 2. same-second order | **fixed** | My repro (two tells in one process, 200 pairs): 0 reversed at 44d006c, 119 of 200 at ef60454. Two separate `rig tell` processes back to back, 20 runs: 0 reversed. Names carry milliseconds and a per-process counter. The new control (44d006c) names messages newest-first from the clock, so it no longer passes on a machine whose pids run past 1,000,000. |
+| 3. old and new tell paths | **addressed** | A fresh default inbox prints one note that `inboxDir` can keep an existing folder; it names no other tool's folder. It shows in `rig tell`, `rig inbox` and `rig up`. |
+| 4a. `rig tell` dropped `--` text | **fixed** | `rig tell lead "--no-vendor was needed"` is read back as exactly that. |
+| 4b. relative `--expect` | **fixed** | Resolved against the pane's cwd as herdr reports it (`foreground_cwd`, else `cwd`). The check passes. |
+| 4c. `--watch` missing from USAGE | **handed to the lead** | It is listed in r55w's build report, since `bin/rig.js` belongs to the lead. |
+| 4d. source-grep check | **fixed** | Replaced with measured checks: the default deadline as printed, and a 10-minute poll clamped and noticed within 6 s. |
+| 9a1c4f2 (stale-status `rig job`, not mine) | **looks right** | A job now finishes only when `completion_seq` moves, when a new working is followed by a stop at a later seq, or when the seq moves by 2 or more and the pane is stopped. Its four new checks pass: late working after a stale done, no counter change at all, a stale bump with no turn (exit 7), and completion_seq without a working being seen. |
+
+Left open, all low; none needs to block the merge:
+- The one-sentence rule trades the false positive for a false negative. "Staff use a phone screen to log
+  shifts. Shifts over 12 hours are rejected." gives no warning, because the screen and the rule are
+  in separate sentences and no slice owns UI files. A plan like that usually owns UI paths, which the
+  path rule catches. A `UI:` line covers the rest.
+- Stamps are local time, so during the hour repeated when clocks go back, messages can sort out of order.
+  A UTC stamp would close that.
+- Two processes writing in the same millisecond sort by counter and then by pid, not by time. Two separate
+  CLI runs can't land within one millisecond, so I'm only noting it.
