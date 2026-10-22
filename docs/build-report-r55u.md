@@ -204,8 +204,10 @@ README paragraph:
   `base` defaults to `origin/main` and falls back to the live base when that does not resolve.
 
 ## What's left
-- **Review of r55w** (`docs/review-r55w.md`): r55w had no commit on its branch when I finished my
-  slice (its work was still uncommitted), so there was no diff to review yet. I'll review its first commit when it lands.
+- **Review of r55w**: DONE at ef60454, in `docs/review-r55w.md`. Two medium findings, both reproduced:
+  the refusal-matrix warning fires on this very plan (a CLI), and same-second inbox messages come
+  back in random order (103 of 200 reversed). Plus a low note on mixing old and new tell paths,
+  and four small items. I verify the fixes when they land.
 - **macOS run**: `npm run check` is green on Linux only. The snapshot pin is meant to make the two
   machines agree, but I have not run it on the second machine.
 - `--update-refs` (stacked slice branches moved together) is not offered. Slices here are not
