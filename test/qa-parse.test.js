@@ -179,3 +179,30 @@ test('worker-log globs and the last spec a stream mentioned', () => {
   assert.equal(lastSpecIn('# Subtest: books a table\n'), 'books a table')
   assert.equal(lastSpecIn('nothing here\n'), null)
 })
+
+test('a branch name becomes a lease holder id the lease accepts (rig/r55q → rig-r55q)', async () => {
+  const { holderId } = await import('../src/qa/host.js')
+  assert.equal(holderId('rig/r55q'), 'rig-r55q')
+  assert.match(holderId('feature/a b#c'), /^[A-Za-z0-9._:@-]{1,80}$/)
+  assert.equal(holderId('///'), 'rig-qa')
+})
+
+test('on the host, a failure whose block names a stubbed tool needs a stub; the others do not', async () => {
+  const { remote, runHost } = await import('../src/qa/host.js')
+  const saved = remote.runOnHost
+  let given = null
+  remote.runOnHost = async (o) => {
+    given = o
+    const log =
+      'not ok 1 - copies the link\n  xclip: the desktop is off in test runs (rig qa --desktop opts back in)\nnot ok 2 - totals the cart\n'
+    return { host: o.host, exit: 1, ms: 5, dir: 'd', db: 'b', log, why: null }
+  }
+  try {
+    const r = await runHost({ root: tmp, host: 'box', sha: 'abc', cmd: 'x', session: 's', echo: false, desktop: true })
+    assert.deepEqual(r.needsStub, ['copies the link'])
+    assert.deepEqual(r.failures, ['copies the link', 'totals the cart'])
+    assert.equal(given.desktop, true, '--desktop reaches runOnHost')
+  } finally {
+    remote.runOnHost = saved
+  }
+})

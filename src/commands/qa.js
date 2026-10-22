@@ -13,7 +13,7 @@ import { exitCodeFor, fmtMs, runWatched } from '../qa/watch.js'
 import { compareBaseline, parseFailures, tally } from '../qa/failures.js'
 import { desktopFreeEnv, makeShims, needsStub, readShimCalls } from '../qa/desktop.js'
 import { detectCi, planSeeds, readCiStatus, withSeed } from '../qa/ci.js'
-import { leaseHost, runHost } from '../qa/host.js'
+import { holderId, leaseHost, runHost } from '../qa/host.js'
 
 export { exitCodeFor, groups }
 
@@ -111,15 +111,20 @@ export default async function qa(args) {
   const desktop = args.includes('--desktop')
 
   // The lease first: a refused host refuses the run before a worktree is touched.
-  const by = argOf(args, '--by') || process.env.RIG_SESSION || currentBranchOrNull(process.cwd()) || `qa-${process.pid}`
+  const by = holderId(argOf(args, '--by') || process.env.RIG_SESSION || currentBranchOrNull(process.cwd()) || `qa-${process.pid}`)
   let lease = null
   if (host) {
-    lease = leaseHost(root, host, by)
+    // Long enough for the stages that use the host at their limit, and renewed while the run lasts.
+    lease = leaseHost(root, host, by, { ttlMin: limitMs ? Math.ceil((2 * limitMs) / 60_000) + 30 : 120 })
     if (!lease.ok) {
       console.error(`rig qa: refused — ${lease.why}. Nothing was run. Wait for it, or run here only with --no-host.`)
       process.exit(75)
     }
     process.on('exit', lease.release)
+    setInterval(() => {
+      const why = lease.renew()
+      if (why) console.error(`\nrig qa: could not renew the lease on ${host}: ${why}`)
+    }, 30 * 60_000).unref()
   }
 
   const wt = acquireQaWorktree(root, cfg, ref, { fresh })
@@ -353,7 +358,17 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
 async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
   const { root, host, full, sha, ref, by } = ctx
   const env = { RIG_QA_SHA: sha, ...(seed ? { RIG_SEED: seed } : {}) }
-  const r = await runHost({ root, host, sha: full, cmd, session: by, env, limitMs: ctx.limitMs, pattern: ctx.pattern })
+  const r = await runHost({
+    root,
+    host,
+    sha: full,
+    cmd,
+    session: by,
+    env,
+    limitMs: ctx.limitMs,
+    pattern: ctx.pattern,
+    desktop: ctx.desktop,
+  })
   if (record)
     for (const k of kinds) {
       recordQa(root, {
@@ -370,6 +385,7 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
         failures: r.failures.slice(0, 200),
         passed: r.tally.passed,
         failed: r.tally.failed,
+        needsStub: r.needsStub,
         error: r.error,
       })
       timing(root, 'qa:host', r.ms, full, host, r.exit === 0)
@@ -467,7 +483,7 @@ async function baselineStage(ctx, args, here, there) {
     here: here.failures,
     there: there?.failures ?? null,
     base: baseFailures,
-    needsStub: [...(here.needsStub ?? [])],
+    needsStub: [...new Set([...(here.needsStub ?? []), ...(there?.needsStub ?? [])])],
     runs: [...runs, { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures }],
   })
   record({ base, baseSha, baseExit: r.exit, baseFailed: baseFailures.length, baseLog: log.path, stalled: r.stalled, ...cmp })
