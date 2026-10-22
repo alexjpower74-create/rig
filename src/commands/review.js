@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan, withoutPlaceholders } from '../plan.js'
@@ -6,16 +6,37 @@ import { tryGit } from '../sh.js'
 import { terminal } from '../terminal.js'
 import { rigDir } from '../rigdir.js'
 import { MINDSET } from '../mindset.js'
+import * as briefs from '../brief.js'
+import { recordTiming } from '../timings.js'
+import { builderVendor, recordVerdict, sameVendorReason, vendorOf } from '../vendor.js'
+import { roundStart } from '../decisions.js'
 
 // Fresh eyes before done. Every real defect on a multi-agent build crossed a boundary between two
 // people's work, and self-review found none of them: an author's tests share the author's blind
 // spots. `rig review <id>` writes a review brief for someone who did not write the code — another
 // slice, or a fresh agent in its own tab — pointed at exactly that slice's diff and the plan's rules.
 
+export const USAGE = `rig review <id> [--by <slice>] [--base <ref>] [--launch] [--launch-cmd "<cmd>"]
+rig review --vendor <name> [--base <ref>] [--sha <sha>] [--since <ref>]
+rig review --vendor <name> --pass "<what ran>" | --fail "<what it found>" [--sha <sha>] [--ms <n>]
+
+  <id>                 write .rig/REVIEW-<id>.md: a fresh-eyes brief for one slice's diff
+  --vendor <name>      the reviewer's vendor or tool (openai, codex, gemini, anthropic, claude …)
+                       alone: write .rig/REVIEW-final.md, the second-vendor brief for the round's diff,
+                       pinned to the sha
+  --pass "<what ran>"  record a pass on the sha (the base's tip, or --sha); refused from the
+                       builders' own vendor (\`vendor\` in .rig/config.json, else the launch command)
+  --fail "<found>"     record a failing verdict; the newest verdict on a sha wins
+  --ms <n>             how long the review took (else: since the review brief was written)
+
+\`rig finish\` needs a second-vendor pass on the very sha it finishes.`
+
 export default function review(args) {
+  if (args.includes('--help') || args.includes('-h')) return console.log(USAGE)
   const root = mainRoot()
   const cfg = loadConfig(root)
   const plan = loadPlan(join(root, cfg.plan))
+  if (args.includes('--vendor')) return vendorReview(args, root, cfg, plan)
   const id = firstBare(args)
   if (!id) throw new Error('usage: rig review <slice-id> [--base <ref>] [--by <slice-id>] [--launch]')
   const agent = plan.agents.find((a) => a.id === id)
@@ -24,7 +45,7 @@ export default function review(args) {
   const base = argOf(args, '--base') || currentBranch(root)
   const branch = cfg.branchPrefix + id
   const by = argOf(args, '--by')
-  const brief = reviewBrief(plan, agent, { root, base, branch, by })
+  const brief = reviewBrief(plan, agent, { root, base, branch, by, lead: leadOf(cfg) })
   const rel = join('.rig', `REVIEW-${id}.md`)
   rigDir(root)
   writeFileSync(join(root, rel), brief.text)
@@ -52,7 +73,140 @@ export default function review(args) {
   }
 }
 
-const VALUE_FLAGS = new Set(['--base', '--by', '--launch-cmd'])
+const VALUE_FLAGS = new Set(['--base', '--by', '--launch-cmd', '--vendor', '--pass', '--fail', '--sha', '--ms', '--since'])
+const leadOf = (cfg) => cfg.lead || process.env.RIG_LEAD || null
+
+/** r55w's tell line, when that module has it: the last line of every brief. */
+function tellLine(lead, id) {
+  return typeof briefs.tellLine === 'function' ? briefs.tellLine(lead, id) : null
+}
+
+/**
+ * `rig review --vendor`: write the second-vendor brief, or record its verdict on a sha. A pass from
+ * the builders' own vendor is refused before anything is written; a fail is recorded from anyone.
+ */
+export function vendorReview(args, root, cfg, plan, { now = Date.now() } = {}) {
+  const vendor = argOf(args, '--vendor')
+  const pass = args.includes('--pass') ? argOf(args, '--pass') : null
+  const fail = args.includes('--fail') ? argOf(args, '--fail') : null
+  const stop = (msg, code = 2) => {
+    console.error(`rig review: ${msg}`)
+    process.exitCode = code
+    return null
+  }
+  if (!vendor || vendor.startsWith('--')) return stop('--vendor needs a name, e.g. --vendor openai. Nothing was recorded.')
+  if (pass !== null && fail !== null) return stop('--pass and --fail contradict each other. Nothing was recorded.')
+  if ((pass !== null && (!pass || pass.startsWith('--'))) || (fail !== null && (!fail || fail.startsWith('--'))))
+    return stop(`say what ran or what it found, e.g. --pass "npm test, read the whole diff". Nothing was recorded.`)
+  const base = argOf(args, '--base') || currentBranch(root)
+  const want = argOf(args, '--sha') || base
+  const resolved = tryGit(['rev-parse', '--verify', '-q', `${want}^{commit}`], root)
+  if (!resolved.ok) return stop(`${want} is not a commit here. Nothing was recorded.`)
+  const sha = resolved.out
+  const short = sha.slice(0, 7)
+  const builder = builderVendor(cfg)
+  const v = vendorOf(vendor)
+
+  if (pass === null && fail === null) {
+    const since = argOf(args, '--since')
+      ? { ref: argOf(args, '--since'), from: '--since' }
+      : roundStart(root, sha, plan.agents, cfg.branchPrefix)
+    const brief = vendorBrief(plan, { root, sha, since, vendor: v, builder, lead: leadOf(cfg) })
+    rigDir(root)
+    writeFileSync(join(root, FINAL_BRIEF), brief.text)
+    console.log(`second-vendor brief for ${short}: ${FINAL_BRIEF}`)
+    console.log(`  diff: git diff ${brief.from}..${short}  (${brief.files.length} file(s))`)
+    console.log(`  builders: ${builder.vendor || 'unknown'} (${builder.from}); reviewer: ${v}`)
+    const why = sameVendorReason(v, builder)
+    if (why) console.log(`\x1b[33m  warning: a pass from ${vendor} will be refused: ${why}\x1b[0m`)
+    console.log(`\nhand it over: rig job <pane> "Read ${FINAL_BRIEF} and follow it."`)
+    return brief
+  }
+
+  const verdict = pass !== null ? 'pass' : 'fail'
+  if (verdict === 'pass') {
+    const why = sameVendorReason(v, builder)
+    if (why) return stop(`refused: ${why}. Nothing was recorded.`, 1)
+  }
+  const ms = durationMs(args, root, now)
+  const entry = recordVerdict(root, { sha, vendor: v, verdict, what: pass ?? fail, builder: builder.vendor, ms: ms.ms })
+  if (ms.ms != null) recordTiming(root, { stage: 'review', ms: ms.ms, sha, ok: verdict === 'pass' })
+  const tag = verdict === 'pass' ? '\x1b[32mpass\x1b[0m' : '\x1b[31mfail\x1b[0m'
+  console.log(`${tag} from ${entry.vendor} on ${short}: ${entry.what}`)
+  console.log(
+    `  ${ms.ms != null ? `took ${Math.round(ms.ms / 60000)} min (${ms.from}); timing recorded as stage review` : `no timing: ${ms.from}`}`,
+  )
+  if (verdict === 'pass' && v === builder.vendor) console.log('  (same vendor as the builders)')
+  console.log('  the newest verdict on this sha is the one rig finish reads')
+  return entry
+}
+
+export const FINAL_BRIEF = join('.rig', 'REVIEW-final.md')
+const STALE_BRIEF_MS = 12 * 3_600_000
+
+/** --ms, else the age of the newest review brief (the final one first), else none (and why). */
+function durationMs(args, root, now) {
+  const given = argOf(args, '--ms')
+  if (given != null) {
+    const n = Number(given)
+    if (Number.isFinite(n) && n >= 0) return { ms: Math.round(n), from: '--ms' }
+    return { ms: null, from: `--ms "${given}" is not a number of milliseconds` }
+  }
+  const id = firstBare(args)
+  for (const rel of [FINAL_BRIEF, id && join('.rig', `REVIEW-${id}.md`)].filter(Boolean)) {
+    const p = join(root, rel)
+    if (!existsSync(p)) continue
+    const age = Math.max(0, now - statSync(p).mtimeMs)
+    // A brief from yesterday is another review's clock: a median fed with it lies about the next one.
+    if (age > STALE_BRIEF_MS) return { ms: null, from: `${rel} is ${Math.round(age / 3_600_000)} h old; pass --ms` }
+    return { ms: age, from: `since ${rel} was written` }
+  }
+  return { ms: null, from: 'no --ms and no review brief to time it from' }
+}
+
+/** The second-vendor brief: the round's whole diff, pinned to one sha, ending with how to record. */
+export function vendorBrief(plan, { root, sha, since, vendor, builder, lead }) {
+  const short = sha.slice(0, 7)
+  const from = since?.ref ? tryGit(['rev-parse', '--short', since.ref], root).out || since.ref : `${short}~1`
+  const files = (() => {
+    const r = tryGit(['diff', '--name-only', `${from}..${sha}`], root)
+    return r.ok ? r.out.split('\n').filter(Boolean) : []
+  })()
+  const rules = (plan.mustNotRules || []).filter((r) => !/^<.*>$/.test(r))
+  const bar = withoutPlaceholders(plan.bar)
+  const tell = tellLine(lead, `rv-${vendor}`)
+  const text = `# Second-vendor review — ${plan.title} @ ${short}
+
+${MINDSET}
+
+You are the second-vendor reviewer: the builders were ${builder.vendor || 'an unknown vendor'}, and you are
+${vendor}. Your pass is the only one \`rig finish\` accepts, and only on **${short}**. **Read only: do not
+edit, commit or fix anything.** Find what reviews from the builders' own vendor could not.
+
+## What to read
+\`git diff ${from}..${sha}\`  (${since?.from || 'the tip commit only: no round start found'})
+
+${files.length ? files.map((f) => '- `' + f + '`').join('\n') : '- (no changes in that range)'}
+
+Run the project's own checks on that sha, in a clean checkout of it, and read the diff against the
+plan at the repo root (the contract), not against itself.
+
+## What to look for
+1. **Where two slices meet**: a field named differently on each side, a code path one side never calls.
+2. **Checks that cannot fail**: no negative control, an exit code read through a pipe, a mocked boundary.
+3. **Bypasses**: an input, flag or order of calls that passes a gate without the fact the gate is for.
+4. **The hard rules below**, and anything that sends, deploys, spends or deletes.
+${bar ? `\nThe bar, from the plan:\n${bar}\n` : ''}
+${rules.length ? `## What must not happen (from the plan)\n${rules.map((r) => '- ' + r).join('\n')}\n\n` : ''}## Verdict
+Record it on this sha, one line each, with what you ran or what you found:
+
+    rig review --vendor ${vendor} --pass "<what you ran and read>" --sha ${short}
+    rig review --vendor ${vendor} --fail "<file:line — what goes wrong>" --sha ${short}
+
+A pass on any other sha does not count. Findings beyond one line go to \`docs/review-final.md\`.
+${tell ? `\n${tell}\n` : ''}`
+  return { text, files, from }
+}
 function firstBare(args) {
   for (let i = 0; i < args.length; i++) {
     if (VALUE_FLAGS.has(args[i])) {
@@ -69,7 +223,7 @@ function argOf(args, name) {
 }
 
 /** The review brief text, and the files and output path it names. Pure apart from reading git. */
-export function reviewBrief(plan, agent, { root, base, branch, by }) {
+export function reviewBrief(plan, agent, { root, base, branch, by, lead = null }) {
   const files = (() => {
     const r = tryGit(['diff', '--name-only', `${base}...${branch}`], root)
     return r.ok ? r.out.split('\n').filter(Boolean) : []
@@ -119,6 +273,9 @@ ${rules.length ? `## What must not happen (from the plan)\n${rules.map((r) => '-
 Write \`${out}\`: actionable findings only, each with the file and line, the concrete input or state
 that goes wrong, and what the author should check. Say "no findings" if there are none; do not pad it.
 Commit only that file.
-`
+${(() => {
+  const tell = tellLine(lead, by || `rv-${agent.id}`)
+  return tell ? `\n${tell}\n` : ''
+})()}`
   return { text, files, out }
 }
