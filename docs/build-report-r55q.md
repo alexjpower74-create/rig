@@ -114,7 +114,9 @@ Grading:
   `rig qa 62c00f5 --repeat 3 --run "node test/taste.test.js"` gave 3 of 3 green, with the `--lan`
   check at 9388, 9721 and 8408 ms against its 10 s budget. So it is a load flake in r55w's taste
   suite with under 1 s of headroom, not a regression. Its owner may want a larger timeout there.
-- The final sha's run is in "Final" at the end.
+- The final pinned run is on the branch tip (the commit that last touched this report), and the
+  lead has its sha and exit lines through `tell-lead`: grading is the last step, so no commit
+  follows it.
 
 ## Found in passing, and fixed
 
@@ -241,7 +243,3 @@ rig qa <ref> --repeat <N> [--seeds <s1,s2>] --run "<one file>" [--host <ssh-host
   base run is watched too. Repeats are watched per seed. Nothing is left unwatched.
 - **Not built:** `needsStub` for paths that call clipboard tools by absolute path
   (`/usr/bin/xclip`). PATH shims cannot catch those; unsetting DISPLAY still makes them fail.
-
-## Final
-
-(filled in below once the pinned run on the tip has finished)
