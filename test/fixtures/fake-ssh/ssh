@@ -1,0 +1,48 @@
+#!/bin/sh
+# A fake `ssh` for tests: no network, no second machine. Put this directory first on PATH and set
+# FAKE_SSH_ROOT to a temp dir. Each host is a directory, $FAKE_SSH_ROOT/hosts/<host>, which becomes
+# HOME for the "remote" command; the command runs as real ssh runs it: its words joined by spaces,
+# parsed by the remote shell, with a clean environment (ssh forwards none of ours).
+#
+# Hosts that model failures:
+#   unreachable  never answers: with -o ConnectTimeout=N it gives up after N s with exit 255, as ssh
+#                does; without it, it hangs FAKE_SSH_HANG seconds (default 600).
+#   locked       wants a password: with -o BatchMode=yes it is refused at once with exit 255;
+#                without it, it waits on a prompt nobody can see for FAKE_SSH_HANG seconds.
+# Every call is logged, options and host, one line, to $FAKE_SSH_ROOT/ssh.log.
+set -u
+root=${FAKE_SSH_ROOT:?FAKE_SSH_ROOT is not set}
+hang=${FAKE_SSH_HANG:-600}
+opts="" timeout="" batch=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o) opts="$opts -o $2"
+        case $2 in ConnectTimeout=*) timeout=${2#ConnectTimeout=} ;; BatchMode=yes) batch=1 ;; esac
+        shift 2 ;;
+    -p|-i|-l|-F|-J|-E) opts="$opts $1 $2"; shift 2 ;;
+    -*) opts="$opts $1"; shift ;;
+    *) break ;;
+  esac
+done
+host=${1:?fake ssh: no host}
+shift
+printf '%s\t%s\n' "$host" "$opts" >> "$root/ssh.log"
+case $host in
+  unreachable)
+    if [ -n "$timeout" ]; then sleep "$timeout"; else sleep "$hang"; fi
+    echo "ssh: connect to host $host port 22: Connection timed out" >&2
+    exit 255 ;;
+  locked)
+    [ -z "$batch" ] && sleep "$hang"
+    echo "$host: Permission denied (publickey,password)." >&2
+    exit 255 ;;
+esac
+home="$root/hosts/$host"
+mkdir -p "$home"
+cd "$home" || exit 255
+# The host's own environment: anything the test puts in $home/.env (one NAME=value per line), as a
+# real host's login session would carry its own DISPLAY or PATH additions.
+extra=""
+[ -f "$home/.env" ] && extra=$(cat "$home/.env")
+# shellcheck disable=SC2086
+exec env -i HOME="$home" PATH="${FAKE_SSH_HOST_PATH:-$PATH}" LANG=C $extra sh -c "$*"

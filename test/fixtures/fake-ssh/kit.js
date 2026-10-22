@@ -79,13 +79,18 @@ export function fixtureRepo(parent, name, commits) {
   return { dir, shas }
 }
 
+// Swaps for src/remote.js that take one ssh safety option out (the pair of words, -o and its value).
+export const NO_CONNECT_TIMEOUT = ["    '-o',\n    `ConnectTimeout=$" + '{connectTimeoutSec}`,\n', '']
+export const NO_BATCH_MODE = ["    '-o',\n    'BatchMode=yes',\n", '']
+
 let n = 0
 /**
- * Import a copy of `src/<rel>` with each [from, to] swapped in. Every `from` must occur, or the
- * mutant would be the original and its control would prove nothing. Relative imports point back at
- * the real files, so only the mutated module differs.
+ * Write a copy of `src/<rel>` with each [from, to] swapped in, and return its path (in a fresh temp
+ * dir: remove it with `rmSync(dirname(path))`). Every `from` must occur, or the mutant would be the
+ * original and its control would prove nothing. Relative imports point back at the real files, so
+ * only the mutated module differs.
  */
-export async function mutant(rel, swaps) {
+export function mutantFile(rel, swaps) {
   const file = join(REPO, 'src', rel)
   let text = readFileSync(file, 'utf8')
   for (const [from, to] of swaps) {
@@ -96,10 +101,16 @@ export async function mutant(rel, swaps) {
   const dir = mkdtempSync(join(tmpdir(), 'rig-mutant-'))
   const out = join(dir, `${rel.replace(/\//g, '_')}.${++n}.mjs`)
   writeFileSync(out, text)
+  return out
+}
+
+/** Import a mutant (see mutantFile); its file is gone once it has loaded. */
+export async function mutant(rel, swaps) {
+  const out = mutantFile(rel, swaps)
   try {
     return await import(pathToFileURL(out).href)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    rmSync(dirname(out), { recursive: true, force: true })
   }
 }
 
