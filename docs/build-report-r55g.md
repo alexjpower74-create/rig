@@ -122,6 +122,22 @@ every check shows red under its control.
 
 Totals: gate-finish 20 + 3, gate-vendor 10, gate-fold 7 (+1 unproven in-suite, proven by hand), gate-decision 5.
 
+## Lead's follow-up: what every review brief asks
+
+Both review briefs (`reviewBrief` for a slice, `vendorBrief` for the second vendor) now carry an
+"Ask these" list, `ASK_THESE` in `src/commands/review.js`: (1) what changes between the check and its
+use or delivery, and is it checked again; (2) time edges: daylight saving, time zones, a clock that
+moves, exactly at the boundary; (3) a state that flips off and back on. `test/gate-review-brief.test.js`
+checks both briefs contain it; red by swapping the previous `review.js` (`0ed0253`) back in.
+
+**The tell line** is wired: `reviewBrief` and `vendorBrief` end with r55w's `tellLine(lead, id)`
+(id = `--by`, else `rv-<id>`; `rv-<vendor>` for the vendor brief). This branch's own `src/brief.js`
+does not export it yet, so the call is guarded with `typeof`, and the brief has no tell line until r55w
+merges. Nothing for the lead to wire: the same test loads r55w's `brief.js` and `plan.js` from
+`5acc1e1` into a copy of `src/` and asserts the last line of both briefs is the tell line (red with the
+scaffold's `brief.js`, `3ef17d0`, which has none). Merged with `rig/r55w` in a scratch tree, the new
+test, brief-five, crew, up-guard-init and gate-vendor all pass.
+
 ## Existing fixtures that now record a vendor pass
 
 A passing finish needs a second-vendor pass on the sha, so each fixture that expected a pass now

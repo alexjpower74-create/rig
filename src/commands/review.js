@@ -140,6 +140,21 @@ export function vendorReview(args, root, cfg, plan, { now = Date.now() } = {}) {
   return entry
 }
 
+/**
+ * Questions every review brief asks. A same-vendor review once missed three defects a second vendor
+ * found: it checked each state at the moment of the check, never what changes before the result is
+ * used, and read a duration as elapsed time without ever moving the clock.
+ */
+export const ASK_THESE = `## Ask these
+1. **What changes between the check and its use or delivery, and is it checked again?** A file, a
+   sha, a lease, a status, a permission: the fact true when it was checked may not be true when
+   the result is used, sent or shown.
+2. **Time edges.** A daylight-saving night, another time zone, a clock that moves, and exactly at
+   the boundary (the deadline itself, midnight, the last second of the window). Is a duration
+   measured with a clock that cannot jump?
+3. **A state that flips off and back on.** Revoked then restored, removed then re-added, failed
+   then passed: is the second "on" treated as new, or does an old record answer for it?`
+
 export const FINAL_BRIEF = join('.rig', 'REVIEW-final.md')
 const STALE_BRIEF_MS = 12 * 3_600_000
 
@@ -196,6 +211,8 @@ plan at the repo root (the contract), not against itself.
 3. **Bypasses**: an input, flag or order of calls that passes a gate without the fact the gate is for.
 4. **The hard rules below**, and anything that sends, deploys, spends or deletes.
 ${bar ? `\nThe bar, from the plan:\n${bar}\n` : ''}
+${ASK_THESE}
+
 ${rules.length ? `## What must not happen (from the plan)\n${rules.map((r) => '- ' + r).join('\n')}\n\n` : ''}## Verdict
 Record it on this sha, one line each, with what you ran or what you found:
 
@@ -268,6 +285,8 @@ ${
         .join('\n')}\n`
     : ''
 }
+${ASK_THESE}
+
 ${rules.length ? `## What must not happen (from the plan)\n${rules.map((r) => '- ' + r).join('\n')}\n\n` : ''}## Report
 Write \`${out}\`: actionable findings only, each with the file and line, the concrete input or state
 that goes wrong, and what the author should check. Say "no findings" if there are none; do not pad it.
