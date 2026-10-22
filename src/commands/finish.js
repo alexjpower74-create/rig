@@ -367,19 +367,25 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
     }
   }
 
-  // 3a''. "0 new" is a computed fact against the base's own run, shown when it was computed.
-  for (const run of [qa, hostQa].filter((r) => r?.baseline)) {
-    const b = run.baseline
-    const where = run.host && run.host !== 'local' ? ` on ${run.host}` : ''
+  // 3a''. "0 new" is a computed fact against the base's own run, shown when it was computed: a
+  // \`kind: 'baseline'\` record on this sha (one comparison for both machines), or a \`baseline\` field
+  // on the test run itself.
+  const baselineRun = runOn(root, sha, 'baseline')
+  const baselines = baselineRun?.baseline
+    ? [{ b: baselineRun.baseline, where: '' }]
+    : [qa, hostQa].filter((r) => r?.baseline).map((r) => ({ b: r.baseline, where: r.host && r.host !== 'local' ? ` on ${r.host}` : '' }))
+  for (const { b, where } of baselines) {
     const known = (b.known || []).map((k) => `${k.name} (${k.where})`)
     const fresh = b.newFailures || []
-    add(
-      `0 new failures against ${b.base || 'the base'}${where}`,
-      fresh.length ? 'fail' : 'ok',
-      fresh.length
-        ? `${fresh.length} new: ${fresh.slice(0, 5).join(', ')}${fresh.length > 5 ? ' …' : ''}`
-        : `0 new, ${known.length} known on ${String(b.baseSha || '').slice(0, 7) || 'the base'}${known.length ? `: ${known.slice(0, 5).join(', ')}` : ''}`,
-    )
+    const name = `0 new failures against ${b.base || 'the base'}${where}`
+    if (fresh.length) add(name, 'fail', `${fresh.length} new: ${fresh.slice(0, 5).join(', ')}${fresh.length > 5 ? ' …' : ''}`)
+    else if (b.complete === false) add(name, 'warn', `not computed: ${b.why || 'the base run did not finish'}`)
+    else
+      add(
+        name,
+        'ok',
+        `0 new, ${known.length} known on ${String(b.baseSha || '').slice(0, 7) || 'the base'}${known.length ? `: ${known.slice(0, 5).join(', ')}` : ''}`,
+      )
   }
   for (const run of [qa, hostQa].filter((r) => r?.needsStub?.length))
     add('specs that need a stub', 'warn', `${run.needsStub.join(', ')} reach for the desktop (clipboard or display)`)

@@ -337,6 +337,30 @@ await suite('rig 5.5, the finish gate (r55g)', async (s) => {
       return () => resetQa(repo, [{ kind: 'test', sha: head, exit: 0, cmd: 'npm test', dirtied: [], baseline: baseline([]) }])
     },
   })
+  // r55q writes the comparison as its own record, kind 'baseline', beside the test run.
+  const asRecord = (b) => [
+    { kind: 'test', sha: head, exit: 1, cmd: 'npm test', dirtied: [], host: 'local' },
+    { kind: 'baseline', sha: head, host: 'local', cmd: 'npm test', baseline: b },
+  ]
+  resetQa(repo, asRecord(baseline(['entry rejects blank'])))
+  await s.check('a kind "baseline" record on this sha is read the same way', {
+    assert: async () => stateOf(gate(repo), /0 new failures/) === 'fail',
+    breaks: async () => {
+      resetQa(repo, asRecord(baseline([])))
+      return () => resetQa(repo, asRecord(baseline(['entry rejects blank'])))
+    },
+  })
+  resetQa(repo, asRecord({ ...baseline([]), complete: false, why: 'the base run timed out' }))
+  await s.check('a baseline that could not be computed warns instead of reading "0 new"', {
+    assert: async () => {
+      const c = gate(repo).checks.find((x) => /0 new failures/.test(x.name))
+      return c.state === 'warn' && /not computed: the base run timed out/.test(c.detail)
+    },
+    breaks: async () => {
+      resetQa(repo, asRecord(baseline([])))
+      return () => {}
+    },
+  })
   resetQa(repo, [{ kind: 'test', sha: head, exit: 0, cmd: 'npm test', dirtied: [] }])
 
   // ---------------------------------------------------------------------------------------------
