@@ -39,7 +39,7 @@ export function defaultBase(cwd, cfg = {}) {
   return trunk
 }
 
-export default function foldCommand(args) {
+export default async function foldCommand(args) {
   if (args.includes('--help') || args.includes('-h')) return console.log(USAGE)
   for (let i = 0; i < args.length; i++) {
     if (VALUE_FLAGS.has(args[i]) && (args[i + 1] == null || args[i + 1].startsWith('--'))) {
@@ -68,7 +68,7 @@ export default function foldCommand(args) {
   printDrift(root, { base: liveBaseOf(root, cfg, base), slices: plan?.agents || [], fetch: !args.includes('--no-fetch') })
 
   const t0 = Date.now()
-  const r = fold(cwd, { base, fixes: all('--fix'), each, timeoutMs: minutes * 60_000, root, cfg })
+  const r = await fold(cwd, { base, fixes: all('--fix'), each, timeoutMs: minutes * 60_000, root, cfg })
   if (r.state === 'refused') {
     console.error(`\x1b[31mrig fold: refused.\x1b[0m ${r.why}`)
     process.exitCode = 1

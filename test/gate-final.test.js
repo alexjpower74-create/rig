@@ -3,10 +3,14 @@
 //      counterpart's tree must equal the stamped one, or finish fails naming the commit.
 //  (b) Item 3b: when the repo has a CI command, configured or detected by r55q's detectCi in the
 //      commit itself, finish needs a ci record on the sha and names the command when none ran.
-// Controls swap the previous finish.js (a25b59f) back in, or change the repository's state.
+//  (c) The second-vendor review of 949e12b: a baseline waives only the runs it compared (#2), the
+//      fold walk runs under pipefail with its limit and group stop (#3), and a CI record counts
+//      only when it ran today's CI command (#4).
+// Controls swap the previous finish.js (a25b59f, or 949e12b for (c)) back in, or change the
+// repository's state.
 
 import { suite } from '../harness/check.js'
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -96,7 +100,7 @@ const MERGED = srcWith('merged', { 'qa/ci.js': '5d001c2' })
 
 await suite('rig 5.5, after the fold: message-only rewrites (r55g)', async (s) => {
   /** main: plan; then "c1: entry", "c1: admin", "fixup! c1: entry"; folded onto the round tag and stamped. */
-  const folded = (name) => {
+  const folded = async (name) => {
     const repo = repoAt(name)
     writeFileSync(join(repo, 'app', 'entry.js'), 'export const entry = 1\n')
     commitAll(repo, 'c1: entry')
@@ -104,7 +108,7 @@ await suite('rig 5.5, after the fold: message-only rewrites (r55g)', async (s) =
     commitAll(repo, 'c1: admin')
     writeFileSync(join(repo, 'app', 'entry.js'), 'export const entry = 2\n')
     commitAll(repo, 'fixup! c1: entry')
-    const r = fold(repo, { base: 'round', root: repo, cfg })
+    const r = await fold(repo, { base: 'round', root: repo, cfg })
     if (r.state !== 'folded') throw new Error(`fixture did not fold: ${r.why}`)
     stampFold(repo, r)
     return { repo, stamp: r }
@@ -122,7 +126,7 @@ await suite('rig 5.5, after the fold: message-only rewrites (r55g)', async (s) =
   }
   const FOLD = /^fold on main holds$/
 
-  const a = folded('content')
+  const a = await folded('content')
   rewriteFirst(a.repo, a.stamp, { message: 'c1: entry, reworded', content: 'export const entry = 3\n' })
   const rewritten = git(['rev-parse', '--short', 'HEAD~1'], a.repo)
   let src = NOW
@@ -145,7 +149,7 @@ await suite('rig 5.5, after the fold: message-only rewrites (r55g)', async (s) =
     },
   })
 
-  const b = folded('message-only')
+  const b = await folded('message-only')
   rewriteFirst(b.repo, b.stamp, { message: 'c1: entry (clearer message)' })
   let contentToo = null
   await s.check('a message-only rewrite of the stamped commits passes: every tree identical', {
@@ -165,7 +169,7 @@ await suite('rig 5.5, after the fold: message-only rewrites (r55g)', async (s) =
     },
   })
 
-  const c = folded('unchanged')
+  const c = await folded('unchanged')
   greenOn(c.repo)
   await s.check('the stamped shas unchanged on main pass; rebasing them onto another base after the fold fails', {
     assert: async () => {
@@ -282,6 +286,121 @@ await suite('rig 5.5, the repo’s own CI, configured or detected (r55g)', async
         recordQa(repo, { kind: 'ci', sha, exit: 0, cmd: 'npm run ci' })
       }
     },
+  })
+})
+
+await suite('rig 5.5, the second-vendor findings on 949e12b (r55g)', async (s) => {
+  const PRE = srcWith('pre-949', { 'commands/finish.js': '949e12b' })
+  const PRE_FOLD = srcWith('pre-949-fold', { 'fold.js': '949e12b' })
+  const hostCfg = { ...cfg, qaHost: 'fake' }
+  const HOST = /^QA green on fake$/
+  const repo = repoAt('waiver')
+  writeFileSync(join(repo, 'app', 'entry.js'), 'export const entry = 1\n')
+  commitAll(repo, 'c1: entry')
+  const sha = git(['rev-parse', 'HEAD'], repo)
+  const at = (sec) => `2026-10-23T10:00:${String(sec).padStart(2, '0')}.000Z`
+  const hostRun = { kind: 'test', sha, host: 'fake', exit: 1, cmd: 'npm test', failures: ['remote regression'], at: at(1) }
+  const records = (baseline) => {
+    rmSync(qaLogPath(repo), { force: true })
+    recordQa(repo, { kind: 'test', sha, host: 'local', exit: 0, cmd: 'npm test', dirtied: [], at: at(0) })
+    recordQa(repo, hostRun)
+    recordVerdict(repo, { sha, vendor: 'openai', verdict: 'pass', what: 'npm test' })
+    recordQa(repo, { kind: 'baseline', sha, host: 'local', cmd: 'true', at: at(2), baseline })
+  }
+  const localOnly = { base: sha, baseSha: sha, newFailures: [], known: [], fixed: [], complete: true, why: null }
+  // Zyro's repro: the host failed; a later local-only `--baseline --run true` compared nothing of it.
+  let src = NOW
+  records(localOnly)
+  await s.check('a local-only baseline does not waive a failing host run it never compared', {
+    assert: async () => {
+      if (!src) return false
+      const g = await gateOf(src, repo, HOST, hostCfg)
+      return g?.state === 'fail' && /not waived: the baseline on this sha did not compare this run \(fake, npm test\)/.test(g.detail)
+    },
+    // 949e12b's finish.js: the newest baseline answered for every run, and the host read green.
+    breaks: async () => {
+      if (PRE) src = PRE
+      return () => {
+        src = NOW
+      }
+    },
+  })
+
+  // The waiver still works for the run the comparison did read, by host, command and record time.
+  const named = (atOf) => ({
+    ...localOnly,
+    known: [{ name: 'remote regression', where: 'there' }],
+    compared: [
+      { host: 'local', cmd: 'npm test', at: at(0) },
+      { host: 'fake', cmd: 'npm test', at: atOf },
+    ],
+  })
+  records(named(at(1)))
+  await s.check('a baseline that compared the host run, by host, command and record, waives its known failure', {
+    assert: async () => {
+      const g = await gateOf(NOW, repo, HOST, hostCfg)
+      return g?.state === 'ok' && /every failure is known on the base/.test(g.detail)
+    },
+    // The same comparison, of an earlier host run: this one was never read.
+    breaks: async () => {
+      records(named(at(0)))
+      return () => records(named(at(1)))
+    },
+  })
+
+  // #4: the CI record must be of today's command, per host.
+  const CIG = /^CI command green/
+  rmSync(qaLogPath(repo), { force: true })
+  greenOn(repo)
+  recordQa(repo, { kind: 'ci', sha, exit: 0, cmd: 'true' })
+  let ciSrc = NOW
+  await s.check('a CI pass of another command is stale: today’s ciCommand must be the one that ran', {
+    assert: async () => {
+      if (!ciSrc) return false
+      const g = await gateOf(ciSrc, repo, CIG, { ...cfg, ciCommand: 'false' })
+      return g?.state === 'fail' && /^stale: the run recorded is of "true", today's CI command is "false"/.test(g.detail)
+    },
+    // 949e12b's finish.js checked only the record's sha, host and exit.
+    breaks: async () => {
+      if (PRE) ciSrc = PRE
+      return () => {
+        ciSrc = NOW
+      }
+    },
+  })
+  await s.check('the same record passes when it is of today’s command', {
+    assert: async () => (await gateOf(NOW, repo, CIG, { ...cfg, ciCommand: 'true' }))?.state === 'ok',
+    breaks: async () => {
+      recordQa(repo, { kind: 'ci', sha, exit: 0, cmd: 'false' })
+      return () => recordQa(repo, { kind: 'ci', sha, exit: 0, cmd: 'true' })
+    },
+  })
+
+  // #3: the fold walk, under rig qa's runner.
+  let foldSrc = NOW
+  const walkFrom = async (dir) => (await import(`${pathToFileURL(join(dir, 'fold.js')).href}?v=${n++}`)).walkCommits
+  const walk = async (cmd, ms) => (await (await walkFrom(foldSrc))(repo, cfg, [{ sha, subject: 'c1: entry' }], cmd, ms))[0]
+  const oldFold = async () => {
+    if (PRE_FOLD) foldSrc = PRE_FOLD
+    return () => {
+      foldSrc = NOW
+    }
+  }
+  await s.check('a fold walk whose test fails inside a pipe is red (pipefail)', {
+    assert: async () => (await walk('false | cat', 60_000)).exit !== 0,
+    // 949e12b's walk ran `sh -c` and took the last command's status: exit 0.
+    breaks: oldFold,
+  })
+  const late = join(tmp, 'walk-late')
+  await s.check('a fold walk past its limit is stopped with everything it started (exit 124, nothing left running)', {
+    assert: async () => {
+      rmSync(late, { force: true })
+      const w = await walk(`(sleep 1; touch '${late}') & wait`, 300)
+      await new Promise((r) => setTimeout(r, 1500))
+      return w.exit === 124 && w.ms < 1000 && !existsSync(late)
+    },
+    // 949e12b's spawnSync killed only the shell: the subshell it started lived on and wrote the file.
+    breaks: oldFold,
   })
 })
 

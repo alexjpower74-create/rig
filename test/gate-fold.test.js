@@ -105,7 +105,7 @@ await suite('rig 5.5, rig fold (r55g)', async (s) => {
       writeFileSync(join(r.repo, 'app', 'entry.js'), 'export const entry = 9\n')
       git(['commit', '-qam', orphanSubject], r.repo)
       const tip = git(['rev-parse', 'HEAD'], r.repo)
-      const out = fold(r.repo, { base: 'main', root: r.repo, cfg })
+      const out = await fold(r.repo, { base: 'main', root: r.repo, cfg })
       return (
         out.state === 'refused' &&
         /no earlier commit on this stack has that subject/.test(out.why) &&
@@ -127,7 +127,7 @@ await suite('rig 5.5, rig fold (r55g)', async (s) => {
   await s.check('a fold that drops a hunk is refused by the tree check, and the branch is put back', {
     assert: async () => {
       const r = stackRepo(`drop-${Date.now()}`)
-      const out = fold(r.repo, { base: 'main', fixes: [r.fixAdmin.slice(0, 7)], root: r.repo, cfg }, hooks)
+      const out = await fold(r.repo, { base: 'main', fixes: [r.fixAdmin.slice(0, 7)], root: r.repo, cfg }, hooks)
       return (
         out.state === 'refused' &&
         /the folded tree differs from the old tip's tree/.test(out.why) &&
@@ -152,7 +152,7 @@ await suite('rig 5.5, rig fold (r55g)', async (s) => {
   await s.check('a real fold: two commits, the same tree, every commit walked, shas stamped old → new', {
     assert: async () => {
       git(['reset', '-q', '--hard', b.tip], b.repo)
-      result = fold(b.repo, { base: 'main', fixes: [b.fixAdmin.slice(0, 7)], each: walkCmd, root: b.repo, cfg })
+      result = await fold(b.repo, { base: 'main', fixes: [b.fixAdmin.slice(0, 7)], each: walkCmd, root: b.repo, cfg })
       return (
         result.state === 'folded' &&
         subjects(b.repo).join(' | ') === 'c1: entry | c1: admin' &&
@@ -181,7 +181,7 @@ await suite('rig 5.5, rig fold (r55g)', async (s) => {
       process.env.GIT_AUTHOR_EMAIL = 'session@example.invalid'
       let out
       try {
-        out = fold(r.repo, { base: 'main', fixes: [r.fixAdmin.slice(0, 7)], root: r.repo, cfg })
+        out = await fold(r.repo, { base: 'main', fixes: [r.fixAdmin.slice(0, 7)], root: r.repo, cfg })
       } finally {
         delete process.env.GIT_COMMITTER_EMAIL
         delete process.env.GIT_AUTHOR_EMAIL

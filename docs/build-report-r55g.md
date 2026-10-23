@@ -243,6 +243,27 @@ README paragraph:
 > stamps old → new shas, so every final check reruns on the shas that ship. Config: `vendor` (a name or
 > a list), `vendors` (more known vendors), `liveBase`, `qaHost`, `ciCommand`, `testCommand`.
 
+## Second-vendor review of 949e12b: findings 2, 3 and 4
+
+The review failed 949e12b with four reproduced findings; 2, 3 and 4 are r55g's. Each fix has a check
+in `test/gate-final.test.js` ("the second-vendor findings on 949e12b") whose control is the file as
+it was at 949e12b, and the reviewer's own repro scripts give the wrong answer on 949e12b and the right
+one on the fix.
+
+- **#2, a baseline waives only the runs it compared.** `rig finish` used to apply the newest baseline
+  on the sha to both machines. Now a failing run is waived only when the comparison read that exact
+  run, and every failure it names is known on the base on its own side (`here`, `there` or `both`).
+  r55q's record needs one field for the host side: `baseline.compared: [{ host, cmd, at }]`, one entry
+  per run fed to `compareBaseline`, where `at` is the `at` of that run's own test or ci record (set
+  explicitly in `recordQa` and returned on the stage result). Until it exists, a baseline covers only
+  the local run with its own command, recorded before it, so a host failure is never waived by it.
+- **#3, the fold walk runs under rig qa's runner.** `walkCommits` (and so `fold`) is async now and
+  uses `runWatched`: bash `-o pipefail`, the per-commit limit as exit 124, and the whole process group
+  stopped with it. `false | cat` is red; a subshell started by a timed-out walk no longer lives on.
+- **#4, a CI record counts only for today's command.** Each host's ci record must have the `cmd` of
+  the CI command finish requires now (configured or detected); otherwise the gate fails as stale and
+  names both commands.
+
 ## What's left, and what I need
 
 - **r55w**: done. `tellLine` is a plain import since main was merged in.
