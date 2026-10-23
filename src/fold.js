@@ -16,8 +16,8 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { spawnSync } from 'node:child_process'
 import { git, tryGit, tryRun } from './sh.js'
+import { runWatched } from './qa/watch.js'
 import { rigDir } from './rigdir.js'
 import { ensureDetachedWorktree, worktreePath } from './worktrees.js'
 
@@ -130,7 +130,7 @@ function rewriteEnv(todoFile) {
  *
  * @returns {{ state: 'folded'|'nothing'|'refused', why?, oldTip, newTip, mergeBase, map, walk, diff }}
  */
-export function fold(cwd, opts = {}, hooks = {}) {
+export async function fold(cwd, opts = {}, hooks = {}) {
   const { base, fixes = [], each = null, timeoutMs = 20 * 60_000, root = cwd, cfg = {} } = opts
   const refuse = (why, extra = {}) => ({ state: 'refused', why, ...extra })
 
@@ -197,7 +197,7 @@ export function fold(cwd, opts = {}, hooks = {}) {
       : after.map((c) => ({ old: [], new: c.sha, subject: c.subject }))
   // Each stamped commit's tree, so a later message-only rewrite can be told from a content change.
   for (const m of map) m.tree = git(['rev-parse', `${m.new}^{tree}`], cwd)
-  const walk = each ? walkCommits(root, cfg, after, each, timeoutMs) : []
+  const walk = each ? await walkCommits(root, cfg, after, each, timeoutMs) : []
   return { state: 'folded', branch: branch.out, oldTip, newTip, tree: newTree, mergeBase, map, walk, each }
 }
 
@@ -205,7 +205,7 @@ export function fold(cwd, opts = {}, hooks = {}) {
  * Check each commit out on its own in a scratch worktree and run `cmd` there; returns
  * [{ sha, subject, exit, ms, tail }]. The display and clipboard are unset, like a QA run.
  */
-export function walkCommits(root, cfg, commits, cmd, timeoutMs = 20 * 60_000) {
+export async function walkCommits(root, cfg, commits, cmd, timeoutMs = 20 * 60_000) {
   const out = []
   const env = { ...process.env }
   delete env.DISPLAY
@@ -214,11 +214,11 @@ export function walkCommits(root, cfg, commits, cmd, timeoutMs = 20 * 60_000) {
   try {
     for (const c of commits) {
       ensureDetachedWorktree(root, cfg, 'fold-walk', c.sha)
-      const t0 = Date.now()
-      const r = spawnSync('sh', ['-c', cmd], { cwd: path, env, encoding: 'utf8', timeout: timeoutMs, killSignal: 'SIGKILL' })
-      const exit = r.error?.code === 'ETIMEDOUT' ? 124 : (r.status ?? 128)
-      const tail = `${r.stdout || ''}${r.stderr || ''}`.trim().split('\n').slice(-5).join('\n')
-      out.push({ sha: c.sha, subject: c.subject, exit, ms: Date.now() - t0, tail })
+      // rig qa's runner: bash -o pipefail (`npm test | tail` fails when the tests do), the limit as
+      // exit 124, and the whole process group stopped with it (second-vendor review, 949e12b #3).
+      const r = await runWatched(cmd, { cwd: path, env, limitMs: timeoutMs, echo: false, prefix: `[fold-walk ${c.sha.slice(0, 7)}] ` })
+      const tail = r.text.trim().split('\n').slice(-5).join('\n')
+      out.push({ sha: c.sha, subject: c.subject, exit: r.exit, ms: r.ms, tail })
     }
   } finally {
     tryGit(['worktree', 'remove', '--force', path], root)

@@ -373,24 +373,45 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
   const qa = runOn(root, sha, 'test')
   const hostQa = cfg.qaHost ? runOn(root, sha, 'test', cfg.qaHost) : null
   const baselineRun = runOn(root, sha, 'baseline')
-  const knownOnly = (run) => {
-    const b = baselineRun?.baseline ?? run?.baseline
-    if (
-      !run ||
-      run.exit === 0 ||
-      run.stalled ||
-      [124, 137, 143].includes(run.exit) ||
-      !b ||
-      b.complete === false ||
-      (b.newFailures || []).length
-    )
-      return null
-    if (baselineRun?.baseline && String(baselineRun.at) < String(run.at)) return null
-    return `exited ${run.exit}, but every failure is known on the base: 0 new against ${String(b.baseSha || '').slice(0, 7) || b.base}`
+  // A waiver is bound to the exact run the comparison read (second-vendor review, 949e12b #2): a
+  // local-only "0 new" says nothing about a host run it never saw. r55q's `baseline.compared` names
+  // each run by host, command and record time; an older record without it covers only the local run
+  // with its own command, recorded before it. Either way every failure the run names must be one the
+  // comparison found known on the base, on that run's side.
+  const hostOf = (run) => run.host || 'local'
+  const covers = (rec, run) => {
+    if (rec === run) return true // a baseline field on the run itself
+    const b = rec.baseline
+    if (Array.isArray(b.compared))
+      return b.compared.some((c) => (c.host || 'local') === hostOf(run) && c.cmd === run.cmd && c.at === run.at)
+    return hostOf(run) === 'local' && rec.cmd === run.cmd && String(rec.at) >= String(run.at)
   }
+  const waiver = (run) => {
+    if (!run || run.exit === 0) return { ok: false }
+    if (run.stalled || [124, 137, 143].includes(run.exit)) return { ok: false, why: 'it never finished' }
+    const rec = baselineRun?.baseline ? baselineRun : run.baseline ? run : null
+    const b = rec?.baseline
+    if (!b) return { ok: false }
+    if (b.complete === false || (b.newFailures || []).length) return { ok: false }
+    if (!covers(rec, run))
+      return { ok: false, why: `the baseline on this sha did not compare this run (${hostOf(run)}, ${run.cmd}): rerun it with --baseline` }
+    const sides = rec === run ? null : hostOf(run) === 'local' ? ['here', 'both'] : ['there', 'both']
+    const known = new Set((b.known || []).filter((k) => !sides || sides.includes(k.where)).map((k) => k.name))
+    const names = run.failures || []
+    const unknown = names.filter((x) => !known.has(x))
+    if (!names.length) return { ok: false, why: 'it named no failure to compare' }
+    if (unknown.length)
+      return { ok: false, why: `not known on the base: ${unknown.slice(0, 5).join(', ')}${unknown.length > 5 ? ' …' : ''}` }
+    return {
+      ok: true,
+      why: `exited ${run.exit}, but every failure is known on the base: 0 new against ${String(b.baseSha || '').slice(0, 7) || b.base}`,
+    }
+  }
+  const knownOnly = (run) => (waiver(run).ok ? waiver(run).why : null)
+  const failWhy = (run) => `exited ${run.exit}${waiver(run).why ? ` (not waived: ${waiver(run).why})` : ''}`
   const qaState = (run) => (run.exit === 0 || knownOnly(run) ? 'ok' : 'fail')
   if (!qa) add(`QA green on ${short}`, 'fail', `no \`rig qa ${short} --run …\` recorded on this commit`)
-  else add(`QA green on ${short}`, qaState(qa), qa.exit === 0 ? qa.cmd : knownOnly(qa) || `last run exited ${qa.exit}: ${qa.cmd}`)
+  else add(`QA green on ${short}`, qaState(qa), qa.exit === 0 ? qa.cmd : knownOnly(qa) || `last run ${failWhy(qa)}: ${qa.cmd}`)
   if (qa && cfg.devCommand && qa.cmd !== cfg.devCommand)
     add('QA ran the project’s test command', 'warn', `ran "${qa.cmd}", the config's devCommand is "${cfg.devCommand}"`)
 
@@ -403,7 +424,7 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
       add(
         `QA green on ${cfg.qaHost}`,
         qaState(hostQa),
-        `${tally(hostQa)} beside ${qa ? tally(qa) : 'no local run'} here${hostQa.exit === 0 ? '' : ` — ${knownOnly(hostQa) || `exited ${hostQa.exit}`}`}`,
+        `${tally(hostQa)} beside ${qa ? tally(qa) : 'no local run'} here${hostQa.exit === 0 ? '' : ` — ${knownOnly(hostQa) || failWhy(hostQa)}`}`,
       )
   }
 
@@ -421,6 +442,14 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
           `${ci ? `"${ci.cmd}" (${ci.from})` : 'the CI command'} has no run recorded on this commit${host === 'local' ? '' : ` on ${host}`}: \`rig qa ${short}${host === 'local' ? '' : ` --host ${host}`}\``,
         )
       // A CI command can exit 0 and still post "failure" (r55q reads RIG_CI_STATUS): both must agree.
+      // The record must be of today's command: ciCommand lives in untracked config, so changing it
+      // leaves the sha alone, and a pass of the old command is stale evidence (949e12b #4).
+      else if (ci && run.cmd !== ci.cmd)
+        add(
+          name,
+          'fail',
+          `stale: the run recorded${host === 'local' ? '' : ` on ${host}`} is of "${run.cmd}", today's CI command is "${ci.cmd}" (${ci.from}): \`rig qa ${short}${host === 'local' ? '' : ` --host ${host}`}\``,
+        )
       else if (run.ciStatus?.state === 'failure')
         add(name, 'fail', `${run.cmd} posted failure${run.ciStatus.text ? `: ${run.ciStatus.text}` : ''}`)
       else add(name, run.exit === 0 ? 'ok' : 'fail', run.exit === 0 ? run.cmd : `exited ${run.exit}: ${run.cmd}`)
