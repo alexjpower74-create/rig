@@ -98,3 +98,23 @@ side.**
 the exit and the posted status, per host. `ciCommand: null` still turns the gate off. When the test
 and CI commands are one run, both records carry the same `cmd`, so that path still passes. I found
 no way past it.
+
+## Verified at 239ee75 (2026-10-23, r55w)
+
+Read `git show 239ee75`. The legacy "same command, recorded before" guess is gone. A baseline
+without `compared` now waives nothing ("names no compared run, so it waives none"), and the
+here/there side filter always applies. Checks at `239ee75`, unpacked with `git archive`: gate-final
+4/4, 4/4, 7/7, gate-finish 20/20 + 3/3, 0 void.
+
+My repro from the delta, rerun on `239ee75`'s `finishChecks`:
+- **Without `compared`:** all four scenes fail, even the run the baseline did compare.
+- **With `compared` naming tab 1's run** (local, `npm test`, `at(0)`):
+  - that run is waived;
+  - the concurrent run with a new VOID check is refused with "did not compare this run";
+  - so are the run with 4 failed / 1 parsed and the run with a new failure.
+- **#2: FIXED.**
+
+To check: `compared` is written by r55q's `qa.js` (`6a6cedd`, from each stage's own `at`). It is not
+on main or on `239ee75` yet. Until r55q merges, no failing run is waived. That fails safe, but a
+build with only known base failures cannot pass finish until then. Merge r55q before relying on the
+waiver.
