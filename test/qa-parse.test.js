@@ -10,7 +10,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { compareBaseline, lastSpecIn, parseFailures, tally } from '../src/qa/failures.js'
+import { compareBaseline, diffNames, lastSpecIn, parseFailures, parseMarks, tally } from '../src/qa/failures.js'
 import { needsStub } from '../src/qa/desktop.js'
 import { detectCi, planSeeds, readCiStatus, withSeed } from '../src/qa/ci.js'
 import { globToRe } from '../src/qa/watch.js'
@@ -56,9 +56,10 @@ await suite('fixture', async (s) => {
 })`,
   )
   const out = spawnSync(process.execPath, [f], { encoding: 'utf8' }).stdout
-  const names = parseFailures(out)
-  // "green and proven" breaks nothing, so it is VOID: a failure too.
-  assert.deepEqual(names.sort(), ['green and proven', 'never shown to fail', 'red one'])
+  // Only FAIL is a failure. "green and proven" breaks nothing, so it is VOID; the one with no
+  // control is UNPRV. Each is listed under its own word (lead, r55q fix 3).
+  assert.deepEqual(parseFailures(out), ['red one'])
+  assert.deepEqual(parseMarks(out), { void: ['green and proven'], unproven: ['never shown to fail'] })
   assert.deepEqual(parseFailures('  FAIL  taps to book — 4 taps (≤ 3) · broken: 4 taps 12ms'), ['taps to book'])
 })
 
@@ -75,9 +76,16 @@ test('rspec, Playwright and Jest lines; line numbers and durations are cut so na
     '[webkit] › tests/book.spec.ts › pays',
   ])
   assert.deepEqual(parseFailures('FAIL src/cart.test.js\n  ● Cart › totals'), ['src/cart.test.js'])
-  assert.deepEqual(tally('Tests:       2 failed, 5 passed, 7 total\n'), { passed: 5, failed: 2, names: [], conflict: null })
+  assert.deepEqual(tally('Tests:       2 failed, 5 passed, 7 total\n'), {
+    passed: 5,
+    failed: 2,
+    names: [],
+    conflict: null,
+    void: 0,
+    unproven: 0,
+  })
   assert.deepEqual(tally('  5 passed (3.1s)\n  1 failed\n').passed, 5)
-  assert.deepEqual(tally('12 examples, 1 failure\n'), { passed: 11, failed: 1, names: [], conflict: null })
+  assert.deepEqual(tally('12 examples, 1 failure\n'), { passed: 11, failed: 1, names: [], conflict: null, void: 0, unproven: 0 })
 })
 
 test('qaFailurePattern names what the built-in runners do not know', () => {
@@ -309,12 +317,12 @@ test('on the host, the stub calls runOnHost returns count even when the spec swa
 })
 
 test('a tally that contradicts the exit is not printed as a number (real run on 515b118)', () => {
-  // test/target.test.js prints a fixture suite's summary inside a passing run: one VOID it expects.
+  // A test may print a fixture suite's summary inside a passing run (target.test.js did, with a VOID;
+  // since VOID is not a failure, the case here is a fixture suite with one FAIL it expects).
   const nested = [
     '✔ PASS: 2 taps is inside the bar (539ms)',
-    'accept a shift: 0 passed, 0 failed, 1 void, 0 unproven',
-    '  VOID checks passed against a broken page. They are not evidence of anything.',
-    '  of which targets: 0 passed, 0 failed, 1 void, 0 unproven',
+    'accept a shift: 0 passed, 1 failed, 0 void, 0 unproven',
+    '  of which targets: 0 passed, 1 failed, 0 void, 0 unproven',
     '  FAIL t2 report names every repo  not in the report: lantern',
     'rig 5.5, workflow: 12 passed, 0 failed, 0 void, 0 unproven',
   ].join('\n')
@@ -328,4 +336,17 @@ test('a tally that contradicts the exit is not printed as a number (real run on 
   assert.deepEqual([tally(own, null, 1).passed, tally(own, null, 1).failed], [3, 1])
   // A red exit with nothing counted is a conflict too: no "failed 0" beside a failing run.
   assert.match(tally('all fine\n', null, 2).conflict, /exited 2/)
+})
+
+test('UNPRV and VOID count toward the new-failure diff only when the run exited non-zero', () => {
+  // The real line from main: r55g's gate-fold check with no negative control, in a run that exited 0.
+  const out = '  UNPRV the folded commits keep the identity from git config, not the session’s environment 3ms\n  PASS  folds 2ms\n'
+  assert.deepEqual(parseFailures(out), [])
+  assert.deepEqual(diffNames(out, { exit: 0 }), [])
+  assert.deepEqual(diffNames(out, { exit: 1 }), ['the folded commits keep the identity from git config, not the session’s environment'])
+  const b = compareBaseline({ here: diffNames(out, { exit: 0 }), base: [], runs: [{ exit: 0, failures: [] }] })
+  assert.deepEqual(b.newFailures, [])
+  // A green run with an UNPRV line is not a tally conflict: nothing failed.
+  assert.equal(tally(out, null, 0).conflict, null)
+  assert.equal(tally(out, null, 0).failed, 0)
 })

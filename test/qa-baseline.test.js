@@ -343,7 +343,7 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
   let nestedExit = 0
   await s.check('a count that contradicts the exit is shown as "?" with the reason, not as a number', {
     assert: async () => {
-      const cmd = `echo 'accept a shift: 0 passed, 0 failed, 1 void, 0 unproven'; echo 'suite: 5 passed, 0 failed, 0 void, 0 unproven'; exit ${nestedExit}`
+      const cmd = `echo 'accept a shift: 0 passed, 1 failed, 0 void, 0 unproven'; echo 'suite: 5 passed, 0 failed, 0 void, 0 unproven'; exit ${nestedExit}`
       const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--run', cmd], {
         fake: fakeBox({ exit: 0, log: 'ok 1 - fine\n# pass 1\n# fail 0\n' }),
       })
@@ -359,6 +359,31 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       nestedExit = 1
       return () => {
         nestedExit = 0
+      }
+    },
+    timeout: 60_000,
+  })
+
+  // main after cf316d4: an UNPRV line in a green run printed "1 failing".
+  let tag = 'UNPRV'
+  await s.check('an UNPRV line in a green run is listed as unproven, never as failing', {
+    assert: async () => {
+      const line = tag === 'UNPRV' ? '  UNPRV the folded' : '  FAIL  the folded'
+      const cmd = `echo '${line} commits keep the identity from git config 3ms'; echo '  PASS  folds 2ms'; exit 0`
+      const r = rigQa(hostRepo, ['HEAD', '--run', cmd])
+      const rec = last(hostRepo, 'test')
+      return (
+        /rig qa: 1 unproven: the folded commits keep the identity from git config/.test(r.out) &&
+        !/failing/.test(r.out) &&
+        rec.failures.length === 0 &&
+        JSON.stringify(rec.unproven) === '["the folded commits keep the identity from git config"]'
+      )
+    },
+    // The control: the same check printed as FAIL is a failing test, and is said to be.
+    breaks: () => {
+      tag = 'FAIL'
+      return () => {
+        tag = 'UNPRV'
       }
     },
     timeout: 60_000,

@@ -30,12 +30,11 @@ const RUNNERS = [
   },
   // node:test's spec reporter: "✖ name (1.2ms)". Its "✖ failing tests:" heading is not a test.
   { id: 'node-spec', re: /^\s*✖ (.+)$/, name: (m) => (/^failing tests:?$/.test(m[1].trim()) ? null : tidy(m[1])) },
-  // The Rig's own harness: "  FAIL  name 12ms" ("UNPRV name" is one space narrower); VOID and UNPRV
-  // fail the run too. Its summary ("  VOID checks passed against a broken page…") has one space and
-  // is not a test. A target's name ends at " — ".
+  // The Rig's own harness: "  FAIL  name 12ms". Its VOID and UNPRV lines are not failures by
+  // themselves (see parseMarks); a target's name ends at " — ".
   {
     id: 'harness',
-    re: /^\s*(?:(?:FAIL|VOID)\s{2}|UNPRV\s)(\S.*?)(?:\s+\d+ms)?$/,
+    re: /^\s*FAIL\s{2}(\S.*?)(?:\s+\d+ms)?$/,
     name: (m) => m[1].split(' — ')[0].trim(),
   },
   // Jest names the failing file: "FAIL src/cart.test.js".
@@ -80,6 +79,35 @@ export function parseFailures(text, { pattern = null } = {}) {
   return [...seen]
 }
 
+/**
+ * The harness's VOID and UNPRV checks by name, each under its own word: a check that passed
+ * against a broken page (void) or was never shown to fail (unproven). Neither is a failing test.
+ * The summary line ("  VOID checks passed against a broken page…") has one space and is skipped.
+ */
+export function parseMarks(text) {
+  const out = { void: [], unproven: [] }
+  for (const raw of plain(text).split('\n')) {
+    const m = raw.trimEnd().match(/^\s*(?:(VOID)\s{2}|(UNPRV)\s)(\S.*?)(?:\s+\d+ms)?$/)
+    if (!m) continue
+    const name = m[3].split(' — ')[0].trim()
+    const list = m[1] ? out.void : out.unproven
+    if (!list.includes(name)) list.push(name)
+  }
+  return out
+}
+
+/**
+ * The names a run contributes to the baseline's new-failure diff: its failures, and its VOID and
+ * UNPRV checks only when the run's exit says it failed (the harness fails a run on VOID, and on
+ * UNPRV under requireNegativeControl). In a green run they are notes, never new failures.
+ */
+export function diffNames(text, { exit, pattern = null } = {}) {
+  const names = parseFailures(text, { pattern })
+  if (exit === 0) return names
+  const marks = parseMarks(text)
+  return [...new Set([...names, ...marks.void, ...marks.unproven])]
+}
+
 /** Which runner's failure line this is, or null. Used to place a failure in time (needs-a-stub). */
 export function failureIn(line, { pattern = null } = {}) {
   return parseFailures(line, { pattern })[0] ?? null
@@ -111,9 +139,10 @@ export function tally(text, failures = null, exit = undefined) {
   }
   for (const m of t.matchAll(/^\s*(?:#|ℹ) (pass|fail) (\d+)\s*$/gm)) add(m[1] === 'pass' ? 'p' : 'f', Number(m[2]))
   // "of which targets: …" breaks the suite's own count down; it is not another suite.
+  // Void checks are counted apart (parseMarks): not failures, though they fail a harness run.
   for (const m of t.matchAll(/^(?!\s*of which\b).+?: (\d+) passed, (\d+) failed, (\d+) void/gm)) {
     add('p', Number(m[1]))
-    add('f', Number(m[2]) + Number(m[3]))
+    add('f', Number(m[2]))
   }
   for (const m of t.matchAll(/^\s+(\d+) passed \(/gm)) add('p', Number(m[1]))
   for (const m of t.matchAll(/^\s+(\d+) failed\s*$/gm)) add('f', Number(m[1]))
@@ -132,8 +161,10 @@ export function tally(text, failures = null, exit = undefined) {
   let conflict = null
   if (exit === 0 && counted > 0)
     conflict = `the output counts ${counted} failed but the run exited 0 (a test may print a summary of its own)`
-  else if (typeof exit === 'number' && exit !== 0 && counted === 0) conflict = `the run exited ${exit} but no failure was counted`
-  return { passed, failed: conflict ? null : counted, names, conflict }
+  const marks = parseMarks(text)
+  if (typeof exit === 'number' && exit !== 0 && counted === 0 && !marks.void.length && !marks.unproven.length)
+    conflict = `the run exited ${exit} but no failure was counted`
+  return { passed, failed: conflict ? null : counted, names, conflict, void: marks.void.length, unproven: marks.unproven.length }
 }
 
 /**
