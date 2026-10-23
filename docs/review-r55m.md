@@ -147,3 +147,52 @@ bb4a819 (report), e90950f (code) and b7120d3 (report). One code commit was revie
   depend on what the test machine has installed.
 
 Findings: none.
+
+## Delta at 6015ccd (2026-10-23, r55q)
+
+The scope is r55m's 5.5.1 dash fix: fbf1105 (the fake ssh's `FAKE_SSH_SHELL`, and a dash check),
+13eac68 (`runOnHost`: the command gets its own process group through setsid, else bash's job
+control, else `set -m`; the lifeline reads ssh's stdin through fd 3) and 6015ccd (the PATH check).
+Read only, on `rig/r55q` with main merged. `machines-remote` passes, 18 checks, 0 void. This
+machine has no dash, so the dash check prints its skip line and does not run here.
+
+I tried to break it with mutants of `src/remote.js` through the fake ssh, and r55m's own measure:
+each stop runs until the host's last process is gone.
+
+- **No setsid and no bash, with an sh that honours `set -m`:** a limit, a leftover and an abort
+  each stop the run (2.0 s, 34 ms, 67 ms). The third branch works on such a shell.
+- **No setsid and no bash, with an sh that has no job control without a tty (dash):** the third
+  branch is emulated by taking out its `set -m`. Every stop does nothing, and silently: the limit
+  run, the leftover and the abort each wait the full 30 s for the sleeper to end on its own.
+  Finding 1.
+- **ssh dropped mid-run** (the ssh client SIGKILLed, no abort sent): on the setsid path and on the
+  bash path alike, the run comes back 255 in 79 ms and 144 ms, and the host's sleeper is gone. The
+  lifeline's fd 3 read sees the EOF.
+- **A command that calls setsid itself** (`setsid sleep 30 … &`): the process leaves the run's
+  group by design, so nothing stops it, on either path. It outlives the run. If it keeps the run's
+  stdout open, the run waits until it exits. This predates the change (no group kill can reach a
+  new session). Note 2.
+- **macOS bash 3.2:** not runnable here. By reading, the bash path uses only what 3.2 has:
+  `set -m` in a non-interactive `bash -c`, `"$@"`, `$!`, `wait $!`, and `-o pipefail` (3.0+).
+  macOS also has /bin/dash, so on the Mac both the no-setsid bash check and the dash check run. The
+  Mac leg of the gate is the real proof; the lead should check that `machines-remote` passes there
+  at this sha.
+
+### 1. With no setsid, no bash and dash as sh, nothing stops a run, and nothing says so (low)
+
+The third branch (`set -m`) is the configuration fbf1105 shows broken: dash gives `set -m` no job
+control without a tty. On a host with neither setsid nor bash, every `kill -TERM -$grp` fails
+silently, and the limit, leftovers and aborts all wait out the run. Such a host is rare: Debian and
+Ubuntu ship setsid (util-linux), macOS ships bash, and busybox usually has a setsid applet. That is
+why this is low. Suggested repair: after the launch, check that the group exists
+(`kill -0 -$grp 2>/dev/null`). If it does not, print a line such as `rig-qa: the run has no
+process group of its own (no setsid, no bash, and this sh has no job control): a limit or an abort
+stops only its shell`, and kill `$pid` itself as the fallback, so the failure is named, not silent.
+
+### 2. A command that starts its own session escapes every stop (note, no change)
+
+`setsid` (or a daemon's own double fork) inside the test command takes a process out of reach of
+any group kill. Only a cgroup or a per-run user could reach it. It belongs in the README's
+limits line for `--host`, not in the code.
+
+Findings: one low (1) and one note (2). Nothing blocks 5.5.1.
