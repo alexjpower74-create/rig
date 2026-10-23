@@ -120,7 +120,7 @@ await suite('rig 5.5, r55q: baselines, local CI, repeats, the second machine', a
   const adds = commitFiles(repo, { 'test/a.test.js': specFile(['the known broken one', 'the new broken one']) }, 'adds a failure')
   git(['checkout', '-q', 'main'], repo)
   commitFiles(repo, { 'later.txt': 'main moved on\n' }, 'main moves on') // the merge base is not main's tip
-  const RUN = ['--run', 'node --test test/']
+  const RUN = ['--run', 'node --test test/*.test.js']
 
   let graded = same
   await s.check('"0 new" is computed from a run on the head and a run on the merge base', {
@@ -320,7 +320,7 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
   await s.check('--host runs the same sha there, under the lease, and prints both tallies side by side', {
     assert: async () => {
       rmSync(calls, { force: true })
-      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--run', 'node --test test/'], { fake: box })
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--run', 'node --test test/*.test.js'], { fake: box })
       const log = readFileSync(calls, 'utf8')
         .split('\n')
         .filter(Boolean)
@@ -332,7 +332,7 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
         log[0].acquire === 'host:build-box' &&
         // held under this run's own token, and given back under the same one (Zyro, 949e12b)
         /^r55q\.[0-9a-f]{8}$/.test(log[0].by) &&
-        log.some((c) => c.run === 'node --test test/' && c.sha === sha) &&
+        log.some((c) => c.run === 'node --test test/*.test.js' && c.sha === sha) &&
         log.some((c) => c.release === 'host:build-box' && c.by === log[0].by) &&
         /\n\s+exit\s+1\s+1\n/.test(r.out) &&
         /fails only on build-box: only on the second OS/.test(r.out) &&
@@ -438,7 +438,7 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
     assert: async () => {
       rmSync(calls, { force: true })
       const before = history(hostRepo).length
-      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--run', 'node --test test/'], { fake: fakeBox({ holder }) })
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--run', 'node --test test/*.test.js'], { fake: fakeBox({ holder }) })
       return r.status === 75 && /refused — build-box is leased by r55x/.test(r.out) && history(hostRepo).length === before
     },
     breaks: () => {
@@ -478,7 +478,7 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       // The base on the box fails only the known one: "only on the second OS" is new there.
       const base = git(['rev-parse', 'HEAD'], hostRepo)
       const fake = { ...hostBase, at: { [base]: { exit: 1, log: 'not ok 1 - the known broken one\n' } } }
-      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--baseline', '--run', 'node --test test/'], { fake })
+      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--baseline', '--run', 'node --test test/*.test.js'], { fake })
       const b = last(hostRepo, 'baseline').baseline
       const where = Object.fromEntries(b.known.map((k) => [k.name, k.where]))
       if (where['the known broken one'] !== 'both') throw new Error(`known ${JSON.stringify(b.known)}\n${r.out.slice(-600)}`)
@@ -499,7 +499,7 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
   let where = ['--host', 'build-box']
   await s.check('the baseline names every run it compared: host, command and the run record’s own time', {
     assert: async () => {
-      rigQa(hostRepo, ['HEAD', ...where, '--by', 'r55q', '--baseline', '--run', 'node --test test/'], { fake: fakeBox() })
+      rigQa(hostRepo, ['HEAD', ...where, '--by', 'r55q', '--baseline', '--run', 'node --test test/*.test.js'], { fake: fakeBox() })
       const b = last(hostRepo, 'baseline').baseline
       const runs = [last(hostRepo, 'test'), last(hostRepo, 'test', 'build-box')]
       if (!Array.isArray(b.compared)) throw new Error(`no compared: ${JSON.stringify(b)}`)
@@ -530,7 +530,9 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       git(['branch', '-D', '-q', 'rig/hb'], hostRepo)
       const base = git(['rev-parse', 'HEAD'], hostRepo)
       const fake = fakeBox({ exit: 1, log: remoteOnly.log, at: { [base]: baseOnHost } })
-      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--by', 'r55q', '--baseline', base, '--run', 'node --test test/'], { fake })
+      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--by', 'r55q', '--baseline', base, '--run', 'node --test test/*.test.js'], {
+        fake,
+      })
       const b = last(hostRepo, 'baseline').baseline
       const ranThere = readFileSync(calls, 'utf8').includes(`"sha":"${base}"`)
       if (!ranThere) throw new Error(`the base never ran on the host\\n${r.out.slice(-600)}`)
@@ -606,7 +608,7 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
     console.log('  skipped: src/timings.js does not store timings yet (r55m), so qa:* timings are not checked')
   else {
     const tRepo = repoAt('timings', { 'test/a.test.js': specFile([]) })
-    let run = ['--run', 'node --test test/', '--negative', 'true']
+    let run = ['--run', 'node --test test/*.test.js', '--negative', 'true']
     await s.check('qa:test and qa:negative wall times go to .rig/timings.jsonl', {
       assert: async () => {
         rigQa(tRepo, ['HEAD', ...run])
@@ -615,9 +617,9 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       },
       breaks: () => {
         rmSync(join(tRepo, '.rig', 'timings.jsonl'), { force: true })
-        run = ['--run', 'node --test test/']
+        run = ['--run', 'node --test test/*.test.js']
         return () => {
-          run = ['--run', 'node --test test/', '--negative', 'true']
+          run = ['--run', 'node --test test/*.test.js', '--negative', 'true']
         }
       },
       timeout: 60_000,

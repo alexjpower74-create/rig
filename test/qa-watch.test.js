@@ -197,7 +197,7 @@ test('reads no display', () => assert.equal(process.env.DISPLAY, undefined))
   await s.check('a spec that calls the clipboard tool is listed "needs a stub", and the real tool is never reached', {
     assert: async () => {
       rmSync(marker, { force: true })
-      const r = rigQa(deskRepo, ['HEAD', '--run', 'node --test test/', ...deskArgs], env)
+      const r = rigQa(deskRepo, ['HEAD', '--run', 'node --test test/*.test.js', ...deskArgs], env)
       const rec = last(deskRepo)
       if (existsSync(marker)) throw new Error('the real xclip was reached')
       if (r.status === 0) throw new Error(`the clipboard spec passed:\n${r.out.slice(-600)}`)
@@ -217,7 +217,7 @@ test('reads no display', () => assert.equal(process.env.DISPLAY, undefined))
 
   await s.check('the clipboard spec fails fast: the whole run takes seconds, not a hang', {
     assert: async () => {
-      const r = rigQa(deskRepo, ['HEAD', '--run', 'node --test test/', '--stall', '0', '--timeout', '0.25', ...deskArgs], env)
+      const r = rigQa(deskRepo, ['HEAD', '--run', 'node --test test/*.test.js', '--stall', '0', '--timeout', '0.25', ...deskArgs], env)
       return r.ms < 12_000 && r.status !== 124
     },
     // The hang the shims exist to stop: a clipboard tool that waits for ever (as xclip does holding
