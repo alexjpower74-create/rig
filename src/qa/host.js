@@ -8,6 +8,7 @@
 // The transport and the lease are r55m's (src/remote.js, src/lease.js). They sit behind `remote`
 // so a test can put a fake machine there; no test reaches a real one.
 
+import { randomBytes } from 'node:crypto'
 import { acquire, holderOf, release } from '../lease.js'
 import { runOnHost } from '../remote.js'
 import { diffNames, lastSpecIn, parseFailures, parseMarks, tally } from './failures.js'
@@ -23,6 +24,15 @@ export const holderId = (s) =>
     .replace(/[^A-Za-z0-9._:@-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || 'rig-qa'
+
+/**
+ * The lease holder for one rig qa invocation: its readable label and a token of its own,
+ * `<label>.<8 hex>`. The lease takes a holder that matches the current one as a renewal, so a label
+ * alone (the branch, by default) made a second run at once a renewal of the first: it ran in the
+ * first one's host checkout, on its test DB (Zyro's review of 949e12b). With the token, only this
+ * invocation renews or gives back its lease; any other run is refused.
+ */
+export const leaseToken = (label) => `${holderId(label).slice(0, 71)}.${randomBytes(4).toString('hex')}`
 
 /**
  * Take the host's lease for `by`, for `ttlMin` minutes. Returns { ok, why, release, renew }; `why`

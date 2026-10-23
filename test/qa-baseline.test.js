@@ -316,9 +316,10 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       if (!rec) throw new Error(`no host record\n${r.out.slice(-800)}`)
       return (
         log[0].acquire === 'host:build-box' &&
-        log[0].by === 'r55q' &&
+        // held under this run's own token, and given back under the same one (Zyro, 949e12b)
+        /^r55q\.[0-9a-f]{8}$/.test(log[0].by) &&
         log.some((c) => c.run === 'node --test test/' && c.sha === sha) &&
-        log.some((c) => c.release === 'host:build-box') &&
+        log.some((c) => c.release === 'host:build-box' && c.by === log[0].by) &&
         /\n\s+exit\s+1\s+1\n/.test(r.out) &&
         /fails only on build-box: only on the second OS/.test(r.out) &&
         rec.failed === 2 &&
@@ -359,6 +360,35 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       nestedExit = 1
       return () => {
         nestedExit = 0
+      }
+    },
+    timeout: 60_000,
+  })
+
+  // main 949e12b: a host run that exited 1 on a harness VOID printed "failed 0" beside "exit 1".
+  let voidLog =
+    '  VOID  comps on a phone: a rating tapped after a swipe still counts 7269ms\nrig taste: 38 passed, 0 failed, 1 void, 0 unproven\n'
+  await s.check('a red run with no FAIL line prints "failed ?" and names the VOID, never "failed 0"', {
+    assert: async () => {
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--run', 'echo "# pass 1"; echo "# fail 0"'], {
+        fake: fakeBox({ exit: 1, log: voidLog }),
+      })
+      const rec = last(hostRepo, 'test', 'build-box')
+      return (
+        /\n\s+failed\s+0\s+\?\n/.test(r.out) &&
+        /\n\s+void\s+0\s+1\n/.test(r.out) &&
+        /failed on build-box: not counted: exit 1 but no FAIL line; 1 void: comps on a phone/.test(r.out) &&
+        rec.failed === null &&
+        /no FAIL line/.test(rec.tallyConflict)
+      )
+    },
+    // With a FAIL line the exit is explained, and the count is a number.
+    breaks: () => {
+      voidLog =
+        '  FAIL  comps on a phone: a rating tapped after a swipe still counts 7269ms\nrig taste: 38 passed, 1 failed, 0 void, 0 unproven\n'
+      return () => {
+        voidLog =
+          '  VOID  comps on a phone: a rating tapped after a swipe still counts 7269ms\nrig taste: 38 passed, 0 failed, 1 void, 0 unproven\n'
       }
     },
     timeout: 60_000,

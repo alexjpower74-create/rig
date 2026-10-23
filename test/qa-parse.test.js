@@ -335,7 +335,21 @@ test('a tally that contradicts the exit is not printed as a number (real run on 
   const own = 'suite: 3 passed, 1 failed, 0 void, 0 unproven\n  of which targets: 1 passed, 1 failed, 0 void, 0 unproven\n'
   assert.deepEqual([tally(own, null, 1).passed, tally(own, null, 1).failed], [3, 1])
   // A red exit with nothing counted is a conflict too: no "failed 0" beside a failing run.
-  assert.match(tally('all fine\n', null, 2).conflict, /exited 2/)
+  assert.match(tally('all fine\n', null, 2).conflict, /exit 2 but no FAIL line/)
+})
+
+test('a red exit explained only by a VOID or UNPRV is a conflict that names them (main 949e12b)', () => {
+  const out =
+    '  VOID  comps on a phone: a rating tapped after a swipe still counts 7269ms\nrig taste: 38 passed, 0 failed, 1 void, 0 unproven\n'
+  const t = tally(out, null, 1)
+  assert.equal(t.failed, null)
+  assert.equal(t.void, 1)
+  assert.equal(t.conflict, 'exit 1 but no FAIL line; 1 void: comps on a phone: a rating tapped after a swipe still counts')
+  const u = tally('  UNPRV folds without a control 3ms\n', null, 1)
+  assert.equal(u.conflict, 'exit 1 but no FAIL line; 1 unproven: folds without a control')
+  assert.equal(tally('all fine\n', null, 2).conflict, 'exit 2 but no FAIL line')
+  // A FAIL line beside the VOID explains the exit: a number, no conflict.
+  assert.equal(tally(`${out}  FAIL  another 2ms\n`, null, 1).conflict, null)
 })
 
 test('UNPRV and VOID count toward the new-failure diff only when the run exited non-zero', () => {

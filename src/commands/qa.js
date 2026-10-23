@@ -13,7 +13,7 @@ import { exitCodeFor, fmtMs, runWatched } from '../qa/watch.js'
 import { compareBaseline, diffNames, parseFailures, parseMarks, tally } from '../qa/failures.js'
 import { desktopFreeEnv, makeShims, needsStub, readShimCalls } from '../qa/desktop.js'
 import { detectCi, planSeeds, readCiStatus, withSeed } from '../qa/ci.js'
-import { ciOnHost, holderId, leaseHost, runHost } from '../qa/host.js'
+import { ciOnHost, holderId, leaseHost, leaseToken, runHost } from '../qa/host.js'
 
 export { exitCodeFor, groups }
 
@@ -57,7 +57,8 @@ rig qa <ref> --repeat <N> [--seeds [<s1,s2,…>]] --run "<one file>" [--host <ss
   --host <ssh-host>  run the same command at the same sha on a second machine too (default: qaHost
                      in the config; --no-host skips it), under the host's lease; both tallies are
                      printed side by side. A lease someone else holds refuses the run, by name.
-  --by <id>          who holds the lease (default: RIG_SESSION, else the branch you are on)
+  --by <id>          who holds the lease (default: RIG_SESSION, else the branch you are on); each
+                     run holds it as <id>.<token>, so a second run at once is refused too
   --ci / --no-ci     the repo's own local CI command runs, recorded as kind "ci", whenever --run is
                      not given; --ci runs it beside --run too, --no-ci never. Found as ciCommand in
                      the config, else scripts.ci in package.json, an executable bin/ci, script/ci
@@ -111,7 +112,9 @@ export default async function qa(args) {
   const desktop = args.includes('--desktop')
 
   // The lease first: a refused host refuses the run before a worktree is touched.
-  const by = holderId(argOf(args, '--by') || process.env.RIG_SESSION || currentBranchOrNull(process.cwd()) || `qa-${process.pid}`)
+  // The label names the session (its host checkout and test DB); the token is this run's own hold.
+  const label = holderId(argOf(args, '--by') || process.env.RIG_SESSION || currentBranchOrNull(process.cwd()) || `qa-${process.pid}`)
+  const by = leaseToken(label)
   let lease = null
   if (host) {
     // Long enough for the stages that use the host at their limit, and renewed while the run lasts.
@@ -154,7 +157,7 @@ export default async function qa(args) {
   const shims = desktop ? null : makeShims()
   if (shims) process.on('exit', shims.remove)
   const baseEnv = { ...process.env, PORT: String(port), RIG_QA_SHA: sha }
-  const ctx = { root, cfg, wt, ref, full, sha, port, pattern, limitMs, stallMs, shims, host, by, desktop, lease }
+  const ctx = { root, cfg, wt, ref, full, sha, port, pattern, limitMs, stallMs, shims, host, by, label, desktop, lease }
   ctx.env = shims ? desktopFreeEnv(baseEnv, shims) : baseEnv
 
   if (repeat) process.exit(await repeatRuns(ctx, args, repeat))
@@ -373,7 +376,7 @@ function printCiStatus(status, exit, where) {
 
 /** The same run on the host, recorded with host: '<ssh-host>'. */
 async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
-  const { root, host, full, sha, ref, by } = ctx
+  const { root, host, full, sha, ref, label } = ctx
   const env = { RIG_QA_SHA: sha, ...(seed ? { RIG_SEED: seed } : {}) }
   const ci = kinds.includes('ci')
   const r = await runHost({
@@ -381,7 +384,8 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
     host,
     sha: full,
     cmd: ci ? ciOnHost(cmd) : cmd,
-    session: by,
+    // One checkout per session, kept warm between its runs; the lease keeps any other run out of it.
+    session: label,
     env,
     limitMs: ctx.limitMs,
     stallMs: ctx.stallMs,
@@ -439,9 +443,16 @@ export function sideBySide(here, there, host) {
     ['exit', here.exit, there.exit],
     ['passed', here.tally.passed ?? '—', there.tally.passed ?? '—'],
     ['failed', here.tally.failed ?? '?', there.tally.failed ?? '?'],
+    // Void and unproven checks are not failures, but they can be why a run exited non-zero.
+    ...[
+      ['void', 'void'],
+      ['unproven', 'unproven'],
+    ]
+      .filter(([, k]) => here.tally[k] || there.tally[k])
+      .map(([label, k]) => [label, here.tally[k] ?? 0, there.tally[k] ?? 0]),
     ['time', fmtMs(here.ms), fmtMs(there.ms)],
   ]
-  const w = [8, Math.max(...rows.map((r) => String(r[1]).length)) + 3]
+  const w = [10, Math.max(...rows.map((r) => String(r[1]).length)) + 3]
   console.log('')
   for (const r of rows) console.log(`  ${String(r[0]).padEnd(w[0])}${String(r[1]).padEnd(w[1])}${r[2]}`)
   // A count that contradicts the exit is not a number worth printing; say what disagrees instead.

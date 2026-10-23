@@ -162,8 +162,12 @@ export function tally(text, failures = null, exit = undefined) {
   if (exit === 0 && counted > 0)
     conflict = `the output counts ${counted} failed but the run exited 0 (a test may print a summary of its own)`
   const marks = parseMarks(text)
-  if (typeof exit === 'number' && exit !== 0 && counted === 0 && !marks.void.length && !marks.unproven.length)
-    conflict = `the run exited ${exit} but no failure was counted`
+  // A red exit with nothing failed is not "failed 0": say so, and name the VOID or UNPRV checks
+  // that may explain it (on main 949e12b a host VOID printed "failed 0" beside "exit 1").
+  if (typeof exit === 'number' && exit !== 0 && counted === 0 && !names.length) {
+    const named = (word, list) => (list.length ? `; ${list.length} ${word}: ${list.join(', ')}` : '')
+    conflict = `exit ${exit} but no FAIL line${named('void', marks.void)}${named('unproven', marks.unproven)}`
+  }
   return { passed, failed: conflict ? null : counted, names, conflict, void: marks.void.length, unproven: marks.unproven.length }
 }
 

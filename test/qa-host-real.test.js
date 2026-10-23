@@ -7,7 +7,7 @@
 
 import { suite } from '../harness/check.js'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -17,7 +17,7 @@ if (!existsSync(KIT)) {
   console.log('qa-host-real: skipped — test/fixtures/fake-ssh is not here yet (r55m), so rig qa --host is not run end to end')
   process.exit(0)
 }
-const { world, fixtureRepo, git } = await import(KIT)
+const { world, fixtureRepo, git, runNode } = await import(KIT)
 const RIG = join(here, '..', 'bin', 'rig.js')
 const w = world('rig-qa-host-')
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '')
@@ -82,22 +82,59 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
   })
   hostEnv('')
 
-  let holder = 'r55x'
+  let held = true
   await s.check('the host’s lease, held by another session, refuses the run by name', {
     assert: async () => {
-      const take = rig(['lease', 'host:box', '--by', holder])
+      const take = rig(['lease', 'host:box', '--by', 'r55x'])
       if (take.status !== 0) throw new Error(`could not take the lease: ${take.out}`)
+      if (!held) rig(['lease', 'host:box', '--by', 'r55x', '--release'])
       const q = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/'])
-      rig(['lease', 'host:box', '--by', holder, '--release'])
+      rig(['lease', 'host:box', '--by', 'r55x', '--release'])
       // and a run that went ahead gave the lease back when it finished
       const after = rig(['lease', 'host:box']).out
       return q.status === 75 && /refused — box is leased by r55x/.test(q.out) && /free/.test(after)
     },
-    // Held by the same session, the lease is a renewal and the run goes ahead.
+    // Given back before the run, the lease is free and the run goes ahead.
     breaks: () => {
-      holder = 'r55q'
+      held = false
       return () => {
-        holder = 'r55x'
+        held = true
+      }
+    },
+    timeout: 90_000,
+  })
+
+  // Zyro's review of 949e12b, P1: with no --by and no RIG_SESSION every run on a branch held the
+  // lease as the branch name, so a second run at once was taken as a renewal of the first and ran in
+  // its checkout, on its test DB, while the first suite was still going.
+  let together = true
+  await s.check('a second rig qa on the same branch while the first runs on the host is refused, never a renewal', {
+    assert: async () => {
+      const env = { ...process.env }
+      delete env.RIG_SESSION
+      const marker = join(w.root, 'host-started')
+      rmSync(marker, { force: true })
+      const first = runNode(
+        [RIG, 'qa', sha, '--host', 'box', '--no-ci', '--run', `if [ -n "$RIG_TEST_DB" ]; then touch '${marker}'; sleep 3; fi`],
+        { cwd: repo, env },
+      )
+      if (together) {
+        const until = Date.now() + 20_000
+        while (!existsSync(marker) && Date.now() < until) await new Promise((r) => setTimeout(r, 20))
+        if (!existsSync(marker)) throw new Error('the first run never started on the host')
+      } else await first
+      const second = await runNode([RIG, 'qa', sha, '--host', 'box', '--no-ci', '--run', 'true'], { cwd: repo, env })
+      const one = await first
+      const after = rig(['lease', 'host:box']).out
+      return (
+        one.code === 0 && second.code === 75 && /refused — box is leased by \S+\.[0-9a-f]{8}/.test(plain(second.out)) && /free/.test(after)
+      )
+    },
+    // One after the other, the second run finds the lease given back and goes ahead.
+    breaks: () => {
+      together = false
+      return () => {
+        together = true
       }
     },
     timeout: 90_000,
