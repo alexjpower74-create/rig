@@ -19,3 +19,5 @@ decision made since the round started and refuses while one of them is open.
 | D10 | 2026-10-23 | rebase and fold check migration numbering and load each commit's schema into a blank database | thread | scheduled 5.5.1 (2026-10-23) |
 | D11 | 2026-10-23 | await stopped host runs before a later host stage starts, not only at the end | thread | scheduled 5.5.1 (2026-10-23) |
 | D12 | 2026-10-23 | FINISH.md names the second machine by a label, never its ssh host | thread | scheduled 5.5.1 (2026-10-23) |
+| D13 | 2026-10-23 | a host with dash as sh and neither setsid nor bash: warn that stops cannot reach the group, fall back to killing the pid | thread | scheduled 5.5.2 (2026-10-23) |
+| D14 | 2026-10-23 | record per machine whether node shuffled a seeded repeat (shuffled true/false), so Node 22 seeds are not read as shuffled | thread | scheduled 5.5.2 (2026-10-23) |

@@ -13,8 +13,15 @@
   else `set -m`. The fake ssh in the tests can run the "host" under a chosen shell
   (`FAKE_SSH_SHELL`), and a check runs every stop under dash wherever dash exists. Red under dash on
   a Mac with 5.5.0's runner (40, 12 and 15 s), green with the fix (2.3 s, 0.3 s, 0.1 s).
-- **Same night, also checked:** the 5.5.0 gate ran on Linux and macOS, both with bash as `sh`; this
-  is why the plan's second machine is now joined by the CI runner as a third shell to check against.
+- **`rig qa --repeat` works on Node 22.** It passed every `node --test` run a seed flag that only
+  newer Node has, so on Node 22 (the oldest Node the package supports) every seed failed with "bad
+  option". The seeded command now asks the node that runs it, on whichever machine, and passes the
+  flag only where it is taken; `RIG_SEED` is always set.
+- **CI tests Node 22 and 26.** The runner was on 22 while the maintainers' machines run 26: the
+  5.5.0 test fixtures ran `node --test test/`, which Node 22 reads as one test file. They now name
+  their files, and the matrix keeps both ends honest.
+- **Same night, also checked:** the 5.5.0 gate ran on Linux and macOS, both with bash as `sh` and a
+  new Node; the CI runner is now the third machine, with dash and the oldest supported Node.
 
 ## 5.5.0 — nobody waits blind
 
