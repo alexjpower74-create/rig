@@ -1485,37 +1485,19 @@ await suite('rig taste', async (s) => {
   // ever swallows a tap here (up to 3 set-ups, read from the page's click counter, not the check's
   // own disk read); and a control run scores only when its tap really was swallowed.
   const SWIPE_BREAK = `window.addEventListener('touchmove', (e) => e.stopPropagation(), { capture: true })`
-  const PLAIN = (keep) =>
-    `data:text/html,${encodeURIComponent(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;height:100vh"><button id="b" style="position:fixed;bottom:40px;left:40px;width:120px;height:60px">tap</button><div id="s" style="position:fixed;top:100px;left:0;right:0;height:400px;background:#ddd"></div>${keep ? "<script>document.getElementById('s').addEventListener('touchmove', (e) => e.preventDefault(), { passive: false })</script>" : ''}`)}`
-  /** On a plain page, does a tap sent as a swipe ends come to no click? `keep`: the page holds the swipe itself. */
-  let swallows = async ({ keep = false } = {}) => {
-    const page = await browser.newPage(null, { width: 390, height: 844, dpr: 3, mobile: true })
-    try {
-      await page.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
-      await page.send('Page.addScriptToEvaluateOnNewDocument', { source: CLICK_COUNTER })
-      await page.goto(PLAIN(keep))
-      const input = countInput(page)
-      await input.swipe({ x: 300, y: 300, dx: -200, dy: 0 })
-      await input.tap(100, 774)
-      return !(await waitFor(async () => (await clicks(page)) > 0))
-    } finally {
-      await page.close()
-    }
-  }
-  const swipeTap = { inControl: false }
+  const swipeTap = { inControl: false, forceMissB: false } // forceMissB: the meta-check's way to make every swipe miss B
 
-  // The calibration must never claim a swallowed tap that clicked: a page that holds the swipe itself
-  // gets its tap on every platform.
-  await s.check('the fling calibration: on a page that holds its swipe, the tap after it is never called swallowed', {
-    assert: async () => !(await swallows({ keep: true })),
-    // The control: a calibration that never looks at the click and calls every tap swallowed.
-    breaks: () => {
-      const real = swallows
-      swallows = async () => true
-      return () => {
-        swallows = real
-      }
+  // The detector flingHere and every control run read: a tap that clicks is landed. On the real board
+  // it must read as landed (r55m's delta review of b934c41: the check this replaces tested a helper
+  // nothing used).
+  await s.check('the fling detector: on the real board a tap after a swipe reads as landed', {
+    assert: async () => {
+      const r = await swipeThenTap()
+      if (!r.landed) console.log('        the detector says the real board swallowed the tap')
+      return r.landed
     },
+    // The control: a page whose click counter never counts, so no tap can read as landed.
+    breaks: pageBreak(`Object.defineProperty(window, '__rigClicks', { get: () => 0, set() {} })`),
     timeout: 60_000,
   })
 
@@ -1540,7 +1522,12 @@ await suite('rig taste', async (s) => {
       // The bug this guards: the browser's fling ate the tap, so no click ever came of it.
       const landed = await waitFor(async () => (await clicks(page)) > before)
       const saved = landed && (await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4))
-      return { landed, reachedB: shown === B, saved, onDisk: newest(ratingsJson(b.root)).compRatings?.[B]?.rating ?? 'nothing' }
+      return {
+        landed,
+        reachedB: shown === B && !swipeTap.forceMissB,
+        saved,
+        onDisk: newest(ratingsJson(b.root)).compRatings?.[B]?.rating ?? 'nothing',
+      }
     } finally {
       await close()
     }
@@ -1554,31 +1541,35 @@ await suite('rig taste', async (s) => {
   }
 
   const swipeName = 'comps on a phone: a rating tapped straight after a swipe still counts'
-  const swipeAssert = async () => {
+  const swipeAssert = () => swipeAssertWith(() => true)
+  /** The check; `allMissed` is what a control does once every set-up missed (pass, so VOID). */
+  async function swipeAssertWith(allMissed) {
     // In the control, a run whose tap still clicked never met the fling: set up again, and if it never
     // does, pass, so the result is VOID, never a red that proved nothing.
     for (let attempt = 1; attempt <= (swipeTap.inControl ? 3 : 1); attempt++) {
       const r = await swipeThenTap()
-      if (swipeTap.inControl && r.landed) continue
+      // A control run that never met the fling, or whose swipe missed B, exercised nothing: set up again.
+      if (swipeTap.inControl && (r.landed || !r.reachedB)) continue
       if (!r.reachedB) throw new Error('the swipe did not reach comp B')
       if (!r.saved)
         console.log(`        after the swipe B on disk: ${r.onDisk}${swipeTap.inControl ? ' (control: the fling ate the tap)' : ''}`)
       return r.saved
     }
-    return true
+    return allMissed()
+  }
+  const swipeBreaks = () => {
+    swipeTap.inControl = true
+    pageBreaks.push(SWIPE_BREAK)
+    return () => {
+      pageBreaks.pop()
+      swipeTap.inControl = false
+    }
   }
   if (flingHere)
     await s.check(swipeName, {
       assert: swipeAssert,
       // The control: the swipe left to the browser as well, as in 5.0.2.
-      breaks: () => {
-        swipeTap.inControl = true
-        pageBreaks.push(SWIPE_BREAK)
-        return () => {
-          pageBreaks.pop()
-          swipeTap.inControl = false
-        }
-      },
+      breaks: swipeBreaks,
       timeout: 90_000,
     })
   else {
@@ -1587,6 +1578,46 @@ await suite('rig taste', async (s) => {
     )
     await s.check(swipeName, { assert: swipeAssert, timeout: 60_000 })
   }
+
+  // A control whose every swipe missed B grades VOID, never PASS: the same rule as the fast-tap check.
+  // Its inner control forces every swipe to miss B, so it holds on every platform, fling or not.
+  let missedB = () => true
+  await s.check('a swipe-tap control whose swipes never reached comp B grades VOID, never PASS', {
+    assert: async () => {
+      const inner = new H.Suite('inner')
+      const log = console.log
+      console.log = () => {}
+      try {
+        const r = await inner.check(`(inner) ${swipeName}, every control swipe missing B`, {
+          assert: async () => {
+            if (!swipeTap.inControl) return swipeAssert()
+            swipeTap.forceMissB = true
+            try {
+              return await swipeAssertWith(missedB)
+            } finally {
+              swipeTap.forceMissB = false
+            }
+          },
+          breaks: swipeBreaks,
+          timeout: 90_000,
+        })
+        if (r.state !== 'VOID') log(`        inner check graded ${r.state}: ${r.detail}`)
+        return r.state === 'VOID'
+      } finally {
+        console.log = log
+      }
+    },
+    // The control: b934c41's control, which threw on a missed B; a throw in a control reads as red.
+    breaks: () => {
+      missedB = () => {
+        throw new Error('the swipe did not reach comp B')
+      }
+      return () => {
+        missedB = () => true
+      }
+    },
+    timeout: 180_000,
+  })
 
   // ── full screen ──
   // 5.0.3: he rated four comps side by side on a 2560×1440 screen and could not see them ("the
