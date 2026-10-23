@@ -89,6 +89,10 @@ itself, every slice cross-reviewed early, every check seen red once and then gre
   "needs a nudge" is planned.
 - A shared fixture that one example mutates leaks into later examples at some seeds only; review
   briefs now ask for a changed spec file to run at 3 seeds (`rig qa --repeat 3 --seeds`).
+- After a rebase onto a moved base, every migration in the stack must be numbered above the base's
+  newest, or a fresh schema load marks it applied without creating its tables and a regenerated
+  schema file silently drops it. The walk should load each commit's schema into a blank database,
+  as CI does, never migrate a long-lived dev database. `rig rebase` and `rig fold` will check both.
 
 ## 5.0.3 — every picture on the taste board opens full screen
 
