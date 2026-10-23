@@ -233,3 +233,53 @@ through to node. Every fixture that uses the glob has `test/*.test.js` files, so
 today. A fixture repo without tests would fail with a shell error, not a test failure.
 
 No findings. Nothing for 5.5.1 beyond the nit.
+
+## Delta at 1caa7ef (2026-10-23)
+
+Read-only review of r55q's 1caa7ef. For `node --test`, `--repeat` now puts
+`$(node --test-random-seed=1 -e 0 >/dev/null 2>&1 && echo --test-random-seed=<seed>)` into the seeded
+command. The node that runs the suite therefore decides whether it gets the flag, and RIG_SEED is
+always set.
+
+**How it was checked.** I used two `node` shims, each first on PATH: one that passes everything to the
+real Node 26 and logs its argv, and one like Node 22 that stops with "bad option" (exit 9) on
+`--test-random-seed`. The seeded command was wrapped by `remoteCommand` exactly as the host run sends
+it, `sh -c '<script>' rig-qa <dir> '<cmd>'`, and the line was parsed by each login shell on this
+machine: bash, zsh and fish (dash is not installed).
+
+**Holds.**
+- *Quoting through ssh and login shells.* The login shell only ever sees the command inside single
+  quotes. The probe has no backslash and no single quote, so bash, zsh and fish all pass it through
+  untouched, and the `$(…)` is expanded by the runner on the host (`bash -o pipefail -c`, or `sh -c`;
+  both are POSIX). In all three shells, Node 26 got `--test-random-seed=7 --test test/a.test.js` and
+  the Node 22-like node got `--test test/a.test.js`. Both runs passed, and the spec saw `RIG_SEED=7`.
+  The probe's own "bad option" never reaches the log.
+- *A host whose node differs.* The probe calls the same `node` word as the command, in the same shell,
+  PATH and checkout. A host with an older node decides for itself, whatever node this machine has.
+- *Commands that aren't `node --test`.* `npm test`, `node script.js`, `npx jest` (`--seed`), and any
+  command with `|`, `;`, `&&` or an `env …` prefix get RIG_SEED only and no probe, as before.
+- *The suites on Node 22-like behaviour.* Under the refusing shim, qa-parse passes all 21 tests and
+  qa-baseline passes 21 checks with 0 void and 0 unproven. At 1caa7ef^ under the same shim,
+  qa-baseline fails "N green is reported as N green". That is the Node 22 leg's red, reproduced here,
+  so the fix is what turns it green.
+
+**Low (5.5.1 note).** Nothing records whether a machine's node took the flag. The repeat record keeps
+the bare command and the seed, and the header says "where that node takes it (Node 22 does not)" for
+both machines together. With Node 26 here and Node 22 on the host, "3 seeds green" on the host means
+the same order three times with a different RIG_SEED. Here it means three shuffled orders, yet the two
+read alike. Any other probe failure also turns the shuffle off without a word, for example a
+NODE_OPTIONS preload that fails under `-e`. Suggested fix: the probe also prints a marker, such as
+`echo rig-seed: shuffled >&2`. Each record would then carry `shuffled: true|false` per machine, and the
+repeat summary would say "not shuffled on <host> (its node has no --test-random-seed)".
+
+**Nits (not introduced here).**
+- `node x.js --test` (a `--test` meant for the script) gets the probe and the flag. Node 26 accepts the
+  flag outside test mode, so this is harmless.
+- `env -u WAYLAND_DISPLAY -u DISPLAY node --test <file>` gets RIG_SEED only, because the leading word
+  is `env`. That is the form this repo's own rules use to run suites, so a seeded repeat written that
+  way never shuffles. Skipping `env` and its `-u NAME` / `NAME=value` words, as is already done for
+  `npx`, would cover it.
+- Words are split on whitespace and rejoined with one space, which changes a quoted path that has a
+  double space in it.
+
+No medium or high findings.
