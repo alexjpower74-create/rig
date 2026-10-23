@@ -10,6 +10,9 @@
 #   locked       wants a password: with -o BatchMode=yes it is refused at once with exit 255;
 #                without it, it waits on a prompt nobody can see for FAKE_SSH_HANG seconds.
 # Every call is logged, options and host, one line, to $FAKE_SSH_ROOT/ssh.log.
+#
+# FAKE_SSH_SHELL=/path/to/a/shell makes that shell the host's: the login shell that parses the
+# command, and the `sh` the command names (Debian's and Ubuntu's sh is dash, for one).
 set -u
 root=${FAKE_SSH_ROOT:?FAKE_SSH_ROOT is not set}
 hang=${FAKE_SSH_HANG:-600}
@@ -44,5 +47,13 @@ cd "$home" || exit 255
 # real host's login session would carry its own DISPLAY or PATH additions.
 extra=""
 [ -f "$home/.env" ] && extra=$(cat "$home/.env")
+path=${FAKE_SSH_HOST_PATH:-$PATH}
+shell=sh
+if [ -n "${FAKE_SSH_SHELL:-}" ]; then
+  [ -x "$FAKE_SSH_SHELL" ] || { echo "fake ssh: FAKE_SSH_SHELL $FAKE_SSH_SHELL is not a program" >&2; exit 255; }
+  mkdir -p "$root/shell-bin"
+  ln -sf "$FAKE_SSH_SHELL" "$root/shell-bin/sh"
+  path="$root/shell-bin:$path" shell=$FAKE_SSH_SHELL
+fi
 # shellcheck disable=SC2086
-exec env -i HOME="$home" PATH="${FAKE_SSH_HOST_PATH:-$PATH}" LANG=C $extra sh -c "$*"
+exec env -i HOME="$home" PATH="$path" LANG=C $extra "$shell" -c "$*"
