@@ -17,3 +17,4 @@ decision made since the round started and refuses while one of them is open.
 | D8 | 2026-10-23 | baseline lists a green base's unproven check as new when the head is red for another reason | thread | scheduled 5.5.1 (2026-10-23) |
 | D9 | 2026-10-23 | a watcher flags a peer done with nothing running and no report as needs a nudge | thread | scheduled 5.5.1 (2026-10-23) |
 | D10 | 2026-10-23 | rebase and fold check migration numbering and load each commit's schema into a blank database | thread | scheduled 5.5.1 (2026-10-23) |
+| D11 | 2026-10-23 | await stopped host runs before a later host stage starts, not only at the end | thread | scheduled 5.5.1 (2026-10-23) |
