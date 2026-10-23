@@ -154,3 +154,18 @@ Looked at and fine:
   it.
 
 **Two findings (one medium, one low); the rest of the delta is sound.**
+
+## Verified at e7ebcab (2026-10-22)
+
+I read e7ebcab (`src/taste/capture.js`, `test/taste.test.js`). Then I re-ran my repro and
+`test/taste.test.js` in a clean detached worktree at e7ebcab: **39 passed, 0 failed, 0 void, 0
+unproven** (2 of them targets), exit 0.
+
+| Finding | Verdict | How I checked |
+|---|---|---|
+| 1. `settle()` replaced a page's own image `onload` | **fixed** | `settle()` now uses `addEventListener('load'/'error', r, { once: true })`. **My repro against e7ebcab's `captureAll`:** a page that adds an image after `load` and turns teal in its `onload` is shot `58,143,143` (teal); at e80d49e it was white. The new check, "a page that reveals itself in an image's own onload…", passes, and its control is e80d49e's capture, so it was seen red as well. |
+| 2. the fast-tap give-up graded its control red | **fixed** | A set-up that never lands now fails the real run and passes the control run, so the check grades VOID rather than PASS. A meta-check runs the real check in an inner suite with every control set-up forced to miss, and requires VOID. Its control is e80d49e's throw. The meta-check passes, so it was seen red too. `oldTaste()` now throws when `git archive` fails. |
+
+One note, not blocking: the meta-check's inner real run still needs a landed tap, so on a machine
+loaded enough to miss three times, it fails rather than reading as inconclusive. That is the honest
+result. **Both delta findings verified fixed; nothing further from r55m.**
