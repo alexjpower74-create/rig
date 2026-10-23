@@ -1,6 +1,6 @@
-// Rig 5.5, r55g: every review brief asks the three questions a same-vendor review once skipped (what
-// changes between the check and its use, time edges, a state that flips off and back on), and ends
-// with r55w's tell line. The controls swap the older review.js back in, and r55w's brief.js out.
+// Rig 5.5, r55g: every review brief asks the questions a same-vendor review once skipped (what changes
+// between the check and its use, time edges, a state that flips off and back on, and four more since),
+// and ends with r55w's tell line. The controls swap the older review.js back in, and r55w's brief.js out.
 
 import { suite } from '../harness/check.js'
 import { cpSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -56,24 +56,29 @@ const asks = (t) =>
     t,
   ) &&
   /Absence is "never happened" \(at least once, negated\)/.test(t) &&
-  /Would each negative control go red if the thing happened more than once\?/.test(t)
+  /Would each negative control go red if the thing happened more than once\?/.test(t) &&
+  /A shared fixture that one example changes\.\*\* Set up once for many examples and mutated by one/.test(t) &&
+  /leaks state into the later ones, and the failure shows only at some seeds/.test(t) &&
+  /reloaded per\s+example/.test(t) &&
+  /run at 3 seeds before it was called green/.test(t) &&
+  /rig qa <sha> --repeat 3 --seeds/.test(t)
 
 await suite('rig 5.5, what every review brief asks (r55g)', async (s) => {
-  // The control: 72d5b01's review.js, which asks the first five only (older ones ask fewer, and fail
+  // The control: 0d94532's review.js, which asks the first six only (older ones ask fewer, and fail
   // the same way).
   let src = join(RIG, 'src')
   const swapOld = async () => {
-    const dir = srcWith('old', { 'commands/review.js': '72d5b01' })
+    const dir = srcWith('old', { 'commands/review.js': '0d94532' })
     if (dir) src = dir
     return () => {
       src = join(RIG, 'src')
     }
   }
-  await s.check('the slice review brief asks all six questions', {
+  await s.check('the slice review brief asks all seven questions', {
     assert: async () => asks(briefs(await load(src)).slice),
     breaks: swapOld,
   })
-  await s.check('the second-vendor brief asks all six too', {
+  await s.check('the second-vendor brief asks all seven too', {
     assert: async () => asks(briefs(await load(src)).vendor),
     breaks: swapOld,
   })
