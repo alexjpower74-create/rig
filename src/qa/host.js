@@ -90,6 +90,18 @@ export function leaseHost(root, host, by, { ttlMin = 120 } = {}) {
 let inFlight = 0
 let warned = false
 
+/**
+ * Waits, up to `ms`, for every host run rig qa started to come back: a run stopped on a stall or a
+ * lost lease returns from runOnHost only once ssh has gone, and under load that can be after rig qa
+ * is done. Its lease is then given back instead of left to expire, where it refused the next run
+ * (the gate run on f95203e). Past the bound the run may still be going, and the lease stays held.
+ */
+export async function hostRunsSettled(ms = 15_000) {
+  const until = Date.now() + ms
+  while (inFlight > 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
+  return inFlight === 0
+}
+
 function safely(f) {
   try {
     f()

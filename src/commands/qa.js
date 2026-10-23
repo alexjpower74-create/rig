@@ -13,7 +13,7 @@ import { exitCodeFor, fmtMs, runWatched } from '../qa/watch.js'
 import { compareBaseline, diffNames, parseFailures, parseMarks, tally } from '../qa/failures.js'
 import { desktopFreeEnv, makeShims, needsStub, readShimCalls } from '../qa/desktop.js'
 import { detectCi, planSeeds, readCiStatus, withSeed } from '../qa/ci.js'
-import { ciOnHost, holderId, leaseHost, leaseToken, runHost } from '../qa/host.js'
+import { ciOnHost, holderId, hostRunsSettled, leaseHost, leaseToken, runHost } from '../qa/host.js'
 
 export { exitCodeFor, groups }
 
@@ -188,7 +188,11 @@ export default async function qa(args) {
   }
   ctx.env = shims ? desktopFreeEnv(baseEnv, shims) : baseEnv
 
-  if (repeat) process.exit(await repeatRuns(ctx, args, repeat))
+  if (repeat) {
+    const code = await repeatRuns(ctx, args, repeat)
+    if (lease) await hostRunsSettled()
+    process.exit(code)
+  }
 
   const runFlag = argOf(args, '--run')
   const cmd = runFlag || cfg.devCommand
@@ -241,7 +245,10 @@ export default async function qa(args) {
     const r = await localStage(ctx, ['negative'], negative)
     fail(r)
   }
-  lease?.release()
+  if (lease) {
+    await hostRunsSettled()
+    lease.release()
+  }
   process.exit(exit)
 }
 

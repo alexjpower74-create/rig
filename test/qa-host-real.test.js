@@ -46,7 +46,13 @@ const lastOn = (host, kind = 'test') =>
     .map((l) => JSON.parse(l))
     .filter((e) => e.kind === kind && (e.host ?? 'local') === host)
     .pop()
-const hostEnv = (body) => writeFileSync(join(w.hostDir('box'), '.env'), body)
+const hostEnv = (body, host = 'box') => {
+  mkdirSync(w.hostDir(host), { recursive: true })
+  writeFileSync(join(w.hostDir(host), '.env'), body)
+}
+// The checks after the lease ones each run on a fake host of their own: a lease or a checkout one
+// check leaves behind can never refuse or feed the next (the gate run on f95203e, under load).
+const leaseOn = (host) => rig(['lease', `host:${host}`]).out
 
 await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and lease', async (s) => {
   mkdirSync(w.hostDir('box'), { recursive: true })
@@ -140,23 +146,73 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
     timeout: 90_000,
   })
 
-  let quiet = 'sleep 30'
+  // The watchdog fires on silence, so the check needs only a run that is silent for good and a
+  // control that writes far more often than the window: no wall-clock bound on how long it takes.
+  hostEnv('', 'box-stall')
+  let quiet = 'sleep 60'
   await s.check('a host run that stops writing is caught by the stall watchdog and named (r55g review 1)', {
     assert: async () => {
-      const t = Date.now()
-      rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--stall', '0.05', '--run', `echo running tests/slow.spec.js; ${quiet}`])
-      const st = lastOn('box').stalled
-      return st?.worker === 'box' && st.spec === 'tests/slow.spec.js' && Date.now() - t < 25_000
+      const q = rig([
+        'qa',
+        sha,
+        '--host',
+        'box-stall',
+        '--by',
+        'r55q',
+        '--stall',
+        '0.05',
+        '--run',
+        `echo running tests/slow.spec.js; ${quiet}`,
+      ])
+      const st = lastOn('box-stall').stalled
+      return q.status === 124 && st?.worker === 'box-stall' && st.spec === 'tests/slow.spec.js'
     },
     breaks: () => {
-      quiet = 'for i in 1 2 3 4 5 6; do sleep 1; echo tick; done'
+      quiet = 'i=0; while [ $i -lt 40 ]; do sleep 0.2; echo tick; i=$((i + 1)); done'
       return () => {
-        quiet = 'sleep 30'
+        quiet = 'sleep 60'
       }
     },
-    timeout: 90_000,
+    timeout: 120_000,
   })
 
+  // The gate run on f95203e: under load, a stalled run exited before ssh had stopped, so its lease
+  // was left to expire and refused the checks after it. An ssh slow to die on TERM stands in for the
+  // load: rig qa waits for the host run it stopped, within a bound, and then gives the lease back.
+  const slowSsh = join(w.root, 'slow-ssh')
+  mkdirSync(slowSsh, { recursive: true })
+  let dieAfter = 3
+  const writeSlowSsh = () =>
+    writeFileSync(
+      join(slowSsh, 'ssh'),
+      `#!/bin/sh\nexec 3<&0\n${JSON.stringify(join(here, 'fixtures', 'fake-ssh', 'ssh'))} "$@" <&3 &\nchild=$!\ntrap 'sleep ${dieAfter}; kill -TERM $child 2>/dev/null; wait $child; exit 143' TERM\nwait $child\n`,
+      { mode: 0o755 },
+    )
+  hostEnv('', 'box-slow')
+  await s.check('a stalled host run gives its lease back once the host has stopped, even when ssh is slow to go', {
+    assert: async () => {
+      writeSlowSsh()
+      const q = rig(
+        ['qa', sha, '--host', 'box-slow', '--by', 'r55q', '--stall', '0.05', '--run', 'echo running tests/slow.spec.js; sleep 60'],
+        {
+          PATH: `${slowSsh}:${process.env.PATH}`,
+        },
+      )
+      const after = leaseOn('box-slow')
+      if (!/free/.test(after)) rig(['lease', 'host:box-slow', '--by', after.match(/r55q\.[0-9a-f]{8}/)?.[0] ?? 'none', '--release'])
+      return q.status === 124 && /free/.test(after)
+    },
+    // An ssh that outlives rig qa's bound: the run may still be going, so its lease is left to expire.
+    breaks: () => {
+      dieAfter = 40
+      return () => {
+        dieAfter = 3
+      }
+    },
+    timeout: 180_000,
+  })
+
+  hostEnv('', 'box-ci')
   let hostPost = 'failure lint found 2'
   writeCi = () =>
     writeFileSync(
@@ -166,8 +222,8 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
   writeCi()
   await s.check('the CI status posted on the host is recorded, and a posted failure is not green (r55g review 3)', {
     assert: async () => {
-      const q = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--ci', '--run', 'true'], {})
-      const rec = lastOn('box', 'ci')
+      const q = rig(['qa', sha, '--host', 'box-ci', '--by', 'r55q', '--ci', '--run', 'true'], {})
+      const rec = lastOn('box-ci', 'ci')
       return q.status === 1 && rec?.ciStatus?.state === 'failure' && rec.ciStatus.text === 'lint found 2'
     },
     breaks: () => {
@@ -181,15 +237,15 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
     timeout: 90_000,
   })
 
-  hostEnv('WITH_CLIPBOARD=1')
+  hostEnv('WITH_CLIPBOARD=1', 'box-clip')
   await s.check('a host spec that reaches for the clipboard is listed "needs a stub"', {
     assert: async () => {
-      rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/'])
-      return JSON.stringify(lastOn('box').needsStub) === '["copies the link"]'
+      rig(['qa', sha, '--host', 'box-clip', '--by', 'r55q', '--run', 'node --test test/'])
+      return JSON.stringify(lastOn('box-clip').needsStub) === '["copies the link"]'
     },
     breaks: () => {
-      hostEnv('')
-      return () => hostEnv('WITH_CLIPBOARD=1')
+      hostEnv('', 'box-clip')
+      return () => hostEnv('WITH_CLIPBOARD=1', 'box-clip')
     },
     timeout: 90_000,
   })
