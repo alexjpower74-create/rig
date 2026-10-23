@@ -256,6 +256,42 @@ file, so the watch files did not run. The rerun was green:
 `rig qa: negative exit 0 at 44d006c`. The taste `--lan` timeout looks like a flake under load; it is
 for its owner to look at.
 
+## Fix: the load flake in the clamp check (r55q's pinned run, 2026-10-22)
+
+`a 10-minute poll asked for is clamped: a pane going idle is noticed within 6 s` went red under crew
+load. It held a 6 s wall-time bar on a 5 s poll, about 1 s of headroom, and the wall time included
+a node start and herdr calls that load stretches. Fixed at the cause, in `d90db9e` (on main
+`cf316d4`, merged first):
+- **The clamp is measured on the poll itself.** `rig job` now prints the poll it uses (`polling every
+  5 s`). The check reads that line and the times the fake herdr logged for the job's own
+  `agent get` calls. Every gap must be at least 4.9 s (load can only lengthen a gap), and three polls
+  must land inside 40 s. Red: the cap at 60 s (no second poll).
+- **The end-to-end bar is the plan's 60 s and nothing tighter:** the target `rig job notices a pane
+  going idle` stays at ≤ 60000 ms.
+- **The same scan over the other timing checks:**
+  - deadline check: it had `r.ms < 6000` on a 3 s deadline. My first fix (`d90db9e`) read "the
+    poll before the last was inside the deadline, the last was past it" off the fake herdr's log.
+    `rig qa d90db9e --repeat 10` under load (load average 27, beside r55u's taste repeat and my own
+    `npm test` loop) went **4 of 10 FAILED** on that check, while the job had stopped correctly. The
+    fake's clock starts when its own node process starts, later than the job's. The job also polls
+    first and checks the deadline after the call returns, so the last logged poll lands just short of
+    3 s. The assertion's clock was wrong, not the job. Fixed in `1598920`: the wait loop is
+    `waitForTurn()` with an injectable sleep and clock. A virtual-clock check asks for exactly 30
+    polls and a stop at 3000 ms on a 3 s deadline (red: no deadline). The CLI check now asks only for
+    exit 4, DEADLINE named, ≥ 3 s and < 60 s.
+- **Proof:** `rig qa 1598920 --repeat 10 --run "node test/watch-job.test.js"` ran beside r55u's taste
+  repeat and four of my own `npm test` loops: **`rig qa: here: 10 of 10 green`** (watch-job 20/20 each
+  run). One of my load loops stopped on taste.test.js, the known taste load flake (r55u's), not on a
+  watch file.
+  - fs.watch target: it timed a whole `rig tell` child process. It is now measured in one process
+    (`waitForMessages` and `tellMessage`, a shared clock): 1 ms (≤ 1500) · broken: 4707 ms.
+  - the watcher's "armed" wait goes from 5 s to 30 s.
+  - green-path deadlines go from 0.1 to 1 min.
+  - multi-CLI checks get timeouts load cannot reach. None of their controls goes red by hanging, so
+    a longer timeout cannot hide a red.
+  - start windows on the short-turn checks go from 3 to 30 s. They finish on the counter, so the
+    window was only a way to fail.
+
 ## Shown
 
 `rig up --dry-run` on a fixture plan with a claim form that "refuses claims over the limit":
