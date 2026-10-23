@@ -79,7 +79,7 @@ export default async function job(args) {
     say(`herdr would not take the prompt for ${pane}: ${sent.err || sent.out || 'no reason given'}`)
     process.exit(EXIT.refused)
   }
-  say(`briefed ${pane}; waiting up to ${minutes} min for idle, done or blocked`)
+  say(`briefed ${pane}; waiting up to ${minutes} min for idle, done or blocked (polling every ${pollMs / 1000} s)`)
 
   const until = start + minutes * 60_000
   // Never trust a stale status. The pane's last status (often "done" from its previous turn) is still
