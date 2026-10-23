@@ -175,48 +175,53 @@ export function tally(text, failures = null, exit = undefined) {
  * The baseline comparison, from two (or, with a host, three) parsed runs.
  *
  * `here` and `there` are the head's failures on this machine and on the host (null when the host
- * did not run); `base` is the failures of the same command on the base commit. A failure is new
- * when the base did not fail it and it is not one that only needs a stub (a spec that reached for the
- * clipboard or the display, which rig qa took away). A known one is listed with where the head also
- * fails it.
+ * did not run); `base` and `baseThere` are the failures of the same command on the base commit, here
+ * and on the host. Each machine is compared with its own base, never across: a second OS is where the
+ * platform-only failures live, so the local base failing a test waives nothing on the host, and a
+ * host-only failure the host's base shares is known there (r55g's delta review of 6a6cedd). A
+ * failure is new when its machine's base did not fail it and it is not one that only needs a stub (a
+ * spec that reached for the clipboard or the display, which rig qa took away). A known one is listed
+ * with the machines whose head and base both fail it.
  *
  * `complete` is false, and `why` says so, when a run failed without one parsable failure name: a
- * crash, a timeout, a stall or a runner rig qa cannot read. Then "0 new" would be a guess, and rig qa
- * never prints it.
+ * crash, a timeout, a stall or a runner rig qa cannot read; or when the host ran at the head but the
+ * base was not run there. Then "0 new" would be a guess, and rig qa never prints it.
  */
-export function compareBaseline({ here, there = null, base, runs, needsStub = [] }) {
-  const baseSet = new Set(base)
+export function compareBaseline({ here, there = null, base, baseThere = null, runs, needsStub = [] }) {
   const stub = new Set(needsStub)
-  const heads = [
-    ['here', here],
-    ['there', there],
+  const sides = [
+    ['here', here, base],
+    ['there', there, baseThere ?? []],
   ].filter(([, f]) => f)
   // A run that did not finish (a hard limit, a signal, the watchdog) may have more failures it never
   // reached, so its names are not the whole list either (r55g review 5).
   const cut = (r) => r.stalled || r.exit === 124 || r.exit >= 128
   const unread = (runs ?? []).filter((r) => cut(r) || (r.exit !== 0 && r.failures.length === 0))
-  const all = [...new Set(heads.flatMap(([, f]) => f))]
-  const where = (n) => {
-    const w = heads.filter(([, f]) => f.includes(n)).map(([k]) => k)
-    return w.length === 2 ? 'both' : w[0]
-  }
+  const why = unread.map((r) =>
+    r.stalled
+      ? `${r.label} stalled (exit ${r.exit})`
+      : cut(r)
+        ? `${r.label} did not finish (exit ${r.exit})`
+        : `${r.label} exited ${r.exit} with no failure rig qa could name`,
+  )
+  if (there && !baseThere) why.push('the base was not run on the host, so its failures there were not compared')
+  const all = [...new Set(sides.flatMap(([, f]) => f))]
+  // Per name, the machines that fail it at the head with and without their own base failing it too.
+  const knownOn = (n) => sides.filter(([, f, b]) => f.includes(n) && b.includes(n)).map(([k]) => k)
+  const newOn = (n) => sides.filter(([, f, b]) => f.includes(n) && !b.includes(n)).map(([k]) => k)
+  const fresh = all.filter((n) => newOn(n).length)
   return {
-    newFailures: all.filter((n) => !baseSet.has(n) && !stub.has(n)),
-    needsStub: all.filter((n) => !baseSet.has(n) && stub.has(n)),
-    known: all.filter((n) => baseSet.has(n)).map((name) => ({ name, where: where(name) })),
-    fixed: base.filter((n) => !all.includes(n)),
-    complete: unread.length === 0,
-    why: unread.length
-      ? unread
-          .map((r) =>
-            r.stalled
-              ? `${r.label} stalled (exit ${r.exit})`
-              : cut(r)
-                ? `${r.label} did not finish (exit ${r.exit})`
-                : `${r.label} exited ${r.exit} with no failure rig qa could name`,
-          )
-          .join('; ')
-      : null,
+    newFailures: fresh.filter((n) => !stub.has(n)),
+    needsStub: fresh.filter((n) => stub.has(n)),
+    known: all
+      .filter((n) => knownOn(n).length)
+      .map((name) => {
+        const w = knownOn(name)
+        return { name, where: w.length === 2 ? 'both' : w[0] }
+      }),
+    fixed: [...new Set(sides.flatMap(([, f, b]) => b.filter((n) => !f.includes(n))))],
+    complete: why.length === 0,
+    why: why.length ? why.join('; ') : null,
   }
 }
 

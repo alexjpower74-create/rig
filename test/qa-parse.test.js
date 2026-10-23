@@ -99,6 +99,7 @@ test('compareBaseline: new, known by where, fixed; needs-a-stub is not new; an u
     here: ['a', 'b', 'stub me'],
     there: ['a', 'c'],
     base: ['a', 'b', 'gone'],
+    baseThere: ['a'],
     needsStub: ['stub me'],
     runs: [{ exit: 1, failures: ['a'] }],
   })
@@ -350,6 +351,24 @@ test('a red exit explained only by a VOID or UNPRV is a conflict that names them
   assert.equal(tally('all fine\n', null, 2).conflict, 'exit 2 but no FAIL line')
   // A FAIL line beside the VOID explains the exit: a number, no conflict.
   assert.equal(tally(`${out}  FAIL  another 2ms\n`, null, 1).conflict, null)
+})
+
+test('compareBaseline never waives across machines: each side is compared with its own base (r55g delta, 6a6cedd)', () => {
+  // On the host at the head and at the base alike: known there, not new.
+  const b = compareBaseline({ here: [], there: ['remote regression'], base: [], baseThere: ['remote regression'], runs: [] })
+  assert.deepEqual(b.newFailures, [])
+  assert.deepEqual(b.known, [{ name: 'remote regression', where: 'there' }])
+  // Failed by the local base only: the host's failure is still new.
+  const x = compareBaseline({ here: [], there: ['shared name'], base: ['shared name'], baseThere: [], runs: [] })
+  assert.deepEqual(x.newFailures, ['shared name'])
+  assert.deepEqual(x.known, [])
+  // Known on both machines only when each base failed it.
+  const both = compareBaseline({ here: ['a'], there: ['a'], base: ['a'], baseThere: ['a'], runs: [] })
+  assert.deepEqual(both.known, [{ name: 'a', where: 'both' }])
+  // A host head with no host base is not compared there: no "0 new" claimed.
+  const none = compareBaseline({ here: [], there: ['r'], base: ['r'], runs: [] })
+  assert.equal(none.complete, false)
+  assert.match(none.why, /the base was not run on the host/)
 })
 
 test('UNPRV and VOID count toward the new-failure diff only when the run exited non-zero', () => {

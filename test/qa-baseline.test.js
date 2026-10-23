@@ -52,14 +52,28 @@ const fake = process.env.FAKE_HOST ? JSON.parse(process.env.FAKE_HOST) : null
 if (fake) {
   const { remote } = await import(${JSON.stringify(pathToFileURL(join(ROOT, 'src', 'qa', 'host.js')).href)})
   const log = (o) => appendFileSync(fake.calls, JSON.stringify(o) + '\\n')
-  remote.acquire = (root, resource, by) => (log({ acquire: resource, by }), fake.holder ? { ok: false, holder: fake.holder, why: 'held' } : { ok: true, holder: null, why: null })
+  let takes = 0
+  // fake.lostTo: the first acquire takes the lease, every renewal after it finds that holder.
+  remote.acquire = (root, resource, by) => {
+    log({ acquire: resource, by })
+    const holder = fake.holder ?? (fake.lostTo && takes++ > 0 ? fake.lostTo : null)
+    return holder ? { ok: false, holder, why: 'held' } : { ok: true, holder: null, why: null }
+  }
   remote.release = (root, resource, by) => (log({ release: resource, by }), { ok: true, why: null })
-  remote.runOnHost = async ({ host, sha, cmd, env, onOutput }) => {
+  remote.runOnHost = async ({ host, sha, cmd, env, onOutput, signal }) => {
     log({ run: cmd, host, sha, seed: env.RIG_SEED ?? null })
     const seedFails = env.RIG_SEED && fake.failSeeds?.includes(env.RIG_SEED)
-    const out = seedFails ? 'not ok 1 - flaky on the second OS\\n' : fake.log
+    // fake.at: { <sha>: { exit, log } }, what the host prints at that commit (the base run there).
+    const at = fake.at?.[sha]
+    const out = seedFails ? 'not ok 1 - flaky on the second OS\\n' : (at?.log ?? fake.log)
     onOutput(out)
-    return { host, exit: seedFails ? 1 : fake.exit, ms: 1234, dir: '/fake/dir', db: 'fake_db', log: out }
+    // fake.holdMs: a run that goes on until it is done or stopped through the signal.
+    if (fake.holdMs)
+      await new Promise((res) => {
+        const t = setTimeout(res, fake.holdMs)
+        signal?.addEventListener('abort', () => (clearTimeout(t), log({ stopped: host }), res()))
+      })
+    return { host, exit: signal?.aborted ? 143 : seedFails ? 1 : (at?.exit ?? fake.exit), ms: 1234, dir: '/fake/dir', db: 'fake_db', log: out }
   }
 }
 const qa = (await import(${JSON.stringify(pathToFileURL(join(ROOT, 'src', 'commands', 'qa.js')).href)})).default
@@ -461,7 +475,10 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       const head = commitFiles(hostRepo, { 'test/a.test.js': specFile(['the known broken one', 'only here']) }, 'h')
       git(['checkout', '-q', 'main'], hostRepo)
       git(['branch', '-D', '-q', 'rig/h'], hostRepo)
-      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--baseline', '--run', 'node --test test/'], { fake: hostBase })
+      // The base on the box fails only the known one: "only on the second OS" is new there.
+      const base = git(['rev-parse', 'HEAD'], hostRepo)
+      const fake = { ...hostBase, at: { [base]: { exit: 1, log: 'not ok 1 - the known broken one\n' } } }
+      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--baseline', '--run', 'node --test test/'], { fake })
       const b = last(hostRepo, 'baseline').baseline
       const where = Object.fromEntries(b.known.map((k) => [k.name, k.where]))
       if (where['the known broken one'] !== 'both') throw new Error(`known ${JSON.stringify(b.known)}\n${r.out.slice(-600)}`)
@@ -499,6 +516,85 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       }
     },
     timeout: 90_000,
+  })
+
+  // r55g's delta review of 6a6cedd, 1: the base ran only here, so a failure the host has at the head
+  // and at the base alike read as new, and a host failure the local base shared read as known.
+  const remoteOnly = { exit: 1, log: '  FAIL  remote regression 3ms\n' }
+  let baseOnHost = remoteOnly
+  await s.check('with a host, the base runs on the host too, and a failure is known only on the machine whose base failed it', {
+    assert: async () => {
+      git(['checkout', '-q', '-b', 'rig/hb'], hostRepo)
+      const head = commitFiles(hostRepo, { 'test/b.test.js': specFile([]) }, 'hb')
+      git(['checkout', '-q', 'main'], hostRepo)
+      git(['branch', '-D', '-q', 'rig/hb'], hostRepo)
+      const base = git(['rev-parse', 'HEAD'], hostRepo)
+      const fake = fakeBox({ exit: 1, log: remoteOnly.log, at: { [base]: baseOnHost } })
+      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--by', 'r55q', '--baseline', base, '--run', 'node --test test/'], { fake })
+      const b = last(hostRepo, 'baseline').baseline
+      const ranThere = readFileSync(calls, 'utf8').includes(`"sha":"${base}"`)
+      if (!ranThere) throw new Error(`the base never ran on the host\\n${r.out.slice(-600)}`)
+      const known = b.known.find((k) => k.name === 'remote regression')
+      return b.complete && b.newFailures.length === 0 && known?.where === 'there' && /0 new failures/.test(r.out)
+    },
+    // A base that is green on the host: the head's host failure is new there, whatever the local base did.
+    breaks: () => {
+      baseOnHost = { exit: 0, log: 'ok 1 - fine\n' }
+      return () => {
+        baseOnHost = remoteOnly
+      }
+    },
+    timeout: 90_000,
+  })
+
+  // r55g's delta review of 6a6cedd, 2: a renewal refused mid-run was only printed.
+  let lostTo = { by: 'r55x.0a1b2c3d', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+  await s.check('a renewal refused mid-run stops the host run and fails it, naming the new holder', {
+    assert: async () => {
+      rmSync(calls, { force: true })
+      const t = Date.now()
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--no-ci', '--run', 'true'], {
+        fake: fakeBox({ exit: 0, log: 'ok 1 - fine\n', holdMs: 20_000, lostTo }),
+        env: { RIG_QA_RENEW_MS: '300' },
+      })
+      const rec = last(hostRepo, 'test', 'build-box')
+      const stopped = readFileSync(calls, 'utf8').includes('"stopped":"build-box"')
+      return (
+        r.status !== 0 &&
+        stopped &&
+        rec.exit !== 0 &&
+        /lost the lease on build-box: build-box is leased by r55x\.0a1b2c3d/.test(r.out) &&
+        /r55x\.0a1b2c3d/.test(rec.error ?? '') &&
+        Date.now() - t < 15_000
+      )
+    },
+    // Renewals that go through: the run is held for its full time and comes back green.
+    breaks: () => {
+      lostTo = null
+      return () => {
+        lostTo = { by: 'r55x.0a1b2c3d', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+      }
+    },
+    timeout: 90_000,
+  })
+
+  // r55g's delta review of 6a6cedd, 3: a lease held by a run's token says how to free it.
+  let tokenHolder = { by: 'r55q.1a2b3c4d', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+  await s.check('a refusal by a run’s token names the exact command that frees it', {
+    assert: async () => {
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--run', 'true'], {
+        fake: fakeBox({ holder: tokenHolder }),
+      })
+      return r.status === 75 && r.out.includes('rig lease host:build-box --by r55q.1a2b3c4d --release')
+    },
+    // A holder that is not a run's token (a session that took the lease by hand) gets no such line.
+    breaks: () => {
+      tokenHolder = { by: 'r55x', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+      return () => {
+        tokenHolder = { by: 'r55q.1a2b3c4d', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+      }
+    },
+    timeout: 60_000,
   })
 
   // ---------------------------------------------------------------------------------------------

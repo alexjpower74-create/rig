@@ -116,6 +116,7 @@ export default async function qa(args) {
   const label = holderId(argOf(args, '--by') || process.env.RIG_SESSION || currentBranchOrNull(process.cwd()) || `qa-${process.pid}`)
   const by = leaseToken(label)
   let lease = null
+  const leaseLost = new AbortController()
   if (host) {
     // Long enough for the stages that use the host at their limit, and renewed while the run lasts.
     lease = leaseHost(root, host, by, { ttlMin: limitMs ? Math.ceil((2 * limitMs) / 60_000) + 30 : 120 })
@@ -124,10 +125,19 @@ export default async function qa(args) {
       process.exit(75)
     }
     process.on('exit', lease.release)
-    setInterval(() => {
-      const why = lease.renew()
-      if (why) console.error(`\nrig qa: could not renew the lease on ${host}: ${why}`)
-    }, 30 * 60_000).unref()
+    // A renewal refused mid-run means another run holds the host now: stop ours there and fail it,
+    // never run beside the new holder (r55g's delta review of 6a6cedd).
+    const renewal = setInterval(
+      () => {
+        const why = lease.renew()
+        if (!why) return
+        clearInterval(renewal)
+        console.error(`\nrig qa: lost the lease on ${host}: ${why}`)
+        leaseLost.abort(why)
+      },
+      Number(process.env.RIG_QA_RENEW_MS) || 30 * 60_000,
+    )
+    renewal.unref()
   }
 
   const wt = acquireQaWorktree(root, cfg, ref, { fresh })
@@ -157,7 +167,25 @@ export default async function qa(args) {
   const shims = desktop ? null : makeShims()
   if (shims) process.on('exit', shims.remove)
   const baseEnv = { ...process.env, PORT: String(port), RIG_QA_SHA: sha }
-  const ctx = { root, cfg, wt, ref, full, sha, port, pattern, limitMs, stallMs, shims, host, by, label, desktop, lease }
+  const ctx = {
+    root,
+    cfg,
+    wt,
+    ref,
+    full,
+    sha,
+    port,
+    pattern,
+    limitMs,
+    stallMs,
+    shims,
+    host,
+    by,
+    label,
+    desktop,
+    lease,
+    leaseLost: leaseLost.signal,
+  }
   ctx.env = shims ? desktopFreeEnv(baseEnv, shims) : baseEnv
 
   if (repeat) process.exit(await repeatRuns(ctx, args, repeat))
@@ -378,14 +406,14 @@ function printCiStatus(status, exit, where) {
 }
 
 /** The same run on the host, recorded with host: '<ssh-host>'. */
-async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
+async function hostStage(ctx, kinds, cmd, { seed = null, record = true, at: commit = null } = {}) {
   const { root, host, full, sha, ref, label } = ctx
-  const env = { RIG_QA_SHA: sha, ...(seed ? { RIG_SEED: seed } : {}) }
+  const env = { RIG_QA_SHA: commit ? commit.slice(0, 7) : sha, ...(seed ? { RIG_SEED: seed } : {}) }
   const ci = kinds.includes('ci')
   const r = await runHost({
     root,
     host,
-    sha: full,
+    sha: commit ?? full,
     cmd: ci ? ciOnHost(cmd) : cmd,
     // One checkout per session, kept warm between its runs; the lease keeps any other run out of it.
     session: label,
@@ -395,6 +423,7 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
     pattern: ctx.pattern,
     desktop: ctx.desktop,
     ci,
+    stop: ctx.leaseLost,
   })
   // The host's full output is kept like the local run's, in .rig/qa-logs/ (lead, first real --host run).
   const log = record ? openLog(root, sha, `${kinds.join('+')}-${holderId(host)}`) : { fd: null, path: null }
@@ -505,7 +534,7 @@ async function baselineStage(ctx, args, here, there) {
     return record({
       base,
       baseSha,
-      ...compareBaseline({ here: here.diff, there: there?.diff, base: here.diff, runs: diffRuns }),
+      ...compareBaseline({ here: here.diff, there: there?.diff, base: here.diff, baseThere: there?.diff, runs: diffRuns }),
       note: 'the commit is its own base',
     })
   }
@@ -528,26 +557,48 @@ async function baselineStage(ctx, args, here, there) {
   const port = ctx.port + 50 + bwt.index
   console.log(`\n── baseline: ${base} @ ${baseShort} in ${bwt.id} (port ${port}) ──\n$ ${cmd}\n`)
   const log = openLog(root, baseShort, 'baseline')
-  const r = await runWatched(cmd, {
-    cwd: bwt.path,
-    env: { ...ctx.env, PORT: String(port), RIG_QA_SHA: baseShort },
-    limitMs: ctx.limitMs,
-    stallMs: ctx.stallMs,
-    workerLogs: cfg.qaWorkerLogs || null,
-    log: log.fd,
-  })
+  // The base runs on every machine the head ran on, at once: each machine's failures are compared
+  // with its own base, never across (r55g's delta review of 6a6cedd).
+  const [r, rt] = await Promise.all([
+    runWatched(cmd, {
+      cwd: bwt.path,
+      env: { ...ctx.env, PORT: String(port), RIG_QA_SHA: baseShort },
+      limitMs: ctx.limitMs,
+      stallMs: ctx.stallMs,
+      workerLogs: cfg.qaWorkerLogs || null,
+      log: log.fd,
+    }),
+    there ? hostStage(ctx, ['baseline'], there.cmd, { record: false, at: baseSha }) : null,
+  ])
   if (log.fd !== null) closeSync(log.fd)
   bwt.release()
   timing(root, 'qa:baseline', r.ms, full, 'local', r.exit === 0)
+  if (rt) timing(root, 'qa:host:baseline', rt.ms, full, ctx.host, rt.exit === 0)
   const baseFailures = diffNames(r.text, { exit: r.exit, pattern: ctx.pattern })
   const cmp = compareBaseline({
     here: here.diff,
     there: there?.diff ?? null,
     base: baseFailures,
+    baseThere: rt ? rt.diff : null,
     needsStub: [...new Set([...(here.needsStub ?? []), ...(there?.needsStub ?? [])])],
-    runs: [...diffRuns, { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures, stalled: r.stalled }],
+    runs: [
+      ...diffRuns,
+      { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures, stalled: r.stalled },
+      ...(rt ? [{ label: `the base run on ${ctx.host} (${baseShort})`, exit: rt.exit, failures: rt.diff, stalled: rt.stalled }] : []),
+    ],
   })
-  record({ base, baseSha, baseExit: r.exit, baseFailed: baseFailures.length, baseLog: log.path, stalled: r.stalled, ...cmp })
+  record({
+    base,
+    baseSha,
+    baseExit: r.exit,
+    baseFailed: baseFailures.length,
+    baseLog: log.path,
+    stalled: r.stalled,
+    ...(rt
+      ? { baseThere: { host: ctx.host, exit: rt.exit, failed: rt.diff.length, failures: rt.diff.slice(0, 200), stalled: rt.stalled } }
+      : {}),
+    ...cmp,
+  })
 }
 
 function printBaseline(b, host) {

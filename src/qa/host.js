@@ -32,6 +32,7 @@ export const holderId = (s) =>
  * first one's host checkout, on its test DB (Zyro's review of 949e12b). With the token, only this
  * invocation renews or gives back its lease; any other run is refused.
  */
+const TOKEN = /\.[0-9a-f]{8}$/
 export const leaseToken = (label) => `${holderId(label).slice(0, 71)}.${randomBytes(4).toString('hex')}`
 
 /**
@@ -47,6 +48,16 @@ export function leaseHost(root, host, by, { ttlMin = 120 } = {}) {
     r = take()
   } catch (e) {
     return { ok: false, why: `the lease on ${host} could not be taken: ${e.message}` }
+  }
+  // Who holds it, and when the holder is another rig qa run's token, how to free it: an interrupted
+  // run keeps its lease to its ttl on purpose, and its token is random (r55g's delta review, 6a6cedd).
+  const heldBy = (x) => {
+    const h = x?.holder
+    if (!h) return `the lease on ${host} was refused: ${x?.why ?? 'no reason given'}`
+    const free = TOKEN.test(h.by)
+      ? `. If that is an earlier rig qa run of yours that is gone, free it with: rig lease host:${host} --by ${h.by} --release`
+      : ''
+    return `${host} is leased by ${h.by} since ${h.at}${h.until ? `, until ${h.until}` : ''}${free}`
   }
   if (r?.ok)
     return {
@@ -66,19 +77,13 @@ export function leaseHost(root, host, by, { ttlMin = 120 } = {}) {
       renew: () => {
         try {
           const again = take()
-          return again?.ok ? null : (again?.why ?? 'refused')
+          return again?.ok ? null : heldBy(again)
         } catch (e) {
           return e.message
         }
       },
     }
-  const h = r?.holder
-  return {
-    ok: false,
-    why: h
-      ? `${host} is leased by ${h.by} since ${h.at}${h.until ? `, until ${h.until}` : ''}`
-      : `the lease on ${host} was refused: ${r?.why ?? 'no reason given'}`,
-  }
+  return { ok: false, why: heldBy(r) }
 }
 
 /** Runs on a host that have started and not yet come back. */
@@ -124,6 +129,7 @@ export async function runHost({
   echo = true,
   desktop = false,
   ci = false,
+  stop = null,
 }) {
   const started = Date.now()
   const out = linePrefixer(`[${host}] `, (s) => echo && process.stdout.write(s))
@@ -134,6 +140,29 @@ export async function runHost({
   let r
   let error = null
   let stalled = null
+  // The lease was lost (a renewal refused): nothing more runs on the host under it.
+  const lost = () => `lost the lease on ${host}: ${stop.reason ?? 'refused'}`
+  if (stop?.aborted) {
+    console.error(`[${host}] rig qa: not run: ${lost()}`)
+    return {
+      host,
+      exit: 75,
+      ms: 0,
+      log: '',
+      dir: null,
+      db: null,
+      failures: [],
+      diff: [],
+      unproven: [],
+      void: [],
+      needsStub: [],
+      stubCalls: [],
+      tally: tally('', [], 75),
+      stalled: null,
+      ciStatus: null,
+      error: lost(),
+    }
+  }
   inFlight++
   // Called now, not on a later tick: a signal that lands at once must find the run in flight.
   const running = (async () =>
@@ -181,8 +210,19 @@ export async function runHost({
       )
       running.finally(() => clearInterval(timer)).catch(() => {})
     })
+  // A renewal refused mid-run: the run there is stopped, like a stall, and the stage fails (75).
+  const dropped =
+    stop &&
+    new Promise((resolve) => {
+      stop.addEventListener('abort', () => {
+        error = lost()
+        console.error(`\n[${host}] rig qa: ${error}. Stopping the run there (exit 75).`)
+        abort.abort()
+        resolve({ host, exit: 75, ms: Date.now() - started, dir: null, db: null, log: all })
+      })
+    })
   try {
-    r = await (watchdog ? Promise.race([running, watchdog]) : running)
+    r = await Promise.race([running, watchdog, dropped].filter(Boolean))
   } catch (e) {
     error = e.message
     r = { host, exit: 255, ms: Date.now() - started, dir: null, db: null, log: '' }
