@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, rmSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { mainRoot, loadConfig, currentBranch, currentBranchOrNull } from '../config.js'
 import { acquireQaWorktree, cleanWorktree, porcelainLines } from '../worktrees.js'
@@ -300,7 +300,7 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
   const failures = parseFailures(r.text, { pattern: ctx.pattern })
   const calls = ctx.shims ? readShimCalls(ctx.shims.log).slice(callsBefore) : []
   const stub = needsStub(r.lines, calls, { pattern: ctx.pattern })
-  const t = tally(r.text, failures)
+  const t = tally(r.text, failures, r.exit)
   const ciStatus = statusFile ? readCiStatus(statusFile) : null
   if (statusFile) tryRm(statusFile)
   const left = dirtiedBy(wt.path)
@@ -324,6 +324,7 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
       failures: failures.slice(0, 200),
       passed: t.passed,
       failed: t.failed,
+      tallyConflict: t.conflict,
       needsStub: stub.map((s) => s.name),
       stalled: r.stalled,
       log: log.path,
@@ -378,6 +379,14 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
     desktop: ctx.desktop,
     ci,
   })
+  // The host's full output is kept like the local run's, in .rig/qa-logs/ (lead, first real --host run).
+  const log = record ? openLog(root, sha, `${kinds.join('+')}-${holderId(host)}`) : { fd: null, path: null }
+  if (log.fd !== null) {
+    try {
+      writeSync(log.fd, r.log)
+    } catch {}
+    closeSync(log.fd)
+  }
   if (record)
     for (const k of kinds) {
       recordQa(root, {
@@ -394,6 +403,8 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
         failures: r.failures.slice(0, 200),
         passed: r.tally.passed,
         failed: r.tally.failed,
+        tallyConflict: r.tally.conflict,
+        log: log.path,
         needsStub: r.needsStub,
         stalled: r.stalled,
         error: r.error,
@@ -415,12 +426,15 @@ export function sideBySide(here, there, host) {
     ['', 'here', host],
     ['exit', here.exit, there.exit],
     ['passed', here.tally.passed ?? '—', there.tally.passed ?? '—'],
-    ['failed', here.tally.failed, there.tally.failed],
+    ['failed', here.tally.failed ?? '?', there.tally.failed ?? '?'],
     ['time', fmtMs(here.ms), fmtMs(there.ms)],
   ]
   const w = [8, Math.max(...rows.map((r) => String(r[1]).length)) + 3]
   console.log('')
   for (const r of rows) console.log(`  ${String(r[0]).padEnd(w[0])}${String(r[1]).padEnd(w[1])}${r[2]}`)
+  // A count that contradicts the exit is not a number worth printing; say what disagrees instead.
+  if (here.tally.conflict) console.log(`  failed here: not counted: ${here.tally.conflict}`)
+  if (there.tally.conflict) console.log(`  failed on ${host}: not counted: ${there.tally.conflict}`)
   const onlyHere = here.failures.filter((f) => !there.failures.includes(f))
   const onlyThere = there.failures.filter((f) => !here.failures.includes(f))
   if (onlyHere.length) console.log(`  fails only here: ${list(onlyHere)}`)

@@ -321,7 +321,11 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
         log.some((c) => c.release === 'host:build-box') &&
         /\n\s+exit\s+1\s+1\n/.test(r.out) &&
         /fails only on build-box: only on the second OS/.test(r.out) &&
-        rec.failed === 2
+        rec.failed === 2 &&
+        // the host's full output is kept, like the local run's (lead, first real --host run)
+        typeof rec.log === 'string' &&
+        existsSync(join(hostRepo, rec.log)) &&
+        readFileSync(join(hostRepo, rec.log), 'utf8').includes('not ok 2 - only on the second OS')
       )
     },
     // Someone else's lease refuses the run, by name, before anything runs.
@@ -329,6 +333,32 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       box = fakeBox({ holder: { by: 'r55x', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' } })
       return () => {
         box = fakeBox()
+      }
+    },
+    timeout: 60_000,
+  })
+
+  // The first real --host run (main 515b118): a passing suite printed a fixture suite's own
+  // summary ("1 void") and the side-by-side said "failed 2" beside exit 0.
+  let nestedExit = 0
+  await s.check('a count that contradicts the exit is shown as "?" with the reason, not as a number', {
+    assert: async () => {
+      const cmd = `echo 'accept a shift: 0 passed, 0 failed, 1 void, 0 unproven'; echo 'suite: 5 passed, 0 failed, 0 void, 0 unproven'; exit ${nestedExit}`
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--run', cmd], {
+        fake: fakeBox({ exit: 0, log: 'ok 1 - fine\n# pass 1\n# fail 0\n' }),
+      })
+      const rec = last(hostRepo, 'test')
+      return (
+        /\n\s+failed\s+\?\s+0\n/.test(r.out) &&
+        /failed here: not counted: the output counts 1 failed but the run exited 0/.test(r.out) &&
+        rec.failed === null
+      )
+    },
+    // From a red run the same output is a consistent count, and the number is printed.
+    breaks: () => {
+      nestedExit = 1
+      return () => {
+        nestedExit = 0
       }
     },
     timeout: 60_000,

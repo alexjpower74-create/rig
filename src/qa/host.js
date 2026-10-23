@@ -118,6 +118,7 @@ export async function runHost({
   const started = Date.now()
   const out = linePrefixer(`[${host}] `, (s) => echo && process.stdout.write(s))
   let seen = ''
+  let all = ''
   let last = started
   const abort = new AbortController()
   let r
@@ -139,6 +140,7 @@ export async function runHost({
       onOutput: (c) => {
         last = Date.now()
         seen = (seen + String(c)).slice(-16 * 1024)
+        all += String(c)
         out.push(String(c))
       },
     }))()
@@ -163,7 +165,7 @@ export async function runHost({
               `Last spec: ${stalled.spec ?? 'none named'}. Stopping the wait (exit 124).`,
           )
           abort.abort()
-          resolve({ host, exit: 124, ms: Date.now() - started, dir: null, db: null, log: seen })
+          resolve({ host, exit: 124, ms: Date.now() - started, dir: null, db: null, log: all })
         },
         Math.max(50, Math.min(1000, Math.floor(stallMs / 10))),
       )
@@ -178,7 +180,8 @@ export async function runHost({
   out.end()
   if (error) console.error(`[${host}] rig qa: the run on ${host} did not start: ${error}`)
   error ??= r.why ?? null
-  const log = r.log ?? ''
+  // The full output: runOnHost's log, else everything streamed (a run abandoned on a stall).
+  const log = r.log || all
   const failures = parseFailures(log, { pattern })
   // The host's own stubs (src/remote.js) say "<tool>: the desktop is off in test runs" and, since
   // r55m's edf29fd, also come back as `stubCalls`. Their times are the host's clock and the output
@@ -206,7 +209,7 @@ export async function runHost({
     failures,
     needsStub: stub,
     stubCalls: r.stubCalls ?? [],
-    tally: tally(log, failures),
+    tally: tally(log, failures, r.exit),
     stalled,
     ciStatus: posted ? parseCiStatus(posted) : null,
     error,
