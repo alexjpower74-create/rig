@@ -1,5 +1,21 @@
 # Changelog
 
+## 5.5.1 — a host run stops on Debian and Ubuntu too
+
+- **What went wrong:** GitHub's Ubuntu runner went red on three second-machine checks after 5.5.0
+  shipped (a run past its limit, a process the suite left behind, a caller's abort): each stop took
+  the full 12 to 40 s instead of a moment. On Debian and Ubuntu `/bin/sh` is dash, and dash turns job
+  control off when there is no terminal, so `set -m` gave the host command no process group of its
+  own and every group kill reached nothing. A second machine running Debian or Ubuntu would have
+  kept a stopped suite running.
+- **Now:** the host command gets its own process group under any shell: `setsid` where there is one
+  (Linux), else bash's job control, which works without a terminal (macOS has bash and no `setsid`),
+  else `set -m`. The fake ssh in the tests can run the "host" under a chosen shell
+  (`FAKE_SSH_SHELL`), and a check runs every stop under dash wherever dash exists. Red under dash on
+  a Mac with 5.5.0's runner (40, 12 and 15 s), green with the fix (2.3 s, 0.3 s, 0.1 s).
+- **Same night, also checked:** the 5.5.0 gate ran on Linux and macOS, both with bash as `sh`; this
+  is why the plan's second machine is now joined by the CI runner as a third shell to check against.
+
 ## 5.5.0 — nobody waits blind
 
 Lessons from a two-day build: stacked branches on a fast-moving upstream, a crew of agents, a
