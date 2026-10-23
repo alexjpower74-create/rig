@@ -139,3 +139,32 @@ the merge ("did not compare this run (fake, …)").
    refusal's advice ("Wait for it, or run here only with --no-host") could also say this is the
    session's own earlier run, and that `rig lease host:<h> --by <token> --release` frees it once that
    run is known to be gone.
+
+## Verified at 56a92c1 (2026-10-23)
+
+r55q's fix for the three findings above is `56a92c1`, on `rig/r55q` (main has not taken it yet).
+I reran my repros on a scratch merge of `56a92c1` with `rig/r55g` at `239ee75`, using the fake-ssh
+kit and the real lease script on the fake host. Each repro has a control that gives the other answer.
+The scripts were scratch, not committed.
+
+1. **Fixed.** With `qaHost: fake`, `rig qa <head> --baseline <base>` now runs the base on the host
+   too, and each machine is compared with its own base.
+   - A failure that shows only on the host, at both shas, is known there:
+     `0 new, 1 known …: remote regression (there)`. r55g's finish, matching through `compared`, waives
+     the host run: `QA green on fake: ok … every failure is known on the base`. That is the first time
+     the host waiver has worked end to end.
+   - The cross case is the control: the host fails `X` at the head, and only the local base fails `X`.
+     The result is `1 new: X`, and the host gate fails. The local base no longer waives anything on the
+     host.
+2. **Fixed.** The renewal interval is set to 500 ms, and the host command sleeps 6 s. 1.5 s in, the
+   lease file on the fake host is rewritten to another holder.
+   - `rig qa` exits 75 after 1.6 s. The host record has `exit: 75`, and its error names the new holder.
+     No `sleep` was left running.
+   - Control: the same run without the steal exits 0 after 6.2 s.
+3. **Fixed.** The refusal names the token, and the command that frees it:
+   `rig lease host:fake --by <token> --release`.
+   - Residual nit, not blocking: the same advice is added to the lost-lease message, where the holder
+     is a live run somebody else is still using ("if that is an earlier rig qa run of yours that is
+     gone" keeps it honest).
+   - Also there: the host prints `the run on fake did not start` for a run that started and was
+     stopped.
