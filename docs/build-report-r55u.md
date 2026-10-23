@@ -286,3 +286,16 @@ it went red every time. The fix held 10 of 10 under crew load.
   red in all 20 runs (6c1006d and e80d49e). The repair has the same shape as the fast-second-tap fix:
   send the swipe's end and the tap together (the rating buttons' position does not depend on the comp),
   log touch timestamps in the page, and set up again when the tap did not begin inside the fling window.
+
+### The swipe-tap control on the Mac (b934c41, after 949e12b's Mac VOID at no load)
+The 5.5.1 note above was wrong about the cause. It wasn't load: the Mac's Chrome never lets the broken
+board's fling eat a tap. Nothing a page can see moves during that fling (no scroll, no viewport change,
+nothing on the board scrolls sideways), and on both platforms the browser takes the swipe (its moves
+turn uncancelable). That signal, c0b7a92's, still went VOID on the Mac. So the suite now asks the
+question directly: up to three set-ups of the broken board, read from the page's click counter. If no
+tap is ever swallowed, the check runs without a control and says why (UNPRV). Where one is, a control
+run scores only when its tap was swallowed (it sets up again, else VOID). The detector has its own
+check, red with a detector that ignores the click.
+- Linux: `rig qa b934c41 … --host <mac>`, here: 40 passed, 0 void. The swipe check keeps a real control.
+- Mac: 39 passed, 0 void, 1 UNPRV: "no control on darwin: with the swipe left to the browser, the
+  board's tap still clicked in 3 of 3 set-ups, so the fling this guards against cannot be made here".
