@@ -231,3 +231,58 @@ rig/r55q's `qa.js:546` still records them as `qa:host`, and they skew the `qa:ho
   machines agree, but I have not run it on the second machine.
 - `--update-refs` (stacked slice branches moved together) is not offered. Slices here are not
   stacked on each other, and moving another slice's branch is outside `rig rebase <id>`'s scope.
+
+## Flake proof (test/taste.test.js and src/taste/**, taken over 2026-10-22)
+The flake: under the crew's load, "a rating tapped straight after a swipe still counts" and the
+`--lan` check went red on first runs, with nothing wrong in the board. Fixed at e80d49e (6c1006d + e80d49e).
+
+### The cause
+- **Windows that measured the machine.** Every wait carried its own window (0.9 to 5 s). The swipe check's
+  failure line read "B on disk: 4": the tap had saved, just after its 2 s ran out.
+- **The 10 s harness default as a budget.** The `--lan` check started two boards with URL capture inside
+  it. Under crew load at 3de1d59 it took **8.2 to 9.95 s against 10 s** (ten runs; one ran 49 ms from red).
+- **Real slowness in src/taste.** `captureAll` paused a fixed 700 ms per shot. A board with three URLs took
+  2.3 s to open, most of it waiting, and a page that filled in after 700 ms was shot blank.
+
+### The fix
+- `src/taste/capture.js` waits for the page to be ready: fonts, images, 250 ms with no request in flight,
+  then two painted frames, capped at 3 s. Three URLs now take 1.6 s, not 2.3 s. New check: a page whose
+  data arrives 1.2 s after load is shot filled in. It is red against 3de1d59's capture (blank first pixel).
+- Every wait is a 10 s **guard** on a real condition, and returns the moment the condition holds. Before a
+  check reads the disk, it waits for the page's own "Saved", which shows only once the server has
+  acknowledged every queued answer.
+- "Did my tap register?" is a fact: the page counts its clicks, ahead of its own script and any control's.
+  The board answers a tap synchronously, so one painted frame later the result is known. A dead button
+  is known at once, so no control waits 10 s to prove nothing happened.
+- Two set-ups now check their own precondition and never score a run that missed it. The fast second tap
+  must land while the board is still on card 1 (the page logs which card each click arrived on). The
+  number keys accept a board that moved on before the frame.
+- The `--lan` check uses a board of images alone, since where the board listens is what it tests. It went
+  from 8.4 s to about 0.1 s. A check's timeout is now a 90 s hang guard.
+- The whole file now runs in about 290 s, against 395 s or more before.
+
+### The runs (all `rig qa <sha> --repeat N --run "node test/taste.test.js"`, pinned worktrees)
+`--repeat` is r55q's item 16, not yet on main, so I ran it from an unpacked copy of rig/r55q's committed
+tip, never from their worktree.
+
+| sha | load | result |
+|---|---|---|
+| **e80d49e (the fix)** | crew QA running (`rig qa … --baseline`) | **10 of 10 green**, 37 checks each, 0 void |
+| 6c1006d (first fix) | crew QA running | 10 of 10 green |
+| 3de1d59 (before) | the same crew load | 10 of 10 green, but `--lan` ran 8.2–9.95 s against its 10 s budget |
+| 3de1d59 (before) | **synthetic**: 16 busy cores, load ≈ 16 | **2 of 2 red**: `--lan` and "a 4xx ends the round" timed out at 10 s; "a fast second tap" went VOID |
+| 6c1006d | the same synthetic load, beside it | 2 of 2 red: number keys (frame after the move-on) and fast-tap VOID. Both fixed in e80d49e |
+| 3de1d59 (before) | synthetic, load ≈ 26 | **2 of 2 red**: 3 and 4 checks failed (10 s timeouts) |
+| e80d49e | the same synthetic load, beside it | run 1 green (37/37); run 2 one VOID (below); run 3 stopped on the lead's call |
+
+In short: under the crew's real load the old suite was one slow run from red. Under heavier synthetic load
+it went red every time. The fix held 10 of 10 under crew load.
+
+## Left for 5.5.1
+- **VOID at load ≈ 26 on "comps on a phone: a rating tapped straight after a swipe still counts"**
+  (e80d49e, synthetic 16-core burn, 1 of 2 completed runs, 20.6 s). The real check passed; its red run
+  did not go red. That red run relies on the browser's fling eating a tap that lands within about half a
+  second of the swipe, and at that load the tap arrives after the fling has ended. Under crew load it was
+  red in all 20 runs (6c1006d and e80d49e). The repair has the same shape as the fast-second-tap fix:
+  send the swipe's end and the tap together (the rating buttons' position does not depend on the comp),
+  log touch timestamps in the page, and set up again when the tap did not begin inside the fling window.
