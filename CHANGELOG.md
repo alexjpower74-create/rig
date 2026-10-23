@@ -81,6 +81,19 @@ itself, every slice cross-reviewed early, every check seen red once and then gre
   unproven check as a failure. Only a FAIL is a failure now; unproven and void are named as such, and
   a count that disagrees with the exit is shown as unknown, never as a number.
 
+**Found by the second-vendor review of this release, and fixed before it**
+- Two `rig qa --host` runs on one branch held the host as the same holder, so the second counted as
+  a renewal and shared the first's checkout and test DB. Each run now holds the lease with its own
+  token; a concurrent run is refused, and a run that loses its lease mid-way stops.
+- A baseline taken on one machine could waive a failing run on the other. A baseline now names the
+  exact runs it compared, runs the base on the host too, and waives a failure only on the machine
+  where the base also failed it.
+- The fold walk ran without pipefail, so `cmd | tail` read green. It now uses rig qa's runner.
+- `rig finish` accepted a CI record from a different command than the one now required.
+- On macOS the swipe-then-tap control could not break anything (no fling there), so the check was
+  void. It now proves its precondition first and reports "unproven, no control on this platform"
+  where it cannot, instead of a pass or a void.
+
 **Notes for the next round**
 - `rig fold` walks every folded commit with the whole test command, not each commit's own specs: a
   spec from an earlier commit that a later commit's behaviour makes stale only shows up that way.
