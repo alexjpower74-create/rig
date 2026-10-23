@@ -104,7 +104,12 @@ export async function settle(page, net, { quietMs = QUIET_MS, maxMs = MAX_SETTLE
   const inPage = (expr) => Promise.race([page.eval(expr).catch(() => null), new Promise((r) => setTimeout(r, left()))])
   await inPage(`(async () => {
     await document.fonts?.ready
-    await Promise.all([...document.images].map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r }))))
+    // Listen, never assign: a page that reveals an image in its own onload (a fade-in, a placeholder
+    // swapped out) keeps that handler, or it is shot unrevealed (r55m's delta review of e80d49e).
+    await Promise.all([...document.images].map((i) => (i.complete ? null : new Promise((r) => {
+      i.addEventListener('load', r, { once: true })
+      i.addEventListener('error', r, { once: true })
+    }))))
   })()`)
   while (left() > 0 && (net.count > 0 || Date.now() - net.lastChange < quietMs)) await new Promise((r) => setTimeout(r, 25))
   await inPage('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))')

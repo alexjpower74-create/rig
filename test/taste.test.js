@@ -174,15 +174,17 @@ function firstPixel(png) {
   return [raw[1], raw[2], raw[3]]
 }
 
-/** src/taste as it stood before the load fix (3de1d59), unpacked once, for the capture control. */
-let oldTasteDir = null
-function oldTaste() {
-  if (!oldTasteDir) {
-    oldTasteDir = realpathSync(mkdtempSync(join(tmpdir(), 'rig-taste-old-')))
-    roots.push(oldTasteDir)
-    spawnSync('sh', ['-c', `git -C "${join(here, '..')}" archive 3de1d59 src harness | tar -x -C "${oldTasteDir}"`])
+/** src/taste as it stood at `sha` (default 3de1d59, before the load fix), unpacked once, for a capture control. */
+const oldTasteDirs = new Map()
+function oldTaste(sha = '3de1d59') {
+  if (!oldTasteDirs.has(sha)) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'rig-taste-old-')))
+    roots.push(dir)
+    const r = spawnSync('sh', ['-c', `git -C "${join(here, '..')}" archive ${sha} src harness | tar -x -C "${dir}"`])
+    if (r.status !== 0) throw new Error(`could not unpack ${sha} for a control: ${String(r.stderr).trim()}`)
+    oldTasteDirs.set(sha, dir)
   }
-  return oldTasteDir
+  return oldTasteDirs.get(sha)
 }
 
 /** A local site for the --url path: one real page, and one that hangs up without answering. */
@@ -203,6 +205,18 @@ h1{font-size:clamp(34px,6vw,72px);margin:8vh 6vw 2vh;font-weight:500}p{margin:0 
       )
     }
     if (req.url === '/late-data') return setTimeout(() => res.end('{}'), 1200)
+    // A page that adds its hero after load and reveals the page in that image's own onload.
+    if (req.url === '/late-img') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      return res.end(
+        '<!doctype html><title>Late image</title><body style="margin:0;background:#fff"><script>addEventListener("load", () => { const i = new Image(); i.onload = () => { document.body.style.background = "rgb(58, 143, 143)" }; i.src = "/late-img.png"; document.body.appendChild(i) })</script>',
+      )
+    }
+    if (req.url === '/late-img.png')
+      return setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'image/png' })
+        res.end(bandsPng(8, 8, [0, 0, 0], [0, 0, 0]))
+      }, 300)
     if (req.url === '/missing') {
       res.writeHead(404, { 'content-type': 'text/html; charset=utf-8' })
       return res.end('<!doctype html><title>Not found</title><h1>Page not found</h1>')
@@ -588,6 +602,27 @@ await suite('rig taste', async (s) => {
     timeout: 60_000,
   })
 
+  let captureNow = captureAll
+  await s.check('a page that reveals itself in an image’s own onload keeps that handler, and is shot revealed', {
+    assert: async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'rig-taste-lateimg-'))
+      roots.push(dir)
+      const card = { id: 'late-img', name: 'late-img', url: `${site.base}/late-img`, source: 'url', shots: {} }
+      const { ok } = await captureNow([card], dir, { log: () => {} })
+      const px = ok[0] && firstPixel(readFileSync(ok[0].shots.desktop))
+      if (px?.join() !== '58,143,143') console.log(`        first pixel of the shot: ${px?.join() ?? 'no shot'}`)
+      return px?.join() === '58,143,143'
+    },
+    // The control: e80d49e's settle(), which set i.onload = i.onerror and threw the page's handler away.
+    breaks: async () => {
+      captureNow = (await import(join(oldTaste('e80d49e'), 'src', 'taste', 'capture.js'))).captureAll
+      return () => {
+        captureNow = captureAll
+      }
+    },
+    timeout: 60_000,
+  })
+
   // ── the bar ──
   for (const vp of ['desktop', 'phone']) {
     const label = vp === 'desktop' ? '1440×900' : '390×844'
@@ -834,8 +869,17 @@ await suite('rig taste', async (s) => {
     timeout: 60_000,
   })
 
-  await s.check('a fast second tap is queued onto the next card, never dropped', {
-    assert: async () => {
+  // The set-up can miss on a loaded machine. A miss is never scored: in the real run it is a FAIL
+  // ("could not set up"), and in the control it is a pass, so a control that never exercised the rule
+  // grades VOID, never PASS (r55m's delta review: a throw in the control used to count as "seen red").
+  const fastTap = {
+    inControl: false,
+    forceMiss: false, // the meta-check's way to make every set-up miss
+    giveUp: () => {
+      if (fastTap.inControl) return true
+      throw new Error('could not land a second tap while the board was busy in 3 tries')
+    },
+    async assert() {
       // The second click must land while the board is still moving on from the first (on card 1),
       // or the check measures nothing. Both are sent at once, and the page's click log says where
       // the second one landed; a set-up that missed (a loaded machine) is set up again, never scored.
@@ -854,7 +898,7 @@ await suite('rig taste', async (s) => {
           await Promise.all([...at(p5), ...at(p3)])
           await waitFor(async () => (await clicks(page)) >= 2)
           const log = await page.eval('window.__rigClickLog')
-          if (log[1] !== '1 of 6') {
+          if (fastTap.forceMiss || log[1] !== '1 of 6') {
             console.log(`        attempt ${attempt}: the second tap landed on "${log[1]}", after the board moved on; setting up again`)
             continue
           }
@@ -867,17 +911,67 @@ await suite('rig taste', async (s) => {
           await b.stop()
         }
       }
-      throw new Error('could not land a second tap while the board was busy in 3 tries')
+      return fastTap.giveUp()
     },
     // The control: the first draft's rule, a tap inside the busy window thrown away.
-    breaks: pageBreak(`(() => {
+    breaks: () => {
+      fastTap.inControl = true
+      const restore = pageBreak(`(() => {
       let last = 0
       document.addEventListener('click', (e) => {
         if (!e.target.closest('.rate')) return
         if (Date.now() - last < 160) e.stopImmediatePropagation()
         else last = Date.now()
       }, true)
-    })()`),
+    })()`)()
+      return () => {
+        fastTap.inControl = false
+        restore()
+      }
+    },
+  }
+  await s.check('a fast second tap is queued onto the next card, never dropped', {
+    assert: () => fastTap.assert(),
+    breaks: fastTap.breaks,
+  })
+
+  const realGiveUp = fastTap.giveUp
+  let giveUp = realGiveUp
+  await s.check('a fast-second-tap control whose set-up never landed grades VOID, never PASS', {
+    assert: async () => {
+      fastTap.giveUp = giveUp
+      const inner = new H.Suite('inner')
+      const log = console.log
+      console.log = () => {}
+      try {
+        const r = await inner.check('(inner) a fast second tap, every control set-up missing', {
+          assert: () => fastTap.assert(),
+          breaks: () => {
+            const restore = fastTap.breaks()
+            fastTap.forceMiss = true
+            return () => {
+              fastTap.forceMiss = false
+              restore()
+            }
+          },
+          timeout: 60_000,
+        })
+        if (r.state !== 'VOID') log(`        inner check graded ${r.state}: ${r.detail}`)
+        return r.state === 'VOID'
+      } finally {
+        console.log = log
+        fastTap.giveUp = realGiveUp
+      }
+    },
+    // The control: e80d49e's give-up, a throw in either run, which the harness reads as "seen red".
+    breaks: () => {
+      giveUp = () => {
+        throw new Error('could not land a second tap while the board was busy in 3 tries')
+      }
+      return () => {
+        giveUp = realGiveUp
+      }
+    },
   })
 
   await s.check('the number keys rate and advance, as the buttons do', {
