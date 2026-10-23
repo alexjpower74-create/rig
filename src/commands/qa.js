@@ -313,8 +313,11 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
   const dirtied = left.tracked.filter((p) => !ctx.seen.has(p))
   const untracked = left.untracked.filter((p) => !ctx.seen.has(p))
   for (const p of [...dirtied, ...untracked]) ctx.seen.add(p)
+  // The record's own time, set here so a baseline can cite exactly this run (finish matches it).
+  const at = new Date().toISOString()
   for (const k of kinds) {
     recordQa(root, {
+      at,
       kind: k,
       ref,
       sha: full,
@@ -364,7 +367,7 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
     )
   if (kinds.includes('ci')) printCiStatus(ciStatus, r.exit, '')
   if (dirtied.length || untracked.length) console.log(dirtyMessage(dirtied, untracked))
-  return { ...r, cmd, failures, diff, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
+  return { ...r, at, host: 'local', cmd, failures, diff, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
 }
 
 function printCiStatus(status, exit, where) {
@@ -401,9 +404,11 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
     } catch {}
     closeSync(log.fd)
   }
+  const at = new Date().toISOString()
   if (record)
     for (const k of kinds) {
       recordQa(root, {
+        at,
         kind: k,
         ref,
         sha: full,
@@ -433,7 +438,7 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
     if (r.stalled) console.log(`rig qa: stalled on ${host}, last spec ${r.stalled.spec ?? 'none named'}, quiet ${fmtMs(r.stalled.quietMs)}`)
     if (ci) printCiStatus(r.ciStatus, r.exit, ` on ${host}`)
   }
-  return { ...r, label: `${kinds[0]} on ${host}` }
+  return { ...r, at: record ? at : null, host, cmd, label: `${kinds[0]} on ${host}` }
 }
 
 /** Both machines' tallies, side by side. */
@@ -491,7 +496,9 @@ async function baselineStage(ctx, args, here, there) {
   // compareBaseline reads a run's `failures`; for the diff those are its diff names.
   const diffRuns = runs.map((r) => ({ ...r, failures: r.diff }))
   const record = (baseline) => {
-    recordQa(root, { kind: 'baseline', ref, sha: full, short: sha, host: 'local', cmd: here.cmd, baseline })
+    // Each run this comparison read, by its own record, so finish waives only those (Zyro, 949e12b #2).
+    const compared = runs.map((r) => ({ host: r.host, cmd: r.cmd, at: r.at }))
+    recordQa(root, { kind: 'baseline', ref, sha: full, short: sha, host: 'local', cmd: here.cmd, baseline: { ...baseline, compared } })
     printBaseline(baseline, ctx.host)
   }
   if (baseSha === full) {

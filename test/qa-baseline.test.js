@@ -477,6 +477,30 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
     timeout: 90_000,
   })
 
+  // Zyro's review of 949e12b, #2: a local-only "0 new" waived a host run it never saw. The baseline
+  // names each run it compared by host, command and that run's own record time, for finish to match.
+  let where = ['--host', 'build-box']
+  await s.check('the baseline names every run it compared: host, command and the run record’s own time', {
+    assert: async () => {
+      rigQa(hostRepo, ['HEAD', ...where, '--by', 'r55q', '--baseline', '--run', 'node --test test/'], { fake: fakeBox() })
+      const b = last(hostRepo, 'baseline').baseline
+      const runs = [last(hostRepo, 'test'), last(hostRepo, 'test', 'build-box')]
+      if (!Array.isArray(b.compared)) throw new Error(`no compared: ${JSON.stringify(b)}`)
+      return (
+        b.compared.length === 2 &&
+        runs.every((run) => b.compared.some((c) => c.host === (run.host ?? 'local') && c.cmd === run.cmd && c.at === run.at))
+      )
+    },
+    // A baseline from a run with no host does not list the host: it never compared one.
+    breaks: () => {
+      where = ['--no-host']
+      return () => {
+        where = ['--host', 'build-box']
+      }
+    },
+    timeout: 90_000,
+  })
+
   // ---------------------------------------------------------------------------------------------
   // Timings: every stage goes to recordTiming. Checked once r55m's timings.js stores them.
   const { recordTiming, readTimings } = await import('../src/timings.js')
