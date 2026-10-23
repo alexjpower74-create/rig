@@ -1,6 +1,6 @@
 # Rig 5.5 — the gate, watching, upstream and decisions, tests that hold anywhere — finished report
 
-Commit: `9b06fec`
+Commit: `c9bcf08`
 
 ## What changed
 All seventeen items of docs/PLAN-5.5.md built, each check seen red then green, `npm run check` clean
@@ -8,7 +8,7 @@ on both machines, a second-vendor review passed on the final sha, and `rig finis
 The lead writes README, CHANGELOG and releases 5.5.0.
 
 ## The proof
-- `npm test` exited **0** on `9b06fec` (2026-10-23T05:07:15.789Z)
+- `npm test` exited **0** on `c9bcf08` (2026-10-23T08:36:38.105Z)
 - ✓ r55g merged
 - ✓ r55q merged
 - ✓ r55m merged
@@ -21,12 +21,12 @@ The lead writes README, CHANGELOG and releases 5.5.0.
 - ✓ r55w reviewed — docs/review-r55w.md
 - ✓ no uncommitted work
 - ✓ the stack merges with the live base — origin/main has not moved
-- ✓ QA green on 9b06fec — npm test
-- ✓ QA green on the second machine (macOS) — exit 0, 465 passed, 0 failed beside exit 0, 467 passed, 0 failed here
-- ✓ negative controls red on 9b06fec — npm run demo
+- ✓ QA green on c9bcf08 — npm test
+- ✓ QA green on the second machine (macOS) — exit 0, 467 passed, 0 failed beside exit 0, 468 passed, 0 failed here
+- ✓ negative controls red on c9bcf08 — npm run demo
 - ✓ QA left the tree clean
-- ✓ second-vendor pass on 9b06fec — openai: Reviewed f95203e..9b06fec (six files); desktop-free npm ci, qa-host-real.test.js (8 passed), independent settle/release probe, and npm run check (35 files green). Zero new findings; existing D11 documented. The full report is kept outside the repo.
-- ✓ decisions closed — 11 since 14a1ad6 (r55w was cut here), none open
+- ✓ second-vendor pass on c9bcf08 — openai: Reviewed all 18 files in 9b06fec..c9bcf08; desktop-free npm ci and npm run check on Node 26 (35 files green); real Node 22 baseline/repeat suite (21 passed); real Node 22 + Debian dash remote suite (18 passed). Zero new findings. The full report is kept outside the repo.
+- ✓ decisions closed — 14 since 14a1ad6 (r55w was cut here), none open
 - ✓ r55g report — docs/build-report-r55g.md
 - ✓ r55q report — docs/build-report-r55q.md
 - ✓ r55m report — docs/build-report-r55m.md
@@ -38,7 +38,7 @@ The lead writes README, CHANGELOG and releases 5.5.0.
 - ✓ README
 
 ## Second-vendor review
-- pass from openai on `9b06fec` (2026-10-23T05:09:34.081Z): Reviewed f95203e..9b06fec (six files); desktop-free npm ci, qa-host-real.test.js (8 passed), independent settle/release probe, and npm run check (35 files green). Zero new findings; existing D11 documented. The full report is kept outside the repo.
+- pass from openai on `c9bcf08` (2026-10-23T08:37:46.088Z): Reviewed all 18 files in 9b06fec..c9bcf08; desktop-free npm ci and npm run check on Node 26 (35 files green); real Node 22 baseline/repeat suite (21 passed); real Node 22 + Debian dash remote suite (18 passed). Zero new findings. The full report is kept outside the repo.
 - builders: anthropic (vendor "anthropic" in .rig/config.json)
 
 ## Decisions
@@ -53,6 +53,9 @@ The lead writes README, CHANGELOG and releases 5.5.0.
 - D9 (scheduled 5.5.1 (2026-10-23)): a watcher flags a peer done with nothing running and no report as needs a nudge — thread
 - D10 (scheduled 5.5.1 (2026-10-23)): rebase and fold check migration numbering and load each commit's schema into a blank database — thread
 - D11 (scheduled 5.5.1 (2026-10-23)): await stopped host runs before a later host stage starts, not only at the end — thread
+- D12 (scheduled 5.5.1 (2026-10-23)): FINISH.md names the second machine by a label, never its ssh host — thread
+- D13 (scheduled 5.5.2 (2026-10-23)): a host with dash as sh and neither setsid nor bash: warn that stops cannot reach the group, fall back to killing the pid — thread
+- D14 (scheduled 5.5.2 (2026-10-23)): record per machine whether node shuffled a seeded repeat (shuffled true/false), so Node 22 seeds are not read as shuffled — thread
 
 ## Drift
 - origin/main has not moved
