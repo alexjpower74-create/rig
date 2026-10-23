@@ -277,7 +277,12 @@ const CLICK_COUNTER = `window.__rigClicks = 0; window.__rigClickLog = []
 window.addEventListener('click', () => {
   window.__rigClicks++
   window.__rigClickLog.push(document.getElementById('progress')?.textContent || '')
-}, true)`
+}, true)
+// Every touchmove's cancelable flag: once the browser has taken a gesture to scroll or fling with it,
+// the moves it still sends the page are no longer cancelable. That is how a check knows the browser
+// had the swipe, rather than assuming it did.
+window.__rigMoves = []
+window.addEventListener('touchmove', (e) => { window.__rigMoves.push(e.cancelable) }, { capture: true, passive: true })`
 
 /** One key, as a keyboard sends it: key, code and key code set, down then up. */
 async function pressKey(page, key) {
@@ -1476,33 +1481,109 @@ await suite('rig taste', async (s) => {
 
   // Found building 5.0.3: the swipe was also the browser's fling, and a tap within half a second of
   // it only stopped the fling. Swiping to comp B and tapping 4 at once saved nothing.
-  await s.check('comps on a phone: a rating tapped straight after a swipe still counts', {
-    assert: async () => {
-      const { b, page, input, close } = await compsBoard()
-      const B = b.round.comps[1].id
-      try {
-        const box = await page.eval(
-          '(() => { const r = document.querySelector("#grid .comp .pick").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()',
+  //
+  // The control leaves the swipe to the browser again, and is only a control where the browser takes
+  // the swipe. On Linux's Chrome it does: every move after the first arrives uncancelable and the tap
+  // that follows never becomes a click. The Mac's Chrome kept the swipe on the page (QA at 949e12b:
+  // VOID at no load), so there the control broke nothing. So the platform is asked first, and a run of
+  // the control scores only when the browser really had that swipe.
+  const SWIPE_BREAK = `window.addEventListener('touchmove', (e) => e.stopPropagation(), { capture: true })`
+  /** Did the browser take this swipe from the page? Some move after the first arrived uncancelable. */
+  let browserTook = (moves) => moves.slice(1).some((c) => c === false)
+  const swipeTap = { inControl: false }
+
+  /** Swipe to comp B and tap 4 straight away, the tap sent as the swipe ends: what came of it. */
+  async function swipeThenTap() {
+    const { b, page, input, close } = await compsBoard()
+    const B = b.round.comps[1].id
+    try {
+      const at = (sel) =>
+        page.eval(
+          `(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })()`,
         )
-        await input.swipe({ x: box.x + 100, y: box.y, dx: -200, dy: 0 })
-        await frame(page)
-        if ((await shownComp(page)) !== B) throw new Error(`the swipe did not reach B (shows ${await shownComp(page)})`)
-        // The bug this guards: the browser's fling ate the tap, so no click ever came of it.
-        const landed = await press(page, input, '.rate[data-rating="4"]', { touch: true })
-        const saved = landed && (await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4))
-        if (!saved)
-          console.log(
-            `        after the swipe the board shows ${await shownComp(page)}; B on disk: ${newest(ratingsJson(b.root)).compRatings?.[B]?.rating ?? 'nothing'}`,
-          )
-        return saved
-      } finally {
-        await close()
+      const box = await at('#grid .comp .pick')
+      const four = await at('.rate[data-rating="4"]') // the footer: the same place whichever comp shows
+      const before = await clicks(page)
+      await page.eval('window.__rigMoves.length = 0')
+      await input.swipe({ x: box.x + 100, y: box.y, dx: -200, dy: 0 })
+      await input.tap(four.x, four.y)
+      await frame(page)
+      const took = browserTook(await page.eval('window.__rigMoves'))
+      const shown = await shownComp(page)
+      // The bug this guards: the browser's fling ate the tap, so no click ever came of it.
+      const landed = await waitFor(async () => (await clicks(page)) > before)
+      const saved = landed && (await waitFor(() => newest(ratingsJson(b.root)).compRatings?.[B]?.rating === 4))
+      return { took, reachedB: shown === B, saved, onDisk: newest(ratingsJson(b.root)).compRatings?.[B]?.rating ?? 'nothing' }
+    } finally {
+      await close()
+    }
+  }
+
+  /** Can the broken board hand a swipe to this platform's browser at all? Asked once, up front. */
+  async function browserTakesSwipes() {
+    pageBreaks.push(SWIPE_BREAK)
+    try {
+      for (let i = 0; i < 3; i++) if ((await swipeThenTap()).took) return true
+      return false
+    } finally {
+      pageBreaks.pop()
+    }
+  }
+
+  // The detector must never claim the browser had a swipe the page kept: on today's board it holds the
+  // swipe on every platform, so no move after the first is ever handed over.
+  await s.check('the fling detector: on the real board the page keeps the swipe, so the browser never had it', {
+    assert: async () => {
+      const r = await swipeThenTap()
+      if (r.took) console.log('        the detector says the browser took a swipe the page holds')
+      return !r.took && r.reachedB && r.saved
+    },
+    // The control: a detector that ignores cancelable and calls every swipe the browser's.
+    breaks: () => {
+      const real = browserTook
+      browserTook = (moves) => moves.length > 0
+      return () => {
+        browserTook = real
       }
     },
-    // The control: the swipe left to the browser as well, as in 5.0.2.
-    breaks: pageBreak(`window.addEventListener('touchmove', (e) => e.stopPropagation(), { capture: true })`),
     timeout: 60_000,
   })
+
+  const flingHere = await browserTakesSwipes()
+  const swipeName = 'comps on a phone: a rating tapped straight after a swipe still counts'
+  const swipeAssert = async () => {
+    // In the control, a run where the browser did not take the swipe exercised nothing: set up again,
+    // and if it never does, pass, so the result is VOID, never a red that proved nothing.
+    for (let attempt = 1; attempt <= (swipeTap.inControl ? 3 : 1); attempt++) {
+      const r = await swipeThenTap()
+      if (swipeTap.inControl && !r.took) continue
+      if (!r.reachedB) throw new Error('the swipe did not reach comp B')
+      if (!r.saved)
+        console.log(`        after the swipe B on disk: ${r.onDisk}${swipeTap.inControl ? ' (control, browser took the swipe)' : ''}`)
+      return r.saved
+    }
+    return true
+  }
+  if (flingHere)
+    await s.check(swipeName, {
+      assert: swipeAssert,
+      // The control: the swipe left to the browser as well, as in 5.0.2.
+      breaks: () => {
+        swipeTap.inControl = true
+        pageBreaks.push(SWIPE_BREAK)
+        return () => {
+          pageBreaks.pop()
+          swipeTap.inControl = false
+        }
+      },
+      timeout: 90_000,
+    })
+  else {
+    console.log(
+      `        ${swipeName}: no control on ${process.platform}: with the swipe left to it, this browser kept it on the page in 3 of 3 tries, so the fling this guards against cannot be made here`,
+    )
+    await s.check(swipeName, { assert: swipeAssert, timeout: 60_000 })
+  }
 
   // ── full screen ──
   // 5.0.3: he rated four comps side by side on a 2560×1440 screen and could not see them ("the
