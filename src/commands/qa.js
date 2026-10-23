@@ -10,7 +10,7 @@ import { recordTiming } from '../timings.js'
 import { staleBaselines } from '../baselines.js'
 import { groups, running } from '../qa/group.js'
 import { exitCodeFor, fmtMs, runWatched } from '../qa/watch.js'
-import { compareBaseline, parseFailures, tally } from '../qa/failures.js'
+import { compareBaseline, diffNames, parseFailures, parseMarks, tally } from '../qa/failures.js'
 import { desktopFreeEnv, makeShims, needsStub, readShimCalls } from '../qa/desktop.js'
 import { detectCi, planSeeds, readCiStatus, withSeed } from '../qa/ci.js'
 import { ciOnHost, holderId, leaseHost, runHost } from '../qa/host.js'
@@ -298,6 +298,9 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
   })
   if (log.fd !== null) closeSync(log.fd)
   const failures = parseFailures(r.text, { pattern: ctx.pattern })
+  const marks = parseMarks(r.text)
+  // What this run brings to the baseline diff: void and unproven checks only from a red run.
+  const diff = diffNames(r.text, { exit: r.exit, pattern: ctx.pattern })
   const calls = ctx.shims ? readShimCalls(ctx.shims.log).slice(callsBefore) : []
   const stub = needsStub(r.lines, calls, { pattern: ctx.pattern })
   const t = tally(r.text, failures, r.exit)
@@ -322,6 +325,8 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
       ms: r.ms,
       desktop: ctx.desktop,
       failures: failures.slice(0, 200),
+      unproven: marks.unproven,
+      void: marks.void,
       passed: t.passed,
       failed: t.failed,
       tallyConflict: t.conflict,
@@ -339,7 +344,12 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
     console.log(
       `rig qa: stalled: worker ${r.stalled.worker}, last spec ${r.stalled.spec ?? 'none named'}, quiet ${fmtMs(r.stalled.quietMs)}`,
     )
-  if (failures.length && kind !== 'negative') console.log(`rig qa: ${failures.length} failing: ${list(failures)}`)
+  if (kind !== 'negative') {
+    if (failures.length) console.log(`rig qa: ${failures.length} failing: ${list(failures)}`)
+    // Their own words: a void or unproven check is not a failing test, whatever the run's exit.
+    if (marks.unproven.length) console.log(`rig qa: ${marks.unproven.length} unproven: ${list(marks.unproven)}`)
+    if (marks.void.length) console.log(`rig qa: ${marks.void.length} void: ${list(marks.void)}`)
+  }
   if (stub.length) {
     console.log(
       `rig qa: needs a stub (reached for ${[...new Set(stub.map((s) => s.tool))].join(', ')}, which a desktop-free run takes away):`,
@@ -351,7 +361,7 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
     )
   if (kinds.includes('ci')) printCiStatus(ciStatus, r.exit, '')
   if (dirtied.length || untracked.length) console.log(dirtyMessage(dirtied, untracked))
-  return { ...r, cmd, failures, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
+  return { ...r, cmd, failures, diff, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
 }
 
 function printCiStatus(status, exit, where) {
@@ -401,6 +411,8 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
         dir: r.dir,
         db: r.db,
         failures: r.failures.slice(0, 200),
+        unproven: r.unproven,
+        void: r.void,
         passed: r.tally.passed,
         failed: r.tally.failed,
         tallyConflict: r.tally.conflict,
@@ -465,6 +477,8 @@ async function baselineStage(ctx, args, here, there) {
   }
   const baseShort = baseSha.slice(0, 7)
   const runs = [here, there].filter(Boolean)
+  // compareBaseline reads a run's `failures`; for the diff those are its diff names.
+  const diffRuns = runs.map((r) => ({ ...r, failures: r.diff }))
   const record = (baseline) => {
     recordQa(root, { kind: 'baseline', ref, sha: full, short: sha, host: 'local', cmd: here.cmd, baseline })
     printBaseline(baseline, ctx.host)
@@ -473,11 +487,11 @@ async function baselineStage(ctx, args, here, there) {
     return record({
       base,
       baseSha,
-      ...compareBaseline({ here: here.failures, there: there?.failures, base: here.failures, runs }),
+      ...compareBaseline({ here: here.diff, there: there?.diff, base: here.diff, runs: diffRuns }),
       note: 'the commit is its own base',
     })
   }
-  if (runs.every((r) => r.exit === 0 && r.failures.length === 0)) {
+  if (runs.every((r) => r.exit === 0 && r.diff.length === 0)) {
     return record({
       base,
       baseSha,
@@ -507,13 +521,13 @@ async function baselineStage(ctx, args, here, there) {
   if (log.fd !== null) closeSync(log.fd)
   bwt.release()
   timing(root, 'qa:baseline', r.ms, full, 'local', r.exit === 0)
-  const baseFailures = parseFailures(r.text, { pattern: ctx.pattern })
+  const baseFailures = diffNames(r.text, { exit: r.exit, pattern: ctx.pattern })
   const cmp = compareBaseline({
-    here: here.failures,
-    there: there?.failures ?? null,
+    here: here.diff,
+    there: there?.diff ?? null,
     base: baseFailures,
     needsStub: [...new Set([...(here.needsStub ?? []), ...(there?.needsStub ?? [])])],
-    runs: [...runs, { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures, stalled: r.stalled }],
+    runs: [...diffRuns, { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures, stalled: r.stalled }],
   })
   record({ base, baseSha, baseExit: r.exit, baseFailed: baseFailures.length, baseLog: log.path, stalled: r.stalled, ...cmp })
 }

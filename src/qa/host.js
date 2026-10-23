@@ -10,7 +10,7 @@
 
 import { acquire, holderOf, release } from '../lease.js'
 import { runOnHost } from '../remote.js'
-import { lastSpecIn, parseFailures, tally } from './failures.js'
+import { diffNames, lastSpecIn, parseFailures, parseMarks, tally } from './failures.js'
 import { parseCiStatus } from './ci.js'
 import { fmtMs } from './watch.js'
 import { needsStub } from './desktop.js'
@@ -183,6 +183,8 @@ export async function runHost({
   // The full output: runOnHost's log, else everything streamed (a run abandoned on a stall).
   const log = r.log || all
   const failures = parseFailures(log, { pattern })
+  const marks = parseMarks(log)
+  const diff = diffNames(log, { exit: r.exit, pattern })
   // The host's own stubs (src/remote.js) say "<tool>: the desktop is off in test runs" and, since
   // r55m's edf29fd, also come back as `stubCalls`. Their times are the host's clock and the output
   // lines carry none, so only a failure whose block names a called tool counts there; never the
@@ -207,6 +209,9 @@ export async function runHost({
     dir: r.dir ?? null,
     db: r.db ?? null,
     failures,
+    diff,
+    unproven: marks.unproven,
+    void: marks.void,
     needsStub: stub,
     stubCalls: r.stubCalls ?? [],
     tally: tally(log, failures, r.exit),

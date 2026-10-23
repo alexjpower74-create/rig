@@ -125,3 +125,25 @@ Every harness control was seen red.
 4. Note only; nothing to verify.
 
 Verdict: all three findings fixed. The r55m slice passes from r55q's side.
+
+## Delta at b7120d3 (2026-10-22, r55q)
+
+The scope is r55m's commits after the verified sha 8d1783a: `git log 8d1783a..rig/r55m` lists
+bb4a819 (report), e90950f (code) and b7120d3 (report). One code commit was reviewed, read only:
+
+- **e90950f, runOnHost: the host's own PATH comes first.** `RUN_SCRIPT` no longer prepends
+  `/opt/homebrew/bin:/usr/local/bin`. Each of those dirs is appended only when it exists and is
+  not already on PATH, so a host's own tool choice (its npm) is never shadowed. Checked:
+  - The loop has no backslash pairs (the remote-script rule for fish login shells).
+  - It is safe under `set -u`, and its `[ -d ] &&` cannot end the script, because the script does
+    not use `set -e`.
+  - It gives the same result under bash and zsh, which is what macOS `sh` is.
+  - The desktop stubs dir is still put first later, so the stubs still shadow the real tools.
+
+  The new check (the host's PATH unchanged at the front, extras only after it, `npm` resolving to
+  the host's own) passes on main 630430f, and its control, the old prepend line, fails it. The
+  whole `machines-remote` suite passes: 17 checks, 0 void. That control fails on any host,
+  because the old line prepended the dirs without checking they exist, so the check does not
+  depend on what the test machine has installed.
+
+Findings: none.

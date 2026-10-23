@@ -155,7 +155,11 @@ export const ASK_THESE = `## Ask these
    of reading it?
 6. **A negative test counted exactly.** An assertion that something did NOT happen, written as "not
    exactly once", passes when it happened twice. Absence is "never happened" (at least once, negated).
-   Would each negative control go red if the thing happened more than once?`
+   Would each negative control go red if the thing happened more than once?
+7. **A shared fixture that one example changes.** Set up once for many examples and mutated by one, it
+   leaks state into the later ones, and the failure shows only at some seeds. Is it reloaded per
+   example, and was each changed spec file run at 3 seeds before it was called green
+   (\`rig qa <sha> --repeat 3 --seeds --run "<file>"\`)?`
 
 export const FINAL_BRIEF = join('.rig', 'REVIEW-final.md')
 const STALE_BRIEF_MS = 12 * 3_600_000

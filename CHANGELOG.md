@@ -1,5 +1,99 @@
 # Changelog
 
+## 5.5.0 — nobody waits blind
+
+Lessons from a two-day build: stacked branches on a fast-moving upstream, a crew of agents, a
+reviewer from a second model vendor, and a second test machine. The lead should never be the
+human's alarm clock: every wait has a deadline, every peer reports itself, every number is measured,
+and nothing called "ready" turns out stale an hour later. Built by a five-slice crew under the Rig
+itself, every slice cross-reviewed early, every check seen red once and then green.
+
+**The gate**
+- `rig review --vendor <name> --pass "<what ran>"` records a second-vendor verdict on a sha;
+  `rig finish` refuses without one on the final sha. A pass from the builders' own vendor (from
+  `vendor` in the config, else the launch command) or from an unknown name is refused.
+  `--no-vendor` turns it into a warning that FINISH.md repeats.
+- Every review brief ends with "Ask these": what changes between a check and its use or delivery;
+  time edges (DST, zones, exactly at the boundary); a state that flips off and back on; every
+  feature flag off on every surface (UI, API, CLI, tool servers, jobs) with the old behaviour exact;
+  a saved user preference overridden; and a negative test that would still pass if the thing
+  happened twice.
+- `rig fold` folds fix commits into their owning commits once, at the end. The folded tree must
+  equal the old tip's, or the branch is put back. Every commit is walked on its own, and old → new
+  shas are stamped in `.rig/fold.json`; after that, `rig finish` allows only message-only rewrites.
+- `rig decision "<what>" --source <thread>` keeps `docs/DECISIONS.md`; `rig finish` lists every
+  decision of the round and refuses while one is open.
+- `rig finish` prints drift first, then gates on the second machine's tally (`qaHost`), the repo's
+  own CI command (configured or detected) and the baseline's "0 new".
+
+**Watching**
+- `rig tell <lead> "<line>"` and `rig inbox <lead> --wait`: peers report themselves, and the lead
+  wakes within seconds (60 s bar, measured). Every brief ends with the tell line and says outright:
+  ask the lead, never the human. `rig up` prints the watcher; `rig up --watch` becomes it.
+- `rig job <pane> "<task>" --expect <file> --deadline <min>` briefs an agent with no inbox hook and
+  exits on idle, done, blocked or the deadline. It records the pane's state counters before the
+  prompt, so a "done" left over from the last turn never ends the wait early (seen with the bash
+  script this replaces: it exited after 0 minutes while the member was just starting).
+- `rig qa` watches every run's output: no output for 5 minutes (`--stall`) names the worker and
+  the last spec and stops the group. A run that keeps writing is never stopped.
+- Runs are desktop-free by default: no display, and the clipboard tools fail at once. A spec that
+  reached for one is listed "needs a stub", not as a new failure (`--desktop` opts back in).
+- Every stage's wall time goes to `.rig/timings.jsonl`; `rig status --eta` prints medians of
+  measured stages, or "no data".
+- `rig up` warns when a plan with a UI over rules has no `## Refusals` matrix.
+
+**Two machines and the baseline**
+- `rig qa --host <ssh-host>` runs the same sha on a second machine: the commit travels as a git
+  bundle over ssh (nothing pushed), into a checkout and a test DB name per session, and both tallies
+  print side by side. Its first real run caught a macOS-only failure (a Homebrew tool shadowing the
+  host's own) that the Linux machine never showed.
+- `rig lease host:<h>|db:<name> --by <id>`: refused while someone else holds it, named holder and
+  expiry; a host lease lives on the host, so sessions on two machines see one lease.
+- `rig qa --baseline` runs the base with the same command and reports only new failures, listing
+  known ones by where they fail. `--ci` runs the repo's own local CI command (`ciCommand`,
+  `scripts.ci`, `bin/ci`, `script/cibuild`, `make ci`).
+- `rig qa --repeat N --seeds <list>` reruns one file across seeds on both machines.
+
+**Upstream**
+- `rig status`, `rig fold` and `rig finish` start with drift: commits on the live base since the
+  slice was cut, which owned files they touched, which are safe, and whether it still merges.
+- `rig rebase <id>` stops before resolving when upstream deleted, moved or largely rewrote a file the
+  slice changed, and asks the owner what upstream now covers (`--covered`, `--drop <sha>`).
+
+**Tests that hold anywhere**
+- Snapshot helpers in the test kit (`pin`, `snapshot`, `matchBaseline`, …): pinned user agent,
+  locale, zone and modifier key, auto margins recorded as "auto", app-ready waits, retakes, and
+  `RECORDED_FROM` baselines that `rig qa` flags when the base moves past them.
+
+**Flake proof, used on itself**
+- The rating board's suite went red only on a loaded machine: two of its checks held a 10 s
+  budget, and under five parallel suites a passing board took 8.2 to 9.95 s. The budgets measured
+  the machine, not the code. The checks now wait on the board's own state (counted steps, the
+  frame the board moved on) instead of a wall clock. Proof with `rig qa --repeat 10`: 10 of 10 green
+  under the crew's normal load, where the old suite ran within 50 ms of red, and the old suite red
+  2 of 2 under a synthetic burn. The same was done for a watcher check that held a 6 s bar over a 5 s
+  poll: it now measures the poll itself, and only the plan's 60 s bar stays end to end.
+
+**Found by the real second machine and a real run**
+- Host runs put the package manager's bin first on the host PATH, shadowing the host's own tools
+  (macOS only). Fixed, with a check that runs on Linux too.
+- The side-by-side tally counted FAIL lines printed by a control inside a passing check, and an
+  unproven check as a failure. Only a FAIL is a failure now; unproven and void are named as such, and
+  a count that disagrees with the exit is shown as unknown, never as a number.
+
+**Notes for the next round**
+- `rig fold` walks every folded commit with the whole test command, not each commit's own specs: a
+  spec from an earlier commit that a later commit's behaviour makes stale only shows up that way.
+- A peer whose background run ended can sit "done" without reading the result. A watcher that
+  flags "done, nothing running in its worktree, no report since its last turn" after N minutes as
+  "needs a nudge" is planned.
+- A shared fixture that one example mutates leaks into later examples at some seeds only; review
+  briefs now ask for a changed spec file to run at 3 seeds (`rig qa --repeat 3 --seeds`).
+- After a rebase onto a moved base, every migration in the stack must be numbered above the base's
+  newest, or a fresh schema load marks it applied without creating its tables and a regenerated
+  schema file silently drops it. The walk should load each commit's schema into a blank database,
+  as CI does, never migrate a long-lived dev database. `rig rebase` and `rig fold` will check both.
+
 ## 5.0.3 — every picture on the taste board opens full screen
 
 - **What went wrong:** the owner rated four comps side by side on a 2560×1440 screen and could not

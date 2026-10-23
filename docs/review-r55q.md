@@ -77,3 +77,27 @@ Each repro has a control that gives the other answer. The repros were scratch sc
    `complete: false` with `why: "test here did not finish (exit 124)"`. A run cut at exit 143 is also
    incomplete. Control: the same names with exit 1 give `complete: true`. Finish keeps its own guard
    (124/137/143 and `stalled` are never green).
+
+## Delta at 6912595 (2026-10-22)
+
+r55q's code commits after `45449c7`: `fea7f44` (host log kept in `.rig/qa-logs/`, a tally that
+contradicts the exit recorded as `failed: null` with `tallyConflict`) and `6912595` (VOID and UNPRV
+are their own marks, never failures). Read on `rig/r55g` at `630430f`, the merge of main, which holds
+both. Read only; the other commits in the range are other slices' or docs.
+
+Holds: the host's full output is written even for a run abandoned on a stall (`all`, not the 16 KB
+tail); finish prints only numeric tallies, so a `failed: null` drops out instead of reading as 0; the
+harness parser now takes `FAIL` lines only, which ends the "1 failing" line r55g's UNPRV check caused.
+
+1. **A green base's UNPRV check is a "new failure" when the head is red for another reason.**
+   `diffNames` adds a run's VOID and UNPRV names only when its exit is non-zero, so the same unproven
+   check is in the head's diff (red) and missing from the base's (green). Repro on
+   `src/qa/failures.js`: base `UNPRV the identity check` + `PASS x` at exit 0, head the same UNPRV +
+   `FAIL x` at exit 1; `compareBaseline` gives `newFailures: ["x", "the identity check"]`. Control:
+   with the base also red, the UNPRV name reads as known and only `x` is new. Finish's verdict does
+   not change (`x` fails it anyway), but the list names a check as new that the base carries too.
+   Check: diff the marks by name against the base's marks whatever the base's exit (or add the base's
+   marks to its side of the diff). Low.
+2. **Nit:** `runHost` keeps every streamed byte in `all` for the life of the run. A chatty suite on
+   the host holds its whole output in memory twice (`seen`'s tail is bounded, `all` is not); writing
+   to the log fd as it streams would bound it. Not blocking.
