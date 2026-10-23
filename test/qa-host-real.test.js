@@ -59,7 +59,7 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
   hostEnv('')
   await s.check('the same sha runs on the host, and both tallies sit side by side', {
     assert: async () => {
-      const r = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/'])
+      const r = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/*.test.js'])
       const there = lastOn('box')
       if (!there) throw new Error(`no host record\n${r.out.slice(-1200)}`)
       const same = r.status === 0 && there.exit === 0 && there.sha === sha && lastOn('local').exit === 0
@@ -74,13 +74,13 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
   })
 
   hostEnv('PLATFORM_QUIRK=1')
-  const r = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/'])
+  const r = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/*.test.js'])
   await s.check('a failure only the host shows is named, and the run is not green', {
     assert: async () =>
       r.status !== 0 && /fails only on box: platform quirk/.test(r.out) && lastOn('box').failures.includes('platform quirk'),
     breaks: () => {
       hostEnv('')
-      const again = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/'])
+      const again = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/*.test.js'])
       Object.assign(r, again)
       return () => hostEnv('PLATFORM_QUIRK=1')
     },
@@ -94,7 +94,7 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
       const take = rig(['lease', 'host:box', '--by', 'r55x'])
       if (take.status !== 0) throw new Error(`could not take the lease: ${take.out}`)
       if (!held) rig(['lease', 'host:box', '--by', 'r55x', '--release'])
-      const q = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/'])
+      const q = rig(['qa', sha, '--host', 'box', '--by', 'r55q', '--run', 'node --test test/*.test.js'])
       rig(['lease', 'host:box', '--by', 'r55x', '--release'])
       // and a run that went ahead gave the lease back when it finished
       const after = rig(['lease', 'host:box']).out
@@ -240,7 +240,7 @@ await suite('rig 5.5, r55q × r55m: rig qa --host through the real runner and le
   hostEnv('WITH_CLIPBOARD=1', 'box-clip')
   await s.check('a host spec that reaches for the clipboard is listed "needs a stub"', {
     assert: async () => {
-      rig(['qa', sha, '--host', 'box-clip', '--by', 'r55q', '--run', 'node --test test/'])
+      rig(['qa', sha, '--host', 'box-clip', '--by', 'r55q', '--run', 'node --test test/*.test.js'])
       return JSON.stringify(lastOn('box-clip').needsStub) === '["copies the link"]'
     },
     breaks: () => {
