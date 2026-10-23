@@ -105,3 +105,67 @@ control is the reviewed code, so each was seen red as well as green.
 Residual, low and not blocking: an ssh wrapper that rejects `-o` options (rare) now gets two added.
 Git already sends its own `-o SendEnv=GIT_PROTOCOL` and a `-G` probe to such a command, so a wrapper
 that cannot take options was already broken. **All six findings verified; nothing further from r55m.**
+
+## Delta at 9ab94a0 (2026-10-22)
+
+Scope: r55u's own commits on `rig/r55u` after ac55143 (first-parent, merges of main left out). Two
+of them change code: 6c1006d (`src/taste/capture.js`, `test/taste.test.js`) and e80d49e
+(`test/taste.test.js`). 3de1d59 and 9ab94a0 are docs only. I read the diff `3de1d59..e80d49e`, read
+`harness/check.js` for how a thrown control is graded, and ran `captureAll` against a local test page
+in a detached worktree at e80d49e and in a tree unpacked from 3de1d59. This was read-only: nothing on
+`rig/r55u` was changed.
+
+**Finding 1 (medium): `settle()` replaces a page's own image `onload`, so the shot is wrong.**
+`src/taste/capture.js` waits on images with `i.onload = i.onerror = r`. This assigns the property and
+throws away any handler the page set itself. Pages often add an image after load and reveal it in
+that image's `onload`: a fade-in, or a placeholder swapped out. Such a page is now shot in its
+unrevealed state. 3de1d59's fixed pause shot it correctly.
+
+Repro: a local page adds an image after `load`, and its `onload` turns the body teal.
+
+| Capture | First pixel of the desktop shot |
+|---|---|
+| At e80d49e | `255,255,255` (white) |
+| At 3de1d59 | `58,143,143` (teal) |
+| e80d49e with only that line changed to `addEventListener('load', r)` / `('error', r)` | `58,143,143` (teal) |
+
+The suite's new check, "a page that fills in after load…", reveals with `fetch`, not an image, so it
+cannot see this. The fix is `addEventListener` (or `img.decode()`), plus a check whose page sets
+`img.onload` after load.
+
+**Finding 2 (low): when the fast-second-tap check gives up, its control counts as red.**
+"a fast second tap is queued onto the next card, never dropped" now retries its set-up up to three
+times. After three misses, it throws. `harness/check.js` catches a throw in the control run as
+`stillPasses = false`, so it grades the check PASS. On a machine loaded enough to miss three times,
+the control is therefore "seen red" without the dropped-tap rule ever being exercised: the proof is
+vacuous, the thing the commit set out to stop. The same throw in the assert run gives FAIL, where
+"could not set up" would be the honest result. A fix: report the missed set-up as an inconclusive
+result the harness can tell apart, or have the control return `true` (pass) when it never got a
+landed tap, so the run comes out VOID rather than PASS.
+
+Looked at and fine:
+- The click counter, installed ahead of the page's script, makes "did the tap register" a fact.
+- `saved()` waits on the page's own empty queue in place of the sleeps.
+- One frame for Done on an ended round is enough: `done()` returns at once when `ended` is set.
+- Number keys accept a board that has already moved on.
+- The 90 s per-check hang guard.
+- `oldTaste()` reads 3de1d59 with `git archive`, and CI checks out full history (`fetch-depth: 0`).
+  Locally, a failed archive throws out of `breaks()`, which fails the run loudly rather than voiding
+  it.
+
+**Two findings (one medium, one low); the rest of the delta is sound.**
+
+## Verified at e7ebcab (2026-10-22)
+
+I read e7ebcab (`src/taste/capture.js`, `test/taste.test.js`). Then I re-ran my repro and
+`test/taste.test.js` in a clean detached worktree at e7ebcab: **39 passed, 0 failed, 0 void, 0
+unproven** (2 of them targets), exit 0.
+
+| Finding | Verdict | How I checked |
+|---|---|---|
+| 1. `settle()` replaced a page's own image `onload` | **fixed** | `settle()` now uses `addEventListener('load'/'error', r, { once: true })`. **My repro against e7ebcab's `captureAll`:** a page that adds an image after `load` and turns teal in its `onload` is shot `58,143,143` (teal); at e80d49e it was white. The new check, "a page that reveals itself in an image's own onload…", passes, and its control is e80d49e's capture, so it was seen red as well. |
+| 2. the fast-tap give-up graded its control red | **fixed** | A set-up that never lands now fails the real run and passes the control run, so the check grades VOID rather than PASS. A meta-check runs the real check in an inner suite with every control set-up forced to miss, and requires VOID. Its control is e80d49e's throw. The meta-check passes, so it was seen red too. `oldTaste()` now throws when `git archive` fails. |
+
+One note, not blocking: the meta-check's inner real run still needs a landed tap, so on a machine
+loaded enough to miss three times, it fails rather than reading as inconclusive. That is the honest
+result. **Both delta findings verified fixed; nothing further from r55m.**
