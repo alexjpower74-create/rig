@@ -45,6 +45,65 @@ const alive = (pid) => {
   }
 }
 
+/**
+ * The three ways a run is stopped, each until its last process on the host is gone: past its limit
+ * (124), a process left running after the command (exit 0, and ssh not held), the caller's abort
+ * (143). Resolves the failures, [] when every stop worked.
+ */
+async function stops(tag) {
+  const bad = []
+  const sleeper = async (name, o, within) => {
+    const pidFile = join(w.hostDir('box'), `${tag}-${name}.pid`)
+    rmSync(pidFile, { force: true })
+    const t = Date.now()
+    const r = await o(pidFile)
+    const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, 'utf8')) : 0
+    while (pid && alive(pid) && Date.now() - t < within + 20_000) await new Promise((res) => setTimeout(res, 100))
+    const ms = Date.now() - t
+    if (pid && alive(pid)) process.kill(pid, 'SIGKILL')
+    return { r, ms, gone: pid > 0 && !alive(pid) }
+  }
+  const limit = await sleeper('limit', (f) => run({ sha: c2, cmd: `sleep 30 & echo $! > ${f}; wait`, limitMs: 1500, session: tag }), 8000)
+  if (limit.r.exit !== 124 || !limit.gone || limit.ms > 8000)
+    bad.push(`limit: exit ${limit.r.exit}, ${limit.ms} ms, sleeper gone ${limit.gone}`)
+  const left = await sleeper('left', (f) => run({ sha: c2, cmd: `sleep 30 & echo $! > ${f}; echo started`, session: tag }), 5000)
+  if (left.r.exit !== 0 || !left.gone || left.ms > 5000)
+    bad.push(`left running: exit ${left.r.exit}, ${left.ms} ms, sleeper gone ${left.gone}`)
+  const abort = await sleeper(
+    'abort',
+    async (f) => {
+      const ac = new AbortController()
+      const going = run({ sha: c2, cmd: `sleep 30 & echo $! > ${f}; wait`, signal: ac.signal, session: tag })
+      const t = Date.now()
+      while (!existsSync(f) && Date.now() - t < 10_000) await new Promise((res) => setTimeout(res, 50))
+      ac.abort()
+      return going
+    },
+    5000,
+  )
+  if (abort.r.exit !== 143 || !abort.gone || abort.ms > 8000)
+    bad.push(`abort: exit ${abort.r.exit}, ${abort.ms} ms, sleeper gone ${abort.gone}`)
+  for (const b of bad) console.log(`        ${tag}: ${b}`)
+  return bad
+}
+/** The host's sh as dash: Debian's and Ubuntu's /bin/sh, and /bin/dash on macOS. */
+const NO_SETSID = ['if command -v setsid >/dev/null 2>&1; then', 'if command -v rig-no-setsid >/dev/null 2>&1; then']
+const NO_GROUP = [
+  ['  setsid $run "$cmd" </dev/null &', '  $run "$cmd" </dev/null &'],
+  ["bash -c 'set -m; f=$1;", "bash -c 'f=$1;"],
+]
+const DASH = ['/bin/dash', '/usr/bin/dash'].find((p) => existsSync(p))
+const withShell = async (shell, fn) => {
+  const keep = process.env.FAKE_SSH_SHELL
+  process.env.FAKE_SSH_SHELL = shell
+  try {
+    return await fn()
+  } finally {
+    if (keep === undefined) delete process.env.FAKE_SSH_SHELL
+    else process.env.FAKE_SSH_SHELL = keep
+  }
+}
+
 await suite('machines: the second-machine runner', async (s) => {
   await s.check('checks out exactly the sha asked for, not the branch tip, and returns its exit', {
     assert: async () => {
@@ -140,10 +199,12 @@ await suite('machines: the second-machine runner', async (s) => {
     assert: async () => {
       const r = await run({ sha: c2, cmd: 'printf "PATH=%s\\n" "$PATH"; printf "npm=%s\\n" "$(command -v npm)"', desktop: true })
       const path = /^PATH=(.*)$/m.exec(r.log)?.[1] ?? ''
-      const extra = path.slice(process.env.PATH.length).split(':').filter(Boolean)
+      // The PATH the fake host's login gives it: ours, after the fake's own sh when FAKE_SSH_SHELL is set.
+      const own = process.env.FAKE_SSH_SHELL ? `${join(w.root, 'shell-bin')}:${process.env.PATH}` : process.env.PATH
+      const extra = path.slice(own.length).split(':').filter(Boolean)
       return (
         r.exit === 0 &&
-        path.startsWith(process.env.PATH) &&
+        path.startsWith(own) &&
         extra.every((d) => ['/opt/homebrew/bin', '/usr/local/bin'].includes(d)) &&
         r.log.includes(`npm=${join(w.bin, 'npm')}`)
       )
@@ -228,7 +289,7 @@ await suite('machines: the second-machine runner', async (s) => {
     unit: 'ms',
     breaks: swap([
       [
-        "code=$?\n# Whatever the command left running (a server still listening) holds ssh's pipes open: stop it.\nkill -TERM -$pid 2>/dev/null\n",
+        "code=$?\n# Whatever the command left running (a server still listening) holds ssh's pipes open: stop it.\nkill -TERM -$grp 2>/dev/null\n",
         'code=$?\n',
       ],
     ]),
@@ -257,9 +318,41 @@ await suite('machines: the second-machine runner', async (s) => {
     atMost: 5000,
     unit: 'ms',
     // ssh killed here, nothing on the host watching for it: the sleeper lives on to its end.
-    breaks: swap([['( cat >/dev/null; kill -TERM -$pid 2>/dev/null; sleep 5; kill -KILL -$pid 2>/dev/null ) >/dev/null 2>&1 &\n', '']]),
+    breaks: swap([['( while read -r _; do :; done; g=$(group); kill -TERM -$g; sleep 5; kill -KILL -$g ) <&3 >/dev/null 2>&1 &\n', '']]),
     timeout: 60_000,
   })
+
+  // macOS has no setsid: there the runner gives the command its group through bash's job control.
+  let macSwaps = [NO_SETSID]
+  await s.check("with no setsid (macOS), bash's job control gives the command its group: a limit, a leftover and an abort each stop it", {
+    assert: async () => {
+      const keep = R
+      R = await mutant('remote.js', macSwaps)
+      try {
+        return (await stops('nosetsid')).length === 0
+      } finally {
+        R = keep
+      }
+    },
+    // The control: that bash without set -m, so the command stays in the runner's own group.
+    breaks: () => {
+      macSwaps = [NO_SETSID, NO_GROUP[1]]
+      return () => (macSwaps = [NO_SETSID])
+    },
+    timeout: 120_000,
+  })
+
+  // Found by GitHub's Ubuntu runner after 5.5.0: dash, Debian's and Ubuntu's sh, turns job control
+  // off when there is no tty, so `set -m` gave the command no process group of its own and every
+  // `kill -TERM -$pid` killed nothing: limits, leftovers and aborts all waited out the backstop.
+  if (DASH)
+    await s.check('under dash as the host sh, a limit, a leftover process and an abort each stop the run on the host', {
+      assert: async () => (await withShell(DASH, () => stops('dash'))).length === 0,
+      // The control: no process group of its own, by either way the runner makes one.
+      breaks: swap(NO_GROUP),
+      timeout: 120_000,
+    })
+  else console.log('        no dash on this machine: the dash check runs where one is (Debian, Ubuntu, macOS)')
 
   await s.check('host stubs record each call: rig-qa: stub lines and stubCalls name the tool and its args (r55q review 3)', {
     assert: async () => {

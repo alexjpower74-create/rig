@@ -275,6 +275,46 @@ counts whole seconds. It is now 2 s, and was green three runs in a row.
 - **Lesson:** a second OS finds what the fakes share with the first. The fake host here inherits
   this machine's PATH, so it never had a Homebrew `npm` to be shadowed.
 
+## Fix after 5.5.0: stopping a run under dash (GitHub's Ubuntu runner)
+- **Found:** three targets were red on GitHub's Ubuntu runner, against bars of 8 s and 5 s:
+  - limit, 40 s;
+  - leftover process, 12 s;
+  - abort, 15 s.
+- **Cause:** dash, which is Debian's and Ubuntu's `/bin/sh`, turns job control off when there is no
+  tty. So `set -m` gave the command no process group of its own, and every `kill -TERM -$pid`
+  killed nothing. The runs then waited out the sleeper or the backstop. This was a real bug for any
+  Debian or Ubuntu host, not only in the test.
+- **Fix (13eac68):**
+  - The command now always gets its own group: `setsid` where there is one (Linux); otherwise
+    bash's job control, which needs no tty (macOS has `/bin/bash`, and no `setsid`); otherwise
+    `set -m`. The bash launcher writes the group down, and every stop reads it from there.
+  - The lifeline starts at once, so an abort in the first moment is not missed.
+  - The lifeline reads ssh's stdin through fd 3. With no job control, a background list's own stdin
+    is `/dev/null`.
+  - The lifeline uses the shell's own `read`, so stopping it leaves no `cat` behind.
+- **Fake ssh (fbf1105):** `FAKE_SSH_SHELL=<shell>` makes that shell the host's login shell, and the
+  `sh` the command names.
+- **Checks (all three suites seen red, then green):**
+  - "under dash as the host sh, a limit, a leftover process and an abort each stop the run" runs
+    wherever dash exists (Ubuntu CI, macOS). Its control removes the command's own group. This PC
+    has no dash, so the check prints that and runs on CI and the Mac only.
+  - "with no setsid (macOS), bash's job control gives the command its group…" runs on Linux too,
+    through a mutant that hides `setsid`. Its control is the bash launcher without `set -m`.
+  - The three existing stop targets have their controls moved to the new lines.
+  - The PATH check (6015ccd) now expects the fake's own `sh` first when `FAKE_SSH_SHELL` is set.
+- **Red first, on the Mac under dash, at fbf1105** (the test change, old runner),
+  `rig qa fbf1105 --run "FAKE_SSH_SHELL=/bin/dash node test/machines-remote.test.js" --host <the Mac> --no-ci`:
+  - the three targets were red at 40184 ms, 12187 ms and 15032 ms, the same as CI;
+  - the dash check failed;
+  - result: `test on <the Mac> exit 1 at fbf1105`.
+- **Green at 6015ccd**,
+  `rig qa 6015ccd --run 'FAKE_SSH_SHELL=$(command -v dash) node test/machines-remote.test.js' --host <the Mac> --no-ci`
+  (dash on the Mac, the normal sh on this PC):
+  - `rig qa: test exit 0 at 6015ccd`, 18/18 passed;
+  - `rig qa: test on <the Mac> exit 0 at 6015ccd`, 19/19 passed, 0 void;
+  - under dash the targets took 2335 ms, 317 ms and 109 ms; negative exit 0.
+- **Locally:** with `FAKE_SSH_SHELL=/bin/bash`, 18/18 passed.
+
 ## Verification run (code sha 8d1783a; the commit after it changes this report only)
 - `npm run check` on 8d1783a: **exit 0**. That covers `biome ci .`, `test/run.js: 19 file(s) green`
   and `check-no-personal-data` clean. This is a re-run after the PC rebooted around 20:00 and killed
@@ -288,3 +328,5 @@ counts whole seconds. It is now 2 s, and was green three runs in a row.
 - Review of r55u: all six findings verified fixed at ac55143 (`docs/review-r55u.md`, c74a91e).
 - Review of r55m by r55q (eefd10f): findings 1 to 3 fixed in edf29fd, each check seen red first;
   the flaky takeover check fixed in e5151f0. r55q verifies.
+- **`npm run check` at 6015ccd** (this PC): EXIT 0; `test/run.js: 35 file(s) green`. That includes
+  r55q's suites, which run `rig qa --host` through this runner (8/8 and 21/21).
