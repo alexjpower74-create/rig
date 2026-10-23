@@ -7,7 +7,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Node the package supports and the newest the maintainers run: a Node 22-only
+        # difference (node --test reading a directory as one file) once passed here and failed there.
+        node: [22, 26]
     steps:
       - uses: actions/checkout@v4
         # Full history: brief-five and target put Rig 4's code back from its commit with `git archive`
@@ -16,7 +22,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
       # The harness tests drive a real headless Chrome. ubuntu-latest ships
       # google-chrome; the per-platform finder in harness/ locates it.
       - run: google-chrome --version
