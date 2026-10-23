@@ -199,3 +199,37 @@ Holds:
      have run beside a dying suite.
    - Check: `await hostRunsSettled()` before each later host stage too. If it times out, skip the
      remaining host stages and say why.
+
+## Delta at 62aa1a3 (2026-10-23)
+
+Read-only review of r55q's 62aa1a3 (test-only): the qa fixtures run `node --test test/*.test.js`
+instead of `node --test test/`, because before Node 26 `node --test` takes a directory argument as one
+test file, so every fixture run gained a failure named after the directory.
+
+**How it was checked.** Only Node 26 is on this machine, so a `node` shim first on PATH stands in for
+Node 22: under `--test`, any directory argument is replaced by one test file that throws (one failing
+test named after it), and everything else goes to the real node. With the shim, `node --test test/`
+fails one test and `node --test test/*.test.js` passes, as on Node 22. Each of the three suites was run
+under the shim at 62aa1a3^ and at 62aa1a3, each in a scratch worktree of its own:
+
+| suite | 62aa1a3^ (Node 22-like) | 62aa1a3 (Node 22-like) |
+|---|---|---|
+| qa-baseline | exit 1: 5 FAIL (0 new, host base, known where, host tallies) | exit 0: 21 passed, 0 void, 0 unproven |
+| qa-host-real | exit 1: 3 FAIL (side by side, host-only failure, needs a stub) | exit 0: 8 passed, 0 void, 0 unproven |
+| qa-watch | exit 1: 1 FAIL (needs a stub) and 1 VOID (fails fast) | exit 0: 7 passed, 0 void, 0 unproven |
+
+**Holds.** The left column is the red the CI on Ubuntu showed, reproduced here. The right column
+is green, and every one of its 36 controls still went red under the shim; the harness would print
+VOID for any control that passed. So the glob did not weaken a check: each one still tells its broken
+case apart on Node 22-like behaviour. The VOID at 62aa1a3^ is worth noting. The "fails fast" check
+passed under its own control because the directory run failed at once whether or not the clipboard
+shim hung, and the glob makes that check meaningful again on older Node. No directory-form
+`node --test test/` is left in `src/`, `docs/` or `test/`. The other fixture runs name single files
+(`test/a.test.js`, `test/flaky.test.js`), and a bare `node --test` globs its defaults on every Node.
+
+**Nit (not a finding).** The glob is expanded by whichever shell runs the command. On the host that
+is the remote login shell, and zsh stops with "no matches found" where bash would pass the pattern
+through to node. Every fixture that uses the glob has `test/*.test.js` files, so nothing hits this
+today. A fixture repo without tests would fail with a shell error, not a test failure.
+
+No findings. Nothing for 5.5.1 beyond the nit.
