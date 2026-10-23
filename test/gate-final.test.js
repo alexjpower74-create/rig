@@ -307,7 +307,16 @@ await suite('rig 5.5, the second-vendor findings on 949e12b (r55g)', async (s) =
     recordVerdict(repo, { sha, vendor: 'openai', verdict: 'pass', what: 'npm test' })
     recordQa(repo, { kind: 'baseline', sha, host: 'local', cmd: 'true', at: at(2), baseline })
   }
-  const localOnly = { base: sha, baseSha: sha, newFailures: [], known: [], fixed: [], complete: true, why: null }
+  const localOnly = {
+    base: sha,
+    baseSha: sha,
+    newFailures: [],
+    known: [],
+    fixed: [],
+    complete: true,
+    why: null,
+    compared: [{ host: 'local', cmd: 'npm test', at: at(0) }],
+  }
   // Zyro's repro: the host failed; a later local-only `--baseline --run true` compared nothing of it.
   let src = NOW
   records(localOnly)
@@ -345,6 +354,48 @@ await suite('rig 5.5, the second-vendor findings on 949e12b (r55g)', async (s) =
     breaks: async () => {
       records(named(at(0)))
       return () => records(named(at(1)))
+    },
+  })
+
+  // r55w's review of 2615858: a baseline record with no `compared` (the legacy path) waived any local
+  // run of its command recorded before it, though another tab's run, never compared, can land there
+  // while the base runs; that run's new VOID check then read as "every failure is known".
+  const LOCAL = new RegExp(`^QA green on ${git(['rev-parse', '--short', 'HEAD'], repo)}$`)
+  const legacy = () => {
+    rmSync(qaLogPath(repo), { force: true })
+    recordQa(repo, { kind: 'test', sha, host: 'local', exit: 1, cmd: 'npm test', failures: ['flaky clock'], void: ['new void'], at: at(3) })
+    recordVerdict(repo, { sha, vendor: 'openai', verdict: 'pass', what: 'npm test' })
+    recordQa(repo, {
+      kind: 'baseline',
+      sha,
+      host: 'local',
+      cmd: 'npm test',
+      at: at(4),
+      baseline: {
+        base: sha,
+        baseSha: sha,
+        newFailures: [],
+        known: [{ name: 'flaky clock', where: 'here' }],
+        fixed: [],
+        complete: true,
+        why: null,
+      },
+    })
+  }
+  const PRE_LEGACY = srcWith('pre-legacy', { 'commands/finish.js': '2615858' })
+  let legacySrc = NOW
+  legacy()
+  await s.check('a baseline with no compared list waives no run, and the gate says so', {
+    assert: async () => {
+      const g = await gateOf(legacySrc, repo, LOCAL)
+      return g?.state === 'fail' && /not waived: the baseline on this sha names no compared run, so it waives none/.test(g.detail)
+    },
+    // 2615858's finish.js: the legacy guess waived the uncompared run.
+    breaks: async () => {
+      if (PRE_LEGACY) legacySrc = PRE_LEGACY
+      return () => {
+        legacySrc = NOW
+      }
     },
   })
 

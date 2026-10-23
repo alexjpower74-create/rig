@@ -351,9 +351,27 @@ await suite('rig 5.5, the finish gate (r55g)', async (s) => {
     },
   })
   // Known base failures only: the suite exits 1, and a complete "0 new" on this sha makes that green.
+  const RUN_AT = '2026-10-23T09:00:00.000Z'
   const knownOnly = (extra = {}) => [
-    { kind: 'test', sha: head, exit: 1, cmd: 'npm test', dirtied: [], host: 'local', failed: 1, failures: ['flaky clock'], ...extra },
-    { kind: 'baseline', sha: head, host: 'local', cmd: 'npm test', baseline: baseline([]) },
+    {
+      at: RUN_AT,
+      kind: 'test',
+      sha: head,
+      exit: 1,
+      cmd: 'npm test',
+      dirtied: [],
+      host: 'local',
+      failed: 1,
+      failures: ['flaky clock'],
+      ...extra,
+    },
+    {
+      kind: 'baseline',
+      sha: head,
+      host: 'local',
+      cmd: 'npm test',
+      baseline: { ...baseline([]), compared: [{ host: 'local', cmd: 'npm test', at: RUN_AT }] },
+    },
   ]
   resetQa(repo, knownOnly())
   await s.check('a run whose only failures are known on the base is green; a stalled one never is', {

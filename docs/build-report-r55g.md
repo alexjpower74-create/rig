@@ -255,8 +255,10 @@ one on the fix.
   run, and every failure it names is known on the base on its own side (`here`, `there` or `both`).
   r55q's record needs one field for the host side: `baseline.compared: [{ host, cmd, at }]`, one entry
   per run fed to `compareBaseline`, where `at` is the `at` of that run's own test or ci record (set
-  explicitly in `recordQa` and returned on the stage result). Until it exists, a baseline covers only
-  the local run with its own command, recorded before it, so a host failure is never waived by it.
+  explicitly in `recordQa` and returned on the stage result). r55q added it in `6a6cedd`. After r55w's
+  review of 2615858, a record without `compared` waives nothing ("names no compared run, so it waives
+  none"): the old guess, "a local run of the same command recorded before it", also covered a run
+  from another tab that landed during the base run and was never compared.
 - **#3, the fold walk runs under rig qa's runner.** `walkCommits` (and so `fold`) is async now and
   uses `runWatched`: bash `-o pipefail`, the per-commit limit as exit 124, and the whole process group
   stopped with it. `false | cat` is red; a subshell started by a timed-out walk no longer lives on.
