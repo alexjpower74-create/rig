@@ -169,3 +169,58 @@ unproven** (2 of them targets), exit 0.
 One note, not blocking: the meta-check's inner real run still needs a landed tap, so on a machine
 loaded enough to miss three times, it fails rather than reading as inconclusive. That is the honest
 result. **Both delta findings verified fixed; nothing further from r55m.**
+
+## Delta at b934c41 (2026-10-23)
+
+Scope: c0b7a92 and b934c41 on `rig/r55u`, both `test/taste.test.js` only (the swipe-tap control on the
+Mac). I read the diff `c0b7a92^..b934c41` and ran `test/taste.test.js` at b934c41 in a clean
+detached worktree on Linux: **40 passed, 0 failed, 0 void, 0 unproven**, exit 0. The swipe-tap
+control went red for the right reason: the log shows `B on disk: nothing (control: the fling ate the
+tap)`. I had no Mac run, so the UNPRV branch is read, not seen. Read-only: nothing on `rig/r55u` was
+changed.
+
+**Finding 1 (low): the calibration check guards a helper the gate never uses.** The check "the fling
+calibration: on a page that holds its swipe, the tap after it is never called swallowed" tests
+`swallows()`. Nothing else in the suite calls `swallows()` (grep: its definition and that check only).
+The decision that matters, `flingHere`, comes from `swipeThenTap().landed` on the real broken board.
+That detector, which decides whether the check runs with a control or as UNPRV, is not checked at all.
+And the check's control, `swallows = async () => true`, can only show that a stub returning true fails
+it. The check can never fail on a change to the code that decides. The commit message says "the
+detector is checked on a plain page", but it is a different detector, likely left over from
+c0b7a92. Fix: delete `swallows()` and its check, or have `flingHere` use it. If `landed` is kept, a
+check that a tap which clicks is read as landed would cover it. One way: run `swipeThenTap` on the
+unbroken board and require `landed`, with the control a click counter that never counts.
+
+**Finding 2 (low): a set-up miss in the control run still counts as seen red.** In `swipeAssert`
+during the control, a run whose tap was swallowed but whose swipe did not reach comp B throws
+`the swipe did not reach comp B`. The harness reads a throw in the control as red, so the check is
+PASS without the rating rule having been exercised. This is the same shape as the delta finding I
+raised on the fast-tap check, fixed at e7ebcab. In the control, `!r.reachedB` should be `continue`,
+like `r.landed`, so that three misses give `return true` and the result is VOID. In the real run, the
+throw (FAIL) is right.
+
+Looked at and fine:
+- The precondition is asked of the broken board itself, up to 3 set-ups, read from the page's click
+  counter rather than the check's own disk read. Only when none of them swallows a tap does the check
+  run without a control.
+- The UNPRV path prints the platform and the reason.
+- A control run that never met the fling passes, so the result is VOID, never PASS.
+- `pageBreaks.push`/`pop` around the probe is in a `finally`.
+- The tap goes out as the swipe ends, as the bug needs.
+
+**Two low findings; neither blocks the Mac fix, which reads right.**
+
+## Verified at 67a194a (2026-10-23)
+
+I read 67a194a (`test/taste.test.js` only). Then I ran `test/taste.test.js` at 67a194a in a clean
+detached worktree on Linux: **41 passed, 0 failed, 0 void, 0 unproven**, exit 0. The swipe-tap
+control still goes red for the right reason (`B on disk: nothing (control: the fling ate the tap)`).
+
+| Finding | Verdict | How I checked |
+|---|---|---|
+| 1. the calibration checked an unused helper | **fixed** | `swallows()` and its plain page are gone. The new check, "the fling detector: on the real board a tap after a swipe reads as landed", runs `swipeThenTap()`, the same function `flingHere` and every control run read. Its control is a page whose click counter never counts, so no tap can read as landed. It passes, so it was seen red. |
+| 2. a control swipe that missed B graded red | **fixed** | In the control, `!r.reachedB` now sets up again, as `r.landed` does, and three misses return `allMissed()`, which is pass, so VOID. The real run still throws (FAIL). The new meta-check, "a swipe-tap control whose swipes never reached comp B grades VOID, never PASS", forces every control swipe to miss B in an inner suite and requires VOID. Its control is b934c41's throw on a missed B. It passes, so it was seen red. |
+
+Note, not blocking: the meta-check's control models b934c41's throw through the `allMissed` hook,
+rather than loading b934c41's code. The behaviour is the same, so it is fine. **Both findings
+verified fixed; nothing further from r55m.**
