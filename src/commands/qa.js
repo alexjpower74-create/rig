@@ -13,7 +13,7 @@ import { exitCodeFor, fmtMs, runWatched } from '../qa/watch.js'
 import { compareBaseline, diffNames, parseFailures, parseMarks, tally } from '../qa/failures.js'
 import { desktopFreeEnv, makeShims, needsStub, readShimCalls } from '../qa/desktop.js'
 import { detectCi, planSeeds, readCiStatus, withSeed } from '../qa/ci.js'
-import { ciOnHost, holderId, leaseHost, runHost } from '../qa/host.js'
+import { ciOnHost, holderId, leaseHost, leaseToken, runHost } from '../qa/host.js'
 
 export { exitCodeFor, groups }
 
@@ -57,7 +57,8 @@ rig qa <ref> --repeat <N> [--seeds [<s1,s2,…>]] --run "<one file>" [--host <ss
   --host <ssh-host>  run the same command at the same sha on a second machine too (default: qaHost
                      in the config; --no-host skips it), under the host's lease; both tallies are
                      printed side by side. A lease someone else holds refuses the run, by name.
-  --by <id>          who holds the lease (default: RIG_SESSION, else the branch you are on)
+  --by <id>          who holds the lease (default: RIG_SESSION, else the branch you are on); each
+                     run holds it as <id>.<token>, so a second run at once is refused too
   --ci / --no-ci     the repo's own local CI command runs, recorded as kind "ci", whenever --run is
                      not given; --ci runs it beside --run too, --no-ci never. Found as ciCommand in
                      the config, else scripts.ci in package.json, an executable bin/ci, script/ci
@@ -111,8 +112,11 @@ export default async function qa(args) {
   const desktop = args.includes('--desktop')
 
   // The lease first: a refused host refuses the run before a worktree is touched.
-  const by = holderId(argOf(args, '--by') || process.env.RIG_SESSION || currentBranchOrNull(process.cwd()) || `qa-${process.pid}`)
+  // The label names the session (its host checkout and test DB); the token is this run's own hold.
+  const label = holderId(argOf(args, '--by') || process.env.RIG_SESSION || currentBranchOrNull(process.cwd()) || `qa-${process.pid}`)
+  const by = leaseToken(label)
   let lease = null
+  const leaseLost = new AbortController()
   if (host) {
     // Long enough for the stages that use the host at their limit, and renewed while the run lasts.
     lease = leaseHost(root, host, by, { ttlMin: limitMs ? Math.ceil((2 * limitMs) / 60_000) + 30 : 120 })
@@ -121,10 +125,19 @@ export default async function qa(args) {
       process.exit(75)
     }
     process.on('exit', lease.release)
-    setInterval(() => {
-      const why = lease.renew()
-      if (why) console.error(`\nrig qa: could not renew the lease on ${host}: ${why}`)
-    }, 30 * 60_000).unref()
+    // A renewal refused mid-run means another run holds the host now: stop ours there and fail it,
+    // never run beside the new holder (r55g's delta review of 6a6cedd).
+    const renewal = setInterval(
+      () => {
+        const why = lease.renew()
+        if (!why) return
+        clearInterval(renewal)
+        console.error(`\nrig qa: lost the lease on ${host}: ${why}`)
+        leaseLost.abort(why)
+      },
+      Number(process.env.RIG_QA_RENEW_MS) || 30 * 60_000,
+    )
+    renewal.unref()
   }
 
   const wt = acquireQaWorktree(root, cfg, ref, { fresh })
@@ -154,7 +167,25 @@ export default async function qa(args) {
   const shims = desktop ? null : makeShims()
   if (shims) process.on('exit', shims.remove)
   const baseEnv = { ...process.env, PORT: String(port), RIG_QA_SHA: sha }
-  const ctx = { root, cfg, wt, ref, full, sha, port, pattern, limitMs, stallMs, shims, host, by, desktop, lease }
+  const ctx = {
+    root,
+    cfg,
+    wt,
+    ref,
+    full,
+    sha,
+    port,
+    pattern,
+    limitMs,
+    stallMs,
+    shims,
+    host,
+    by,
+    label,
+    desktop,
+    lease,
+    leaseLost: leaseLost.signal,
+  }
   ctx.env = shims ? desktopFreeEnv(baseEnv, shims) : baseEnv
 
   if (repeat) process.exit(await repeatRuns(ctx, args, repeat))
@@ -310,8 +341,11 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
   const dirtied = left.tracked.filter((p) => !ctx.seen.has(p))
   const untracked = left.untracked.filter((p) => !ctx.seen.has(p))
   for (const p of [...dirtied, ...untracked]) ctx.seen.add(p)
+  // The record's own time, set here so a baseline can cite exactly this run (finish matches it).
+  const at = new Date().toISOString()
   for (const k of kinds) {
     recordQa(root, {
+      at,
       kind: k,
       ref,
       sha: full,
@@ -361,7 +395,7 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
     )
   if (kinds.includes('ci')) printCiStatus(ciStatus, r.exit, '')
   if (dirtied.length || untracked.length) console.log(dirtyMessage(dirtied, untracked))
-  return { ...r, cmd, failures, diff, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
+  return { ...r, at, host: 'local', cmd, failures, diff, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
 }
 
 function printCiStatus(status, exit, where) {
@@ -372,22 +406,24 @@ function printCiStatus(status, exit, where) {
 }
 
 /** The same run on the host, recorded with host: '<ssh-host>'. */
-async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
-  const { root, host, full, sha, ref, by } = ctx
-  const env = { RIG_QA_SHA: sha, ...(seed ? { RIG_SEED: seed } : {}) }
+async function hostStage(ctx, kinds, cmd, { seed = null, record = true, at: commit = null } = {}) {
+  const { root, host, full, sha, ref, label } = ctx
+  const env = { RIG_QA_SHA: commit ? commit.slice(0, 7) : sha, ...(seed ? { RIG_SEED: seed } : {}) }
   const ci = kinds.includes('ci')
   const r = await runHost({
     root,
     host,
-    sha: full,
+    sha: commit ?? full,
     cmd: ci ? ciOnHost(cmd) : cmd,
-    session: by,
+    // One checkout per session, kept warm between its runs; the lease keeps any other run out of it.
+    session: label,
     env,
     limitMs: ctx.limitMs,
     stallMs: ctx.stallMs,
     pattern: ctx.pattern,
     desktop: ctx.desktop,
     ci,
+    stop: ctx.leaseLost,
   })
   // The host's full output is kept like the local run's, in .rig/qa-logs/ (lead, first real --host run).
   const log = record ? openLog(root, sha, `${kinds.join('+')}-${holderId(host)}`) : { fd: null, path: null }
@@ -397,9 +433,11 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
     } catch {}
     closeSync(log.fd)
   }
+  const at = new Date().toISOString()
   if (record)
     for (const k of kinds) {
       recordQa(root, {
+        at,
         kind: k,
         ref,
         sha: full,
@@ -429,7 +467,7 @@ async function hostStage(ctx, kinds, cmd, { seed = null, record = true } = {}) {
     if (r.stalled) console.log(`rig qa: stalled on ${host}, last spec ${r.stalled.spec ?? 'none named'}, quiet ${fmtMs(r.stalled.quietMs)}`)
     if (ci) printCiStatus(r.ciStatus, r.exit, ` on ${host}`)
   }
-  return { ...r, label: `${kinds[0]} on ${host}` }
+  return { ...r, at: record ? at : null, host, cmd, label: `${kinds[0]} on ${host}` }
 }
 
 /** Both machines' tallies, side by side. */
@@ -439,9 +477,16 @@ export function sideBySide(here, there, host) {
     ['exit', here.exit, there.exit],
     ['passed', here.tally.passed ?? '—', there.tally.passed ?? '—'],
     ['failed', here.tally.failed ?? '?', there.tally.failed ?? '?'],
+    // Void and unproven checks are not failures, but they can be why a run exited non-zero.
+    ...[
+      ['void', 'void'],
+      ['unproven', 'unproven'],
+    ]
+      .filter(([, k]) => here.tally[k] || there.tally[k])
+      .map(([label, k]) => [label, here.tally[k] ?? 0, there.tally[k] ?? 0]),
     ['time', fmtMs(here.ms), fmtMs(there.ms)],
   ]
-  const w = [8, Math.max(...rows.map((r) => String(r[1]).length)) + 3]
+  const w = [10, Math.max(...rows.map((r) => String(r[1]).length)) + 3]
   console.log('')
   for (const r of rows) console.log(`  ${String(r[0]).padEnd(w[0])}${String(r[1]).padEnd(w[1])}${r[2]}`)
   // A count that contradicts the exit is not a number worth printing; say what disagrees instead.
@@ -480,14 +525,16 @@ async function baselineStage(ctx, args, here, there) {
   // compareBaseline reads a run's `failures`; for the diff those are its diff names.
   const diffRuns = runs.map((r) => ({ ...r, failures: r.diff }))
   const record = (baseline) => {
-    recordQa(root, { kind: 'baseline', ref, sha: full, short: sha, host: 'local', cmd: here.cmd, baseline })
+    // Each run this comparison read, by its own record, so finish waives only those (Zyro, 949e12b #2).
+    const compared = runs.map((r) => ({ host: r.host, cmd: r.cmd, at: r.at }))
+    recordQa(root, { kind: 'baseline', ref, sha: full, short: sha, host: 'local', cmd: here.cmd, baseline: { ...baseline, compared } })
     printBaseline(baseline, ctx.host)
   }
   if (baseSha === full) {
     return record({
       base,
       baseSha,
-      ...compareBaseline({ here: here.diff, there: there?.diff, base: here.diff, runs: diffRuns }),
+      ...compareBaseline({ here: here.diff, there: there?.diff, base: here.diff, baseThere: there?.diff, runs: diffRuns }),
       note: 'the commit is its own base',
     })
   }
@@ -510,26 +557,48 @@ async function baselineStage(ctx, args, here, there) {
   const port = ctx.port + 50 + bwt.index
   console.log(`\n── baseline: ${base} @ ${baseShort} in ${bwt.id} (port ${port}) ──\n$ ${cmd}\n`)
   const log = openLog(root, baseShort, 'baseline')
-  const r = await runWatched(cmd, {
-    cwd: bwt.path,
-    env: { ...ctx.env, PORT: String(port), RIG_QA_SHA: baseShort },
-    limitMs: ctx.limitMs,
-    stallMs: ctx.stallMs,
-    workerLogs: cfg.qaWorkerLogs || null,
-    log: log.fd,
-  })
+  // The base runs on every machine the head ran on, at once: each machine's failures are compared
+  // with its own base, never across (r55g's delta review of 6a6cedd).
+  const [r, rt] = await Promise.all([
+    runWatched(cmd, {
+      cwd: bwt.path,
+      env: { ...ctx.env, PORT: String(port), RIG_QA_SHA: baseShort },
+      limitMs: ctx.limitMs,
+      stallMs: ctx.stallMs,
+      workerLogs: cfg.qaWorkerLogs || null,
+      log: log.fd,
+    }),
+    there ? hostStage(ctx, ['baseline'], there.cmd, { record: false, at: baseSha }) : null,
+  ])
   if (log.fd !== null) closeSync(log.fd)
   bwt.release()
   timing(root, 'qa:baseline', r.ms, full, 'local', r.exit === 0)
+  if (rt) timing(root, 'qa:host:baseline', rt.ms, full, ctx.host, rt.exit === 0)
   const baseFailures = diffNames(r.text, { exit: r.exit, pattern: ctx.pattern })
   const cmp = compareBaseline({
     here: here.diff,
     there: there?.diff ?? null,
     base: baseFailures,
+    baseThere: rt ? rt.diff : null,
     needsStub: [...new Set([...(here.needsStub ?? []), ...(there?.needsStub ?? [])])],
-    runs: [...diffRuns, { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures, stalled: r.stalled }],
+    runs: [
+      ...diffRuns,
+      { label: `the base run (${baseShort})`, exit: r.exit, failures: baseFailures, stalled: r.stalled },
+      ...(rt ? [{ label: `the base run on ${ctx.host} (${baseShort})`, exit: rt.exit, failures: rt.diff, stalled: rt.stalled }] : []),
+    ],
   })
-  record({ base, baseSha, baseExit: r.exit, baseFailed: baseFailures.length, baseLog: log.path, stalled: r.stalled, ...cmp })
+  record({
+    base,
+    baseSha,
+    baseExit: r.exit,
+    baseFailed: baseFailures.length,
+    baseLog: log.path,
+    stalled: r.stalled,
+    ...(rt
+      ? { baseThere: { host: ctx.host, exit: rt.exit, failed: rt.diff.length, failures: rt.diff.slice(0, 200), stalled: rt.stalled } }
+      : {}),
+    ...cmp,
+  })
 }
 
 function printBaseline(b, host) {

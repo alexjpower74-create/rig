@@ -128,6 +128,32 @@ Grading:
   be going (8936ffd).
 - **`acquire` refuses a branch-name holder.** r55m's `acquire` throws on `rig/r55q`, which is
   rig qa's default holder. The id is now made safe (`holderId`, 4566680).
+- **"failed 0" beside "exit 1" (lead, the host run on 949e12b).** The run went red on a harness
+  VOID, which is not a failure, so the tally printed 0. A red exit with no FAIL line is now
+  `failed ?`, with `void` and `unproven` rows when either machine has any, and the line "not
+  counted: exit 1 but no FAIL line; 1 void: <name>". It is recorded as `tallyConflict`. Red first:
+  the CLI check in `qa-baseline` and the unit test in `qa-parse`.
+- **Two runs on one branch shared the host lease (Zyro's review of 949e12b, P1).** With no `--by`
+  and no RIG_SESSION, every run held the lease as the branch name. A second run at once was
+  therefore a renewal, and it ran in the first run's host checkout. Each invocation now holds the
+  lease as `<label>.<8 hex>` (`leaseToken`), and renews and gives it back under that token, so
+  a second run is refused with exit 75. The session dir and test DB stay per label: the lease
+  keeps every other run out of them, and the runner keeps that checkout and its `node_modules`
+  warm between runs. A dir per token would reinstall on every run and leave a dir behind each
+  time. Red first: `qa-host-real`, two concurrent runs (its control runs them one after the
+  other). `lease.js` did not need a change.
+- **r55g's delta review of 6a6cedd, three fixes:**
+  - *The base ran only here.* With a host, `--baseline` now runs the base on the host too, at the
+    same time as here, with the same command. `compareBaseline` compares each machine with its own
+    base and never across: a failure counts as known only on the machine whose base also failed it.
+    A host head with no host base is incomplete. The record keeps `baseThere`. In the reviewer's
+    repro (a failure only on the host, at the head and at the base), "1 new" is now "0 new, 1
+    known, fake", and finish waives the host run on it.
+  - *A renewal refused mid-run is no longer only printed.* rig qa says "lost the lease on <h>:
+    <h> is leased by <holder>", stops the host run through its signal, and records the stage as
+    exit 75 with that error. A later host stage does not start.
+  - *A refusal by a run's token names the command that frees it*:
+    `rig lease host:<h> --by <token> --release`.
 
 ## Decided
 

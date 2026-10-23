@@ -352,7 +352,7 @@ await suite('rig 5.5, the finish gate (r55g)', async (s) => {
   })
   // Known base failures only: the suite exits 1, and a complete "0 new" on this sha makes that green.
   const knownOnly = (extra = {}) => [
-    { kind: 'test', sha: head, exit: 1, cmd: 'npm test', dirtied: [], host: 'local', failed: 1, ...extra },
+    { kind: 'test', sha: head, exit: 1, cmd: 'npm test', dirtied: [], host: 'local', failed: 1, failures: ['flaky clock'], ...extra },
     { kind: 'baseline', sha: head, host: 'local', cmd: 'npm test', baseline: baseline([]) },
   ]
   resetQa(repo, knownOnly())

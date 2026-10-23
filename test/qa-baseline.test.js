@@ -52,14 +52,28 @@ const fake = process.env.FAKE_HOST ? JSON.parse(process.env.FAKE_HOST) : null
 if (fake) {
   const { remote } = await import(${JSON.stringify(pathToFileURL(join(ROOT, 'src', 'qa', 'host.js')).href)})
   const log = (o) => appendFileSync(fake.calls, JSON.stringify(o) + '\\n')
-  remote.acquire = (root, resource, by) => (log({ acquire: resource, by }), fake.holder ? { ok: false, holder: fake.holder, why: 'held' } : { ok: true, holder: null, why: null })
+  let takes = 0
+  // fake.lostTo: the first acquire takes the lease, every renewal after it finds that holder.
+  remote.acquire = (root, resource, by) => {
+    log({ acquire: resource, by })
+    const holder = fake.holder ?? (fake.lostTo && takes++ > 0 ? fake.lostTo : null)
+    return holder ? { ok: false, holder, why: 'held' } : { ok: true, holder: null, why: null }
+  }
   remote.release = (root, resource, by) => (log({ release: resource, by }), { ok: true, why: null })
-  remote.runOnHost = async ({ host, sha, cmd, env, onOutput }) => {
+  remote.runOnHost = async ({ host, sha, cmd, env, onOutput, signal }) => {
     log({ run: cmd, host, sha, seed: env.RIG_SEED ?? null })
     const seedFails = env.RIG_SEED && fake.failSeeds?.includes(env.RIG_SEED)
-    const out = seedFails ? 'not ok 1 - flaky on the second OS\\n' : fake.log
+    // fake.at: { <sha>: { exit, log } }, what the host prints at that commit (the base run there).
+    const at = fake.at?.[sha]
+    const out = seedFails ? 'not ok 1 - flaky on the second OS\\n' : (at?.log ?? fake.log)
     onOutput(out)
-    return { host, exit: seedFails ? 1 : fake.exit, ms: 1234, dir: '/fake/dir', db: 'fake_db', log: out }
+    // fake.holdMs: a run that goes on until it is done or stopped through the signal.
+    if (fake.holdMs)
+      await new Promise((res) => {
+        const t = setTimeout(res, fake.holdMs)
+        signal?.addEventListener('abort', () => (clearTimeout(t), log({ stopped: host }), res()))
+      })
+    return { host, exit: signal?.aborted ? 143 : seedFails ? 1 : (at?.exit ?? fake.exit), ms: 1234, dir: '/fake/dir', db: 'fake_db', log: out }
   }
 }
 const qa = (await import(${JSON.stringify(pathToFileURL(join(ROOT, 'src', 'commands', 'qa.js')).href)})).default
@@ -316,9 +330,10 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       if (!rec) throw new Error(`no host record\n${r.out.slice(-800)}`)
       return (
         log[0].acquire === 'host:build-box' &&
-        log[0].by === 'r55q' &&
+        // held under this run's own token, and given back under the same one (Zyro, 949e12b)
+        /^r55q\.[0-9a-f]{8}$/.test(log[0].by) &&
         log.some((c) => c.run === 'node --test test/' && c.sha === sha) &&
-        log.some((c) => c.release === 'host:build-box') &&
+        log.some((c) => c.release === 'host:build-box' && c.by === log[0].by) &&
         /\n\s+exit\s+1\s+1\n/.test(r.out) &&
         /fails only on build-box: only on the second OS/.test(r.out) &&
         rec.failed === 2 &&
@@ -359,6 +374,35 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       nestedExit = 1
       return () => {
         nestedExit = 0
+      }
+    },
+    timeout: 60_000,
+  })
+
+  // main 949e12b: a host run that exited 1 on a harness VOID printed "failed 0" beside "exit 1".
+  let voidLog =
+    '  VOID  comps on a phone: a rating tapped after a swipe still counts 7269ms\nrig taste: 38 passed, 0 failed, 1 void, 0 unproven\n'
+  await s.check('a red run with no FAIL line prints "failed ?" and names the VOID, never "failed 0"', {
+    assert: async () => {
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--run', 'echo "# pass 1"; echo "# fail 0"'], {
+        fake: fakeBox({ exit: 1, log: voidLog }),
+      })
+      const rec = last(hostRepo, 'test', 'build-box')
+      return (
+        /\n\s+failed\s+0\s+\?\n/.test(r.out) &&
+        /\n\s+void\s+0\s+1\n/.test(r.out) &&
+        /failed on build-box: not counted: exit 1 but no FAIL line; 1 void: comps on a phone/.test(r.out) &&
+        rec.failed === null &&
+        /no FAIL line/.test(rec.tallyConflict)
+      )
+    },
+    // With a FAIL line the exit is explained, and the count is a number.
+    breaks: () => {
+      voidLog =
+        '  FAIL  comps on a phone: a rating tapped after a swipe still counts 7269ms\nrig taste: 38 passed, 1 failed, 0 void, 0 unproven\n'
+      return () => {
+        voidLog =
+          '  VOID  comps on a phone: a rating tapped after a swipe still counts 7269ms\nrig taste: 38 passed, 0 failed, 1 void, 0 unproven\n'
       }
     },
     timeout: 60_000,
@@ -431,7 +475,10 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       const head = commitFiles(hostRepo, { 'test/a.test.js': specFile(['the known broken one', 'only here']) }, 'h')
       git(['checkout', '-q', 'main'], hostRepo)
       git(['branch', '-D', '-q', 'rig/h'], hostRepo)
-      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--baseline', '--run', 'node --test test/'], { fake: hostBase })
+      // The base on the box fails only the known one: "only on the second OS" is new there.
+      const base = git(['rev-parse', 'HEAD'], hostRepo)
+      const fake = { ...hostBase, at: { [base]: { exit: 1, log: 'not ok 1 - the known broken one\n' } } }
+      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--baseline', '--run', 'node --test test/'], { fake })
       const b = last(hostRepo, 'baseline').baseline
       const where = Object.fromEntries(b.known.map((k) => [k.name, k.where]))
       if (where['the known broken one'] !== 'both') throw new Error(`known ${JSON.stringify(b.known)}\n${r.out.slice(-600)}`)
@@ -445,6 +492,109 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       }
     },
     timeout: 90_000,
+  })
+
+  // Zyro's review of 949e12b, #2: a local-only "0 new" waived a host run it never saw. The baseline
+  // names each run it compared by host, command and that run's own record time, for finish to match.
+  let where = ['--host', 'build-box']
+  await s.check('the baseline names every run it compared: host, command and the run record’s own time', {
+    assert: async () => {
+      rigQa(hostRepo, ['HEAD', ...where, '--by', 'r55q', '--baseline', '--run', 'node --test test/'], { fake: fakeBox() })
+      const b = last(hostRepo, 'baseline').baseline
+      const runs = [last(hostRepo, 'test'), last(hostRepo, 'test', 'build-box')]
+      if (!Array.isArray(b.compared)) throw new Error(`no compared: ${JSON.stringify(b)}`)
+      return (
+        b.compared.length === 2 &&
+        runs.every((run) => b.compared.some((c) => c.host === (run.host ?? 'local') && c.cmd === run.cmd && c.at === run.at))
+      )
+    },
+    // A baseline from a run with no host does not list the host: it never compared one.
+    breaks: () => {
+      where = ['--no-host']
+      return () => {
+        where = ['--host', 'build-box']
+      }
+    },
+    timeout: 90_000,
+  })
+
+  // r55g's delta review of 6a6cedd, 1: the base ran only here, so a failure the host has at the head
+  // and at the base alike read as new, and a host failure the local base shared read as known.
+  const remoteOnly = { exit: 1, log: '  FAIL  remote regression 3ms\n' }
+  let baseOnHost = remoteOnly
+  await s.check('with a host, the base runs on the host too, and a failure is known only on the machine whose base failed it', {
+    assert: async () => {
+      git(['checkout', '-q', '-b', 'rig/hb'], hostRepo)
+      const head = commitFiles(hostRepo, { 'test/b.test.js': specFile([]) }, 'hb')
+      git(['checkout', '-q', 'main'], hostRepo)
+      git(['branch', '-D', '-q', 'rig/hb'], hostRepo)
+      const base = git(['rev-parse', 'HEAD'], hostRepo)
+      const fake = fakeBox({ exit: 1, log: remoteOnly.log, at: { [base]: baseOnHost } })
+      const r = rigQa(hostRepo, [head, '--host', 'build-box', '--by', 'r55q', '--baseline', base, '--run', 'node --test test/'], { fake })
+      const b = last(hostRepo, 'baseline').baseline
+      const ranThere = readFileSync(calls, 'utf8').includes(`"sha":"${base}"`)
+      if (!ranThere) throw new Error(`the base never ran on the host\\n${r.out.slice(-600)}`)
+      const known = b.known.find((k) => k.name === 'remote regression')
+      return b.complete && b.newFailures.length === 0 && known?.where === 'there' && /0 new failures/.test(r.out)
+    },
+    // A base that is green on the host: the head's host failure is new there, whatever the local base did.
+    breaks: () => {
+      baseOnHost = { exit: 0, log: 'ok 1 - fine\n' }
+      return () => {
+        baseOnHost = remoteOnly
+      }
+    },
+    timeout: 90_000,
+  })
+
+  // r55g's delta review of 6a6cedd, 2: a renewal refused mid-run was only printed.
+  let lostTo = { by: 'r55x.0a1b2c3d', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+  await s.check('a renewal refused mid-run stops the host run and fails it, naming the new holder', {
+    assert: async () => {
+      rmSync(calls, { force: true })
+      const t = Date.now()
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--no-ci', '--run', 'true'], {
+        fake: fakeBox({ exit: 0, log: 'ok 1 - fine\n', holdMs: 20_000, lostTo }),
+        env: { RIG_QA_RENEW_MS: '300' },
+      })
+      const rec = last(hostRepo, 'test', 'build-box')
+      const stopped = readFileSync(calls, 'utf8').includes('"stopped":"build-box"')
+      return (
+        r.status !== 0 &&
+        stopped &&
+        rec.exit !== 0 &&
+        /lost the lease on build-box: build-box is leased by r55x\.0a1b2c3d/.test(r.out) &&
+        /r55x\.0a1b2c3d/.test(rec.error ?? '') &&
+        Date.now() - t < 15_000
+      )
+    },
+    // Renewals that go through: the run is held for its full time and comes back green.
+    breaks: () => {
+      lostTo = null
+      return () => {
+        lostTo = { by: 'r55x.0a1b2c3d', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+      }
+    },
+    timeout: 90_000,
+  })
+
+  // r55g's delta review of 6a6cedd, 3: a lease held by a run's token says how to free it.
+  let tokenHolder = { by: 'r55q.1a2b3c4d', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+  await s.check('a refusal by a run’s token names the exact command that frees it', {
+    assert: async () => {
+      const r = rigQa(hostRepo, ['HEAD', '--host', 'build-box', '--by', 'r55q', '--run', 'true'], {
+        fake: fakeBox({ holder: tokenHolder }),
+      })
+      return r.status === 75 && r.out.includes('rig lease host:build-box --by r55q.1a2b3c4d --release')
+    },
+    // A holder that is not a run's token (a session that took the lease by hand) gets no such line.
+    breaks: () => {
+      tokenHolder = { by: 'r55x', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+      return () => {
+        tokenHolder = { by: 'r55q.1a2b3c4d', at: '2026-01-01T00:00:00Z', until: '2026-01-01T02:00:00Z' }
+      }
+    },
+    timeout: 60_000,
   })
 
   // ---------------------------------------------------------------------------------------------
