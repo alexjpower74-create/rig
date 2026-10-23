@@ -199,10 +199,12 @@ await suite('machines: the second-machine runner', async (s) => {
     assert: async () => {
       const r = await run({ sha: c2, cmd: 'printf "PATH=%s\\n" "$PATH"; printf "npm=%s\\n" "$(command -v npm)"', desktop: true })
       const path = /^PATH=(.*)$/m.exec(r.log)?.[1] ?? ''
-      const extra = path.slice(process.env.PATH.length).split(':').filter(Boolean)
+      // The PATH the fake host's login gives it: ours, after the fake's own sh when FAKE_SSH_SHELL is set.
+      const own = process.env.FAKE_SSH_SHELL ? `${join(w.root, 'shell-bin')}:${process.env.PATH}` : process.env.PATH
+      const extra = path.slice(own.length).split(':').filter(Boolean)
       return (
         r.exit === 0 &&
-        path.startsWith(process.env.PATH) &&
+        path.startsWith(own) &&
         extra.every((d) => ['/opt/homebrew/bin', '/usr/local/bin'].includes(d)) &&
         r.log.includes(`npm=${join(w.bin, 'npm')}`)
       )
