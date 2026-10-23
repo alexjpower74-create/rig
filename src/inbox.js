@@ -54,7 +54,7 @@ export function leadName(cfg = {}, env = process.env) {
 /** A lead name becomes a directory: plain names only, so `../x` cannot write somewhere else. */
 export function checkLead(lead) {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(lead || '') || lead.includes('..'))
-    throw new Error(`"${lead}" is not a lead name. Use letters, digits, ., - and _ (the lead's own name, e.g. lead or onyx).`)
+    throw new Error(`"${lead}" is not a lead name. Use letters, digits, ., - and _ (the lead's own name, e.g. lead or crew-lead).`)
   return lead
 }
 

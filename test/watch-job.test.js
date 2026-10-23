@@ -9,7 +9,7 @@ import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, chmodSync, cpSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { tellLine } from '../src/brief.js'
 
@@ -32,7 +32,7 @@ const fs = require('node:fs')
 const S = ${JSON.stringify(statePath)}
 const st = JSON.parse(fs.readFileSync(S, 'utf8'))
 const [noun, verb, target, text] = process.argv.slice(2)
-fs.appendFileSync(${JSON.stringify(herdrLog)}, JSON.stringify(process.argv.slice(2)) + '\\n')
+fs.appendFileSync(${JSON.stringify(herdrLog)}, JSON.stringify({ t: Date.now(), argv: process.argv.slice(2) }) + '\\n')
 const p = st.panes[target]
 // A step may also write a file (the member's output, written as it finishes). completion_seq counts
 // the turns that finished; a pane with noSeq has no state_change_seq, a pane with completion has one.
@@ -75,11 +75,20 @@ const setPanes = (panes) => {
   writeFileSync(herdrLog, '')
 }
 const state = () => JSON.parse(readFileSync(statePath, 'utf8'))
-const calls = () =>
+// Every herdr call the job made, with the time the fake saw it: { t, argv }. Timing checks measure
+// these (the job's own polls), not the wall time of a child process, which load stretches.
+const logged = () =>
   readFileSync(herdrLog, 'utf8')
     .split('\n')
     .filter(Boolean)
     .map((l) => JSON.parse(l))
+const calls = () => logged().map((c) => c.argv)
+/** Times of the `agent get` polls made after the prompt, and the prompt's own time. */
+const pollsAfterPrompt = () => {
+  const all = logged()
+  const at = all.find((c) => c.argv[1] === 'prompt')?.t
+  return { at, polls: all.filter((c) => c.argv[1] === 'get' && at != null && c.t > at).map((c) => c.t) }
+}
 
 // A copy of the tree with a patch applied: [file, old, new]. Each `old` must be there, or the control
 // would silently run the real code.
@@ -97,6 +106,8 @@ function brokenTree(patches) {
 }
 
 let tree = repo
+/** The tree's own module, so a control swaps the code in-process too. */
+const mod = (rel) => import(pathToFileURL(join(tree, rel)).href + `?t=${tree === repo ? 0 : tree}`)
 const broken = (patches) => async () => {
   tree = brokenTree(patches)
   return () => {
@@ -107,7 +118,7 @@ const broken = (patches) => async () => {
 const work = join(tmp, 'work')
 mkdirSync(work)
 /** Run `rig job` from the current tree: { code, out, ms }, killed after `limit` ms (code null). */
-function job(args, { env = {}, limit = 20_000 } = {}) {
+function job(args, { env = {}, limit = 30_000, stopWhen } = {}) {
   return new Promise((resolve) => {
     const t0 = Date.now()
     const c = spawn(process.execPath, [join(tree, 'bin', 'rig.js'), 'job', ...args], {
@@ -125,8 +136,12 @@ function job(args, { env = {}, limit = 20_000 } = {}) {
     c.stdout.on('data', (d) => (out += d))
     c.stderr.on('data', (d) => (out += d))
     const kill = setTimeout(() => c.kill('SIGKILL'), limit)
+    // stopWhen: end the run early once the log shows what the check needs (a control would otherwise
+    // run to its limit). A run stopped this way has code null.
+    const watch = stopWhen && setInterval(() => stopWhen() && c.kill('SIGKILL'), 100)
     c.on('close', (code) => {
       clearTimeout(kill)
+      if (watch) clearInterval(watch)
       resolve({ code, out, ms: Date.now() - t0 })
     })
   })
@@ -145,7 +160,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
           [900, 'idle'],
         ]),
       })
-      const r = await job(['p1', 'build the thing', '--deadline', '0.1'])
+      const r = await job(['p1', 'build the thing', '--deadline', '1'])
       return expectCode(
         r,
         0,
@@ -169,7 +184,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
       })
       const f = join(work, 'out.md')
       writeFileSync(f, 'result\n')
-      const r = await job(['p1', 'write it', '--expect', f, '--deadline', '0.1'])
+      const r = await job(['p1', 'write it', '--expect', f, '--deadline', '1'])
       return expectCode(r, 0, () => r.out.includes(`expected output ready: ${f}`) && r.out.includes('p1 is done'))
     },
     breaks: broken([['src/commands/job.js', "new Set(['idle', 'done', 'blocked'])", "new Set(['idle', 'blocked'])"]]),
@@ -199,7 +214,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
           [900, 'blocked'],
         ]),
       })
-      const r = await job(['p1', 'do it', '--deadline', '0.1'])
+      const r = await job(['p1', 'do it', '--deadline', '1'])
       return expectCode(r, 5, () => /BLOCKED/.test(r.out) && r.out.includes('p1 is blocked'))
     },
     breaks: broken([
@@ -208,13 +223,47 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
     ]),
   })
 
-  await s.check('a pane that never finishes hits the deadline: exit 4, DEADLINE named, within a poll of it', {
+  // The deadline, in two parts. The rule ("stop at the first poll at or past the deadline, no
+  // sooner, no later") is checked on a virtual clock, where load cannot move it: the first version
+  // read it off the fake herdr's log, whose clock starts later than the job's, and went red 4 of 10
+  // times under load while the job was right. The CLI run is held only to exit 4, DEADLINE named,
+  // no sooner than the deadline and inside the plan's 60 s.
+  await s.check('a pane that never finishes hits the deadline: exit 4, DEADLINE named, after 3 s and inside 60 s', {
     assert: async () => {
       setPanes({ p1: pane('idle', [[200, 'working']]) })
-      const r = await job(['p1', 'forever', '--deadline', '0.05'], { limit: 10_000 })
-      return expectCode(r, 4, () => /DEADLINE \(0\.05 min\) passed/.test(r.out) && r.ms >= 3000 && r.ms < 6000)
+      const r = await job(['p1', 'forever', '--deadline', '0.05'], { limit: 60_000 })
+      return expectCode(r, 4, () => /DEADLINE \(0\.05 min\) passed/.test(r.out) && r.ms >= 3000 && r.ms < 60_000)
     },
-    breaks: broken([['src/commands/job.js', 'if (Date.now() >= until) {', 'if (false) {']]),
+    breaks: broken([['src/commands/job.js', '    if (clock() >= until) {', '    if (false) {']]),
+    timeout: 70_000,
+  })
+
+  await s.check('on a virtual clock: a turn that never ends stops at the first poll at or past the deadline', {
+    assert: async () => {
+      const { waitForTurn } = await mod('src/commands/job.js')
+      let t = 0
+      let reads = 0
+      const r = await waitForTurn(
+        { status: 'idle', seq: 10 },
+        {
+          read: () => {
+            if (++reads > 100_000) throw new Error('still polling after 100000 reads: no deadline')
+            return { status: 'working', seq: 11 }
+          },
+          nap: (ms) => new Promise((ok) => setImmediate(() => ok((t += ms)))),
+          clock: () => t,
+          pollMs: 100,
+          start: 0,
+          until: 3000,
+          startMs: 60_000,
+        },
+      )
+      if (!(r.timedOut && !r.finished)) throw new Error(JSON.stringify(r))
+      if (t !== 3000 || reads !== 30) throw new Error(`stopped at ${t} ms after ${reads} reads`)
+      return true
+    },
+    breaks: broken([['src/commands/job.js', '    if (clock() >= until) {', '    if (false) {']]),
+    timeout: 30_000,
   })
 
   await s.check('a busy pane is refused before anything is sent (exit 3, no prompt)', {
@@ -254,7 +303,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
           [60, 'idle'],
         ]),
       })
-      const r = await job(['p1', 'quick one', '--deadline', '1'], { env: { RIG_JOB_POLL_MS: '700', RIG_JOB_START_MS: '3000' } })
+      const r = await job(['p1', 'quick one', '--deadline', '1'], { env: { RIG_JOB_POLL_MS: '700', RIG_JOB_START_MS: '30000' } })
       return expectCode(r, 0, () => r.out.includes('p1 is idle'))
     },
     breaks: broken([
@@ -329,19 +378,28 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
     breaks: broken([['src/commands/job.js', 'cfg.jobDeadline ?? 90)', 'cfg.jobDeadline ?? 60)']]),
   })
 
-  await s.check('a 10-minute poll asked for is clamped: a pane going idle is noticed within 6 s', {
+  // The clamp, measured on the poll itself: the job says the interval it uses, and the gaps between its
+  // `agent get` calls are that interval (never shorter: no busy loop). An end-to-end wall-time bar on
+  // a 5 s poll had ~1 s of headroom and went red under crew load; the end-to-end bar is the target
+  // above, at the plan's 60 s.
+  await s.check('a 10-minute poll asked for is clamped to 5 s, measured between the job’s own polls', {
     assert: async () => {
-      setPanes({
-        p1: pane('idle', [
-          [100, 'working'],
-          [400, 'idle'],
-        ]),
+      setPanes({ p1: pane('idle', [[100, 'working']]) })
+      const r = await job(['p1', 'x', '--deadline', '5'], {
+        env: { RIG_JOB_POLL_MS: '600000' },
+        limit: 40_000,
+        stopWhen: () => pollsAfterPrompt().polls.length >= 3,
       })
-      const r = await job(['p1', 'x', '--deadline', '5'], { env: { RIG_JOB_POLL_MS: '600000' }, limit: 15_000 })
-      return expectCode(r, 0, () => r.ms - 400 < 6000)
+      const { at, polls } = pollsAfterPrompt()
+      if (!r.out.includes('(polling every 5 s)')) throw new Error(r.out)
+      if (polls.length < 3) throw new Error(`only ${polls.length} poll(s) after the prompt in ${r.ms} ms`)
+      const gaps = [polls[0] - at, polls[1] - polls[0], polls[2] - polls[1]]
+      // A gap is the sleep plus one herdr call; load lengthens it and can never shorten it.
+      if (gaps.some((g) => g < 4900)) throw new Error(`gaps ${gaps.join(', ')} ms: shorter than the 5 s poll`)
+      return true
     },
     breaks: broken([['src/commands/job.js', 'const MAX_POLL_MS = 5000', 'const MAX_POLL_MS = 60000']]),
-    timeout: 20_000,
+    timeout: 45_000,
   })
 
   await s.check('a relative --expect is read from the pane’s own worktree, not the lead’s cwd', {
@@ -361,7 +419,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
           member,
         ),
       })
-      const r = await job(['p1', 'review it', '--expect', 'docs/review.md', '--deadline', '0.1'])
+      const r = await job(['p1', 'review it', '--expect', 'docs/review.md', '--deadline', '1'])
       return expectCode(r, 0, () => r.out.includes(`expected output ready: ${join(member, 'docs', 'review.md')}`))
     },
     breaks: broken([['src/commands/job.js', 'resolve(now.dir || before.dir || process.cwd(), expect)', 'resolve(process.cwd(), expect)']]),
@@ -401,6 +459,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
         "    if (now.seq !== before.seq || now.status === 'working') started = true\n    if (started && STOPPED.has(now.status)) { finished = true; break }\n    finished =\n",
       ],
     ]),
+    timeout: 30_000,
   })
 
   await s.check('stale done with no counter change at all: still waits for the late turn', {
@@ -420,6 +479,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
     breaks: broken([
       ['src/commands/job.js', '    finished =\n', '    if (STOPPED.has(now.status)) { finished = true; break }\n    finished =\n'],
     ]),
+    timeout: 30_000,
   })
 
   await s.check('only a stale bump and no turn: "never started" (exit 7), not done', {
@@ -451,7 +511,7 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
           { completion: 7, noSeq: true },
         ),
       })
-      const r = await job(['p1', 'quick', '--deadline', '1'], { env: { RIG_JOB_POLL_MS: '700', RIG_JOB_START_MS: '3000' } })
+      const r = await job(['p1', 'quick', '--deadline', '1'], { env: { RIG_JOB_POLL_MS: '700', RIG_JOB_START_MS: '30000' } })
       return expectCode(r, 0, () => r.out.includes('p1 is idle'))
     },
     breaks: broken([

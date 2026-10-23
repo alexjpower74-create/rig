@@ -68,7 +68,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 /** Wait until `rig inbox --wait` has marked itself as listening, so the tell is not early. */
 async function armed(inbox, lead) {
   const mark = join(inbox, lead, '.watcher.json')
-  for (let i = 0; i < 200 && !existsSync(mark); i++) await sleep(25)
+  // Up to 30 s: a node start under crew load can take seconds, and arming late is not what is measured.
+  for (let i = 0; i < 1200 && !existsSync(mark); i++) await sleep(25)
   if (!existsSync(mark)) throw new Error('the watcher never armed')
 }
 
@@ -118,6 +119,7 @@ await suite('rig 5.5: peers report themselves, briefs say who acts', async (s) =
       return /^from: w1\nat: \d{4}-\d\d-\d\d \d\d:\d\d\n\nw1: done — report committed\n$/.test(body)
     },
     breaks: broken([['src/inbox.js', 'if (env.RIG_AGENT_ID) return env.RIG_AGENT_ID', '']]),
+    timeout: 60_000,
   })
 
   await s.check('the sender is RIG_AGENT_ID, else the slice id from the branch, else CODEX_PERSONA, else "peer"', {
@@ -132,6 +134,7 @@ await suite('rig 5.5: peers report themselves, briefs say who acts', async (s) =
       )
     },
     breaks: broken([['src/inbox.js', '    return branch.slice(branchPrefix.length)', '    return null']]),
+    timeout: 60_000,
   })
 
   await s.check(
@@ -157,6 +160,7 @@ await suite('rig 5.5: peers report themselves, briefs say who acts', async (s) =
       return r.status !== 0 && !existsSync(join(dirname(inbox), 'escape'))
     },
     breaks: broken([['src/inbox.js', "  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(lead || '') || lead.includes('..'))", '  if (false)']]),
+    timeout: 60_000,
   })
 
   await s.check('rig inbox prints every new message oldest first, files them under read/, and the next read is empty', {
@@ -180,6 +184,7 @@ await suite('rig 5.5: peers report themselves, briefs say who acts', async (s) =
       )
     },
     breaks: broken([['src/inbox.js', ".filter((f) => f.endsWith('.md') && !f.startsWith('.'))", ".filter((f) => f.includes('.md'))"]]),
+    timeout: 60_000,
   })
 
   await s.check('rig inbox with no lead named says so and exits 2; with RIG_LEAD it reads that lead', {
@@ -191,6 +196,7 @@ await suite('rig 5.5: peers report themselves, briefs say who acts', async (s) =
       return none.status === 2 && /no lead named/.test(none.stderr) && named.status === 0 && named.stdout.includes('hi')
     },
     breaks: broken([['src/inbox.js', 'return cfg.lead || env.RIG_LEAD || null', 'return cfg.lead || null']]),
+    timeout: 60_000,
   })
 
   // The bar: `rig inbox --wait` wakes within 60 s of a `rig tell`, on the poll alone (fs.watch off,
@@ -216,17 +222,21 @@ await suite('rig 5.5: peers report themselves, briefs say who acts', async (s) =
     breaks: broken([['src/inbox.js', 'Math.min(MAX_POLL_MS, pollMs)', 'pollMs']]),
   })
 
-  await s.target('rig inbox --wait wakes after rig tell, with fs.watch on (the default)', {
+  // fs.watch, measured in one process: the wait and the write share a clock, and no child start is
+  // inside the number. (Timing the whole \`rig tell\` child had load in it.) The message is written
+  // 300 ms after the first look, so the next poll is ~4.7 s away: without the watch, that is the number.
+  // The CLI end to end is the target above, at the plan's 60 s.
+  await s.target('rig inbox --wait wakes on fs.watch, not the next poll, after a message is written', {
     measure: async () => {
-      const inbox = freshInbox()
-      const env = { ...baseEnv(inbox), RIG_INBOX_POLL_MS: '5000' }
-      const w = rigBg(['inbox', 'boss', '--wait', '--deadline', '1'], scratch, env, 20_000)
-      await armed(inbox, 'boss')
-      await sleep(5300) // just past a poll, so the next one is ~5 s away
+      const { waitForMessages, tellMessage } = await mod('src/inbox.js')
+      const root = freshInbox()
+      const waiting = waitForMessages(root, 'boss', { deadlineMs: 60_000, pollMs: 5000 })
+      await sleep(300)
       const t0 = Date.now()
-      rigSync(['tell', 'boss', 'w2: blocked — on a permission dialog'], scratch, env)
-      const r = await w.done
-      return r.code === 0 ? r.at - t0 : 20_000
+      tellMessage(root, 'boss', 'w2', 'w2: blocked — on a permission dialog')
+      const msgs = await waiting
+      if (msgs[0]?.text !== 'w2: blocked — on a permission dialog') throw new Error(JSON.stringify(msgs))
+      return Date.now() - t0
     },
     atMost: 1500,
     unit: 'ms',
@@ -237,11 +247,12 @@ await suite('rig 5.5: peers report themselves, briefs say who acts', async (s) =
   await s.check('rig inbox --wait with nothing arriving exits 4 at its deadline and says how to re-arm', {
     assert: async () => {
       const inbox = freshInbox()
-      const w = rigBg(['inbox', 'boss', '--wait', '--deadline', '0.03'], scratch, { ...baseEnv(inbox), RIG_INBOX_POLL_MS: '200' }, 8000)
+      const w = rigBg(['inbox', 'boss', '--wait', '--deadline', '0.03'], scratch, { ...baseEnv(inbox), RIG_INBOX_POLL_MS: '200' }, 30_000)
       const r = await w.done
       return r.code === 4 && /no message in 0\.03 min \(the deadline\)/.test(r.out) && !existsSync(join(inbox, 'boss', '.watcher.json'))
     },
     breaks: broken([['src/inbox.js', '      if (Date.now() >= until) finish([])', '']]),
+    timeout: 120_000,
   })
 
   // ---------------------------------------------------------------------------------------------
@@ -279,6 +290,7 @@ Do b.
       return lastLine(briefFor(plan, plan.agents[0], ctx)) === want && want.includes('rig tell boss "a1: ')
     },
     breaks: broken([['src/brief.js', '\n\n${askTheLead(ctx.lead, agent.id)}`', '`']]),
+    timeout: 60_000,
   })
 
   await s.check('with no lead named, the tell line leaves the name for rig tell to look up', {
@@ -287,6 +299,7 @@ Do b.
       return tellLine(null, 'a1').includes('`rig tell "a1: ') && !tellLine(null, 'a1').includes('null')
     },
     breaks: broken([['src/brief.js', "${lead ? lead + ' ' : ''}", '${lead} ']]),
+    timeout: 60_000,
   })
 
   await s.check('a roll tab’s brief ends with the tell line too', {
@@ -298,6 +311,7 @@ Do b.
       return lastLine(t) === tellLine('boss', 't1')
     },
     breaks: broken([['src/roll.js', '\n\n${askTheLead(lead, tab)}`', '`']]),
+    timeout: 60_000,
   })
 
   await s.check('briefs say it outright: ask the lead, never the human; only a permission dialog, a go or a taste call go to the human', {
@@ -313,6 +327,7 @@ Do b.
       )
     },
     breaks: broken([['src/brief.js', 'A question left in your own pane reaches nobody', 'Questions go in your report']]),
+    timeout: 60_000,
   })
 
   // ---------------------------------------------------------------------------------------------
@@ -330,6 +345,7 @@ Do b.
         "    console.log('\\ndry run — nothing created')",
       ],
     ]),
+    timeout: 60_000,
   })
 
   await s.check('with RIG_LEAD and no lead in config, rig up names that lead; with neither it warns', {
@@ -342,6 +358,7 @@ Do b.
       )
     },
     breaks: broken([['src/inbox.js', 'return cfg.lead || env.RIG_LEAD || null', 'return cfg.lead || null']]),
+    timeout: 60_000,
   })
 
   await s.check('rig up says when the watcher is already armed, instead of printing the command again', {
@@ -356,6 +373,7 @@ Do b.
       return /watcher armed: pid \d+/.test(r.stdout) && !r.stdout.includes('no watcher armed')
     },
     breaks: broken([['src/inbox.js', '    return alive && w.until > now ? w : null', '    return null']]),
+    timeout: 60_000,
   })
 
   await s.check('rig up --watch sets up the crew, then waits as the watcher and exits on the first tell', {
@@ -363,14 +381,14 @@ Do b.
       const inbox = freshInbox()
       const env = baseEnv(inbox)
       const r = fixture(PLAN.replace('A thing.', 'A thing.\n\nUI: none'))
-      const up = rigBg(['up', '--no-launch', '--watch'], r, env, 30_000)
+      const up = rigBg(['up', '--no-launch', '--watch'], r, env, 90_000)
       await armed(inbox, 'boss')
       rigSync(['tell', 'boss', 'a2: question — which port?'], scratch, { ...env, RIG_AGENT_ID: 'a2' })
       const out = await up.done
       return out.code === 0 && out.out.includes('watching: rig inbox boss --wait') && out.out.includes('a2: question — which port?')
     },
     breaks: broken([['src/commands/up.js', "if (watch && args.includes('--watch')) {", 'if (false) {']]),
-    timeout: 40_000,
+    timeout: 120_000,
   })
 
   await s.check('rig up warns when a plan with a UI over rules has no ## Refusals matrix, naming why', {
@@ -384,6 +402,7 @@ Do b.
       )
     },
     breaks: broken([['src/commands/up.js', '  const refusals = refusalsGap(plan)', '  const refusals = null']]),
+    timeout: 60_000,
   })
 
   await s.check('a filled Refusals matrix, or a UI: none line, silences it; the template’s own row does not', {
@@ -406,6 +425,7 @@ Do b.
     breaks: broken([
       ['src/plan.js', "    if (cells.every((c) => /^<.*>$/.test(c) || c === '')) continue // the template's own example\n", ''],
     ]),
+    timeout: 60_000,
   })
 
   await s.check('a plan with no UI, or a UI with no rules, gets no warning', {
@@ -417,6 +437,7 @@ Do b.
       return refusalsGap(cli) === null && refusalsGap(plainUi) === null && /a slice owns src\/components/.test(refusalsGap(uiFiles))
     },
     breaks: broken([['src/plan.js', 'const r = w && sentence.match(RULE_WORDS)?.[0]', 'const r = w']]),
+    timeout: 60_000,
   })
 
   await s.check('a filled matrix reaches the brief; the template’s placeholder row does not', {
@@ -440,6 +461,7 @@ Do b.
     breaks: broken([
       ['src/brief.js', "refusalRows(plan.refusals).length ? section('Refusals (every one has a repair)', plan.refusals) : ''", "''"],
     ]),
+    timeout: 60_000,
   })
 
   // ---------------------------------------------------------------------------------------------
@@ -465,6 +487,7 @@ Do b.
         '  if (prose.match(UI_WORDS) && prose.match(RULE_WORDS)) return `it talks about "${prose.match(UI_WORDS)[0]}"`\n  for (const sentence of sentences(brief)) {',
       ],
     ]),
+    timeout: 60_000,
   })
 
   // 2. Two tells in the same millisecond come back in the order they were written.
@@ -487,6 +510,7 @@ Do b.
     breaks: broken([
       ['src/inbox.js', "`${stamp(now)}-${String(seq++).padStart(6, '0')}-${process.pid}-", '`${stamp(now).slice(0, 15)}-${process.pid}-'],
     ]),
+    timeout: 60_000,
   })
 
   await s.check('two rig tell commands run back to back are read in that order, 10 times', {
@@ -509,7 +533,7 @@ Do b.
         '`${String(9e15 - now.getTime())}-${process.pid}-',
       ],
     ]),
-    timeout: 30_000,
+    timeout: 120_000,
   })
 
   // 3. A fresh default inbox says once that an existing one can be kept, naming no other tool.
@@ -539,6 +563,7 @@ Do b.
       )
     },
     breaks: broken([['src/inbox.js', '  if (env.RIG_INBOX_DIR || cfg.inboxDir) return null\n', '  return null\n']]),
+    timeout: 60_000,
   })
 
   await s.check('inboxDir in config moves the inbox (the note path aside)', {
@@ -551,6 +576,7 @@ Do b.
       return existsSync(join(tmp, 'kept-2', 'boss')) && !existsSync(join(state, 'rig', 'inbox', 'boss'))
     },
     breaks: broken([['src/inbox.js', '  if (cfg.inboxDir) return expandHome(cfg.inboxDir)\n', '']]),
+    timeout: 60_000,
   })
 
   // 4. A message may start with `--`.
@@ -562,6 +588,7 @@ Do b.
       return r.stdout.includes('\n--no-vendor was needed\n')
     },
     breaks: broken([['src/commands/tell.js', '  const words = args\n', "  const words = args.filter((a) => !a.startsWith('--'))\n"]]),
+    timeout: 60_000,
   })
 })
 
