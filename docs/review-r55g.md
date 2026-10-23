@@ -54,3 +54,47 @@ My repros, against `24ce390`'s `src/vendor.js`, with builders from `claude --mod
 Left, low and not blocking: a mixed crew is only seen when `vendor` lists it. With `vendor` unset,
 the launch command names one vendor, and a Codex member briefed through `rig job` is not counted.
 Worth one line in the README beside `vendor`.
+
+## Delta at 2615858 (2026-10-23, r55w)
+
+Read `git show 2615858` (finish.js's waiver and CI check, fold.js's walk, the tests). Read only.
+Its checks at `2615858`, unpacked with `git archive`: gate-final 4/4, 4/4 and 6/6 (the new
+second-vendor suite), gate-finish 20/20 + 3/3, gate-fold 7 passed + 1 unproven. All with 0 void. The
+unproven one, "the folded commits keep the identity from git config", came before this commit.
+
+**#2, a baseline waives only the runs it compared: holds for the host, with one gap on the local
+side.**
+- With `baseline.compared`, the match by host, command and exact `at` is tight.
+- The legacy path, used until r55q writes `compared`, takes any local run of the same command
+  recorded before the baseline. It does not check that the baseline compared that run.
+- A `rig qa <sha> --run "npm test"` from another tab can finish during tab 1's `--baseline` base run.
+  That run is the newest test record, and it was never compared.
+- The waiver then checks only that run's `failures`. My repro, with records written by
+  `recordQa` and `finishChecks` from `2615858`:
+  - a later run with only the known failure, plus a **new VOID check**: `ok — every failure is
+    known on the base`;
+  - a later run with **`failed: 4` but one failure parsed**: `ok`, the same;
+  - a later run with a new failure named: `fail — not known on the base: new break` (correct).
+- Fix:
+  - in the legacy path, refuse a run whose `void` or `unproven` is non-empty, or whose `failed` is
+    more than `failures.length`, and say why;
+  - better, cover a legacy run only when no other test record of that command sits between it and
+    the baseline. Either rule is a three-record check.
+- Medium. It needs a concurrent run, but nothing in the waiver's detail would show it.
+- Also: until r55q ships `compared`, a host failure is never waived, even one the baseline did
+  compare (its `known` says `there`). That fails safe and is documented in r55g's report. It is the
+  one thing left before the host-waiver path can be used.
+
+**#3, the fold walk under rig qa's runner: FIXED.** My repros against `2615858`'s `walkCommits`:
+- `false | cat` exits 1;
+- `exit 3` keeps 3 with its output in the tail;
+- a subshell that ignores TERM is stopped by the 5 s KILL, and the walk waits for it.
+- `fold` is async now. Its only callers are `commands/fold.js` and the tests, and every one awaits
+  it. `finish.js` imports only `foldHolds` and `latestFolds`.
+- Not a finding: a `setsid` child leaves the process group and outlives the limit. That is the same
+  as `rig qa`.
+
+**#4, a CI record counts only for today's command: FIXED.** `run.cmd !== ci.cmd` is checked before
+the exit and the posted status, per host. `ciCommand: null` still turns the gate off. When the test
+and CI commands are one run, both records carry the same `cmd`, so that path still passes. I found
+no way past it.
