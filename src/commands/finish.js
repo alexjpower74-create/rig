@@ -375,17 +375,11 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
   const baselineRun = runOn(root, sha, 'baseline')
   // A waiver is bound to the exact run the comparison read (second-vendor review, 949e12b #2): a
   // local-only "0 new" says nothing about a host run it never saw. r55q's `baseline.compared` names
-  // each run by host, command and record time; an older record without it covers only the local run
-  // with its own command, recorded before it. Either way every failure the run names must be one the
-  // comparison found known on the base, on that run's side.
+  // each run by host, command and record time, and every 5.5 baseline has it. A record without it
+  // waives nothing: the old "same command, recorded before" guess also covered a run from another
+  // tab that finished during the base run and was never compared (r55w's review of 2615858). Every
+  // failure the run names must also be one the comparison found known on the base, on its side.
   const hostOf = (run) => run.host || 'local'
-  const covers = (rec, run) => {
-    if (rec === run) return true // a baseline field on the run itself
-    const b = rec.baseline
-    if (Array.isArray(b.compared))
-      return b.compared.some((c) => (c.host || 'local') === hostOf(run) && c.cmd === run.cmd && c.at === run.at)
-    return hostOf(run) === 'local' && rec.cmd === run.cmd && String(rec.at) >= String(run.at)
-  }
   const waiver = (run) => {
     if (!run || run.exit === 0) return { ok: false }
     if (run.stalled || [124, 137, 143].includes(run.exit)) return { ok: false, why: 'it never finished' }
@@ -393,10 +387,12 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
     const b = rec?.baseline
     if (!b) return { ok: false }
     if (b.complete === false || (b.newFailures || []).length) return { ok: false }
-    if (!covers(rec, run))
+    if (!Array.isArray(b.compared))
+      return { ok: false, why: `the baseline on this sha names no compared run, so it waives none: rerun with --baseline` }
+    if (!b.compared.some((c) => (c.host || 'local') === hostOf(run) && c.cmd === run.cmd && c.at === run.at))
       return { ok: false, why: `the baseline on this sha did not compare this run (${hostOf(run)}, ${run.cmd}): rerun it with --baseline` }
-    const sides = rec === run ? null : hostOf(run) === 'local' ? ['here', 'both'] : ['there', 'both']
-    const known = new Set((b.known || []).filter((k) => !sides || sides.includes(k.where)).map((k) => k.name))
+    const sides = hostOf(run) === 'local' ? ['here', 'both'] : ['there', 'both']
+    const known = new Set((b.known || []).filter((k) => sides.includes(k.where)).map((k) => k.name))
     const names = run.failures || []
     const unknown = names.filter((x) => !known.has(x))
     if (!names.length) return { ok: false, why: 'it named no failure to compare' }
