@@ -9,7 +9,7 @@ import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, chmodSync, cpSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { tellLine } from '../src/brief.js'
 
@@ -106,6 +106,8 @@ function brokenTree(patches) {
 }
 
 let tree = repo
+/** The tree's own module, so a control swaps the code in-process too. */
+const mod = (rel) => import(pathToFileURL(join(tree, rel)).href + `?t=${tree === repo ? 0 : tree}`)
 const broken = (patches) => async () => {
   tree = brokenTree(patches)
   return () => {
@@ -221,20 +223,46 @@ await suite('rig 5.5: rig job watches a pane until it stops', async (s) => {
     ]),
   })
 
-  await s.check('a pane that never finishes hits the deadline: exit 4, DEADLINE named, at the first poll past it', {
+  // The deadline, in two parts. The rule ("stop at the first poll at or past the deadline, no
+  // sooner, no later") is checked on a virtual clock, where load cannot move it: the first version
+  // read it off the fake herdr's log, whose clock starts later than the job's, and went red 4 of 10
+  // times under load while the job was right. The CLI run is held only to exit 4, DEADLINE named,
+  // no sooner than the deadline and inside the plan's 60 s.
+  await s.check('a pane that never finishes hits the deadline: exit 4, DEADLINE named, after 3 s and inside 60 s', {
     assert: async () => {
       setPanes({ p1: pane('idle', [[200, 'working']]) })
       const r = await job(['p1', 'forever', '--deadline', '0.05'], { limit: 60_000 })
-      // Measured on the job's own polls, so load cannot move it: the poll before the last was still
-      // inside the 3 s deadline, the last one was past it. It stopped at the first poll past the
-      // deadline, not one later. The wall time is held only to the plan's 60 s.
-      const { at, polls } = pollsAfterPrompt()
-      const last = polls.at(-1) - at
-      const before = polls.at(-2) - at
-      if (!(before < 3000 && last >= 3000)) throw new Error(`polls at ${polls.map((t) => t - at).join(', ')} ms`)
-      return expectCode(r, 4, () => /DEADLINE \(0\.05 min\) passed/.test(r.out) && r.ms < 60_000)
+      return expectCode(r, 4, () => /DEADLINE \(0\.05 min\) passed/.test(r.out) && r.ms >= 3000 && r.ms < 60_000)
     },
-    breaks: broken([['src/commands/job.js', 'if (Date.now() >= until) {', 'if (false) {']]),
+    breaks: broken([['src/commands/job.js', '    if (clock() >= until) {', '    if (false) {']]),
+    timeout: 70_000,
+  })
+
+  await s.check('on a virtual clock: a turn that never ends stops at the first poll at or past the deadline', {
+    assert: async () => {
+      const { waitForTurn } = await mod('src/commands/job.js')
+      let t = 0
+      let reads = 0
+      const r = await waitForTurn(
+        { status: 'idle', seq: 10 },
+        {
+          read: () => {
+            if (++reads > 100_000) throw new Error('still polling after 100000 reads: no deadline')
+            return { status: 'working', seq: 11 }
+          },
+          nap: (ms) => new Promise((ok) => setImmediate(() => ok((t += ms)))),
+          clock: () => t,
+          pollMs: 100,
+          start: 0,
+          until: 3000,
+          startMs: 60_000,
+        },
+      )
+      if (!(r.timedOut && !r.finished)) throw new Error(JSON.stringify(r))
+      if (t !== 3000 || reads !== 30) throw new Error(`stopped at ${t} ms after ${reads} reads`)
+      return true
+    },
+    breaks: broken([['src/commands/job.js', '    if (clock() >= until) {', '    if (false) {']]),
     timeout: 30_000,
   })
 
