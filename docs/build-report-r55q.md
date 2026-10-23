@@ -154,6 +154,17 @@ Grading:
     exit 75 with that error. A later host stage does not start.
   - *A refusal by a run's token names the command that frees it*:
     `rig lease host:<h> --by <token> --release`.
+- **The gate run on f95203e: `qa-host-real` was red under load, green alone.** The cause was a
+  product bug. A stalled host run exits 124 before `runOnHost` has come back (ssh still going), so
+  the in-flight guard left the lease to expire. The stall check's control run was then refused and
+  read the old stalled record (VOID), and the CI and clipboard checks were refused (FAIL in 54 ms).
+  I reproduced it under a CPU burn: 1 run in 5 left its lease held. rig qa now waits up to 15 s for
+  the host runs it stopped to come back, then gives the lease back (`hostRunsSettled`); under the
+  same burn 5 of 5 were free.
+  The file is now hermetic. Each check after the lease ones has a fake host of its own. The stall
+  check requires exit 124 and has no wall-clock bound, and its control writes every 0.2 s. A new
+  check uses an ssh that is slow to die on TERM, so the lease case is red without the fix every
+  time, not only under load (its control: an ssh that outlives the 15 s bound).
 
 ## Decided
 
