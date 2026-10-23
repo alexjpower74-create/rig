@@ -87,6 +87,11 @@ async function stops(tag) {
   return bad
 }
 /** The host's sh as dash: Debian's and Ubuntu's /bin/sh, and /bin/dash on macOS. */
+const NO_SETSID = ['if command -v setsid >/dev/null 2>&1; then', 'if command -v rig-no-setsid >/dev/null 2>&1; then']
+const NO_GROUP = [
+  ['  setsid $run "$cmd" </dev/null &', '  $run "$cmd" </dev/null &'],
+  ["bash -c 'set -m; f=$1;", "bash -c 'f=$1;"],
+]
 const DASH = ['/bin/dash', '/usr/bin/dash'].find((p) => existsSync(p))
 const withShell = async (shell, fn) => {
   const keep = process.env.FAKE_SSH_SHELL
@@ -282,7 +287,7 @@ await suite('machines: the second-machine runner', async (s) => {
     unit: 'ms',
     breaks: swap([
       [
-        "code=$?\n# Whatever the command left running (a server still listening) holds ssh's pipes open: stop it.\nkill -TERM -$pid 2>/dev/null\n",
+        "code=$?\n# Whatever the command left running (a server still listening) holds ssh's pipes open: stop it.\nkill -TERM -$grp 2>/dev/null\n",
         'code=$?\n',
       ],
     ]),
@@ -311,8 +316,28 @@ await suite('machines: the second-machine runner', async (s) => {
     atMost: 5000,
     unit: 'ms',
     // ssh killed here, nothing on the host watching for it: the sleeper lives on to its end.
-    breaks: swap([['( cat >/dev/null; kill -TERM -$pid 2>/dev/null; sleep 5; kill -KILL -$pid 2>/dev/null ) >/dev/null 2>&1 &\n', '']]),
+    breaks: swap([['( while read -r _; do :; done; g=$(group); kill -TERM -$g; sleep 5; kill -KILL -$g ) <&3 >/dev/null 2>&1 &\n', '']]),
     timeout: 60_000,
+  })
+
+  // macOS has no setsid: there the runner gives the command its group through bash's job control.
+  let macSwaps = [NO_SETSID]
+  await s.check("with no setsid (macOS), bash's job control gives the command its group: a limit, a leftover and an abort each stop it", {
+    assert: async () => {
+      const keep = R
+      R = await mutant('remote.js', macSwaps)
+      try {
+        return (await stops('nosetsid')).length === 0
+      } finally {
+        R = keep
+      }
+    },
+    // The control: that bash without set -m, so the command stays in the runner's own group.
+    breaks: () => {
+      macSwaps = [NO_SETSID, NO_GROUP[1]]
+      return () => (macSwaps = [NO_SETSID])
+    },
+    timeout: 120_000,
   })
 
   // Found by GitHub's Ubuntu runner after 5.5.0: dash, Debian's and Ubuntu's sh, turns job control
@@ -321,7 +346,8 @@ await suite('machines: the second-machine runner', async (s) => {
   if (DASH)
     await s.check('under dash as the host sh, a limit, a leftover process and an abort each stop the run on the host', {
       assert: async () => (await withShell(DASH, () => stops('dash'))).length === 0,
-      breaks: swap([['set -m\n$run "$cmd" </dev/null &', '$run "$cmd" </dev/null &']]),
+      // The control: no process group of its own, by either way the runner makes one.
+      breaks: swap(NO_GROUP),
       timeout: 120_000,
     })
   else console.log('        no dash on this machine: the dash check runs where one is (Debian, Ubuntu, macOS)')

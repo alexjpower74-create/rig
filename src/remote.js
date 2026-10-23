@@ -171,13 +171,41 @@ STUB
   PATH="$stubs:$PATH"
 fi
 if command -v bash >/dev/null 2>&1; then run="bash -o pipefail -c"; else run="sh -c"; fi
-set -m
-$run "$cmd" </dev/null &
-pid=$!
-# Only its stdin is ssh's: holding ssh's output open would keep the connection up after the run.
-( cat >/dev/null; kill -TERM -$pid 2>/dev/null; sleep 5; kill -KILL -$pid 2>/dev/null ) >/dev/null 2>&1 &
+# The command runs in a process group of its own ($grp), so one kill stops all of it, leftovers too.
+# set -m is not enough: dash (Debian's and Ubuntu's sh, /bin/dash on macOS) turns job control off
+# with no tty, the command stays in our group, and kill -TERM -$pid kills nothing. So setsid where
+# there is one (Linux), else bash's job control, which needs no tty (macOS has /bin/bash), else set -m.
+exec 3<&0
+grpfile="$PWD/.git/rig-pgid"
+rm -f "$grpfile"
+if command -v setsid >/dev/null 2>&1; then
+  setsid $run "$cmd" </dev/null &
+  pid=$!
+  echo $pid > "$grpfile"
+elif command -v bash >/dev/null 2>&1; then
+  bash -c 'set -m; f=$1; shift; "$@" </dev/null & echo $! > "$f"; wait $!' rig-qa "$grpfile" $run "$cmd" &
+  pid=$!
+else
+  set -m
+  $run "$cmd" </dev/null &
+  pid=$!
+  set +m
+  echo $pid > "$grpfile"
+fi
+# The group, once the launcher has written it down (bash's within a moment of starting).
+group() {
+  n=0
+  while [ ! -s "$grpfile" ] && [ $n -lt 50 ]; do sleep 0.1 2>/dev/null || sleep 1; n=$((n + 1)); done
+  cat "$grpfile" 2>/dev/null || echo $pid
+}
+# The lifeline starts at once, so an abort in the first moment is not missed. It reads ssh's stdin
+# (fd 3: with no job control a background list's own stdin is /dev/null) with the shell's own read,
+# so killing it leaves no cat behind. Its output is not ssh's: holding that open would keep the
+# connection up after the run.
+( while read -r _; do :; done; g=$(group); kill -TERM -$g; sleep 5; kill -KILL -$g ) <&3 >/dev/null 2>&1 &
 lifeline=$!
-set +m
+exec 3<&-
+grp=$(group)
 flag="$PWD/.git/rig-timed-out"
 rm -f "$flag"
 if [ "$limit" -gt 0 ]; then
@@ -185,14 +213,15 @@ if [ "$limit" -gt 0 ]; then
   (
     i=0
     while [ $i -lt "$limit" ]; do sleep 1; kill -0 $pid 2>/dev/null || exit 0; i=$((i + 1)); done
-    : > "$flag"; kill -TERM -$pid 2>/dev/null; sleep 5; kill -KILL -$pid 2>/dev/null
+    : > "$flag"; kill -TERM -$grp 2>/dev/null; sleep 5; kill -KILL -$grp 2>/dev/null
   ) </dev/null >/dev/null 2>&1 &
 fi
 wait $pid
 code=$?
 # Whatever the command left running (a server still listening) holds ssh's pipes open: stop it.
-kill -TERM -$pid 2>/dev/null
-kill -TERM -$lifeline 2>/dev/null
+kill -TERM -$grp 2>/dev/null
+kill -TERM $lifeline 2>/dev/null
+rm -f "$grpfile"
 if [ -n "$calls" ]; then
   sed -n "s/^/rig-qa: stub /p" "$calls" >&2
 fi
