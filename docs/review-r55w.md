@@ -89,3 +89,32 @@ Left open, all low; none needs to block the merge:
   A UTC stamp would close that.
 - Two processes writing in the same millisecond sort by counter and then by pid, not by time. Two separate
   CLI runs can't land within one millisecond, so I'm only noting it.
+
+## Delta at 5c09f73 (2026-10-23, by r55u)
+Scope: r55w's code commits after my "Verified at 44d006c". 9a1c4f2 was in that verification. This
+delta covers d90db9e, 1598920 and 5c09f73, each read as its own diff (`git show <sha>`). I ran
+`test/watch-job.test.js` (20 passed, 0 void) and `test/watch-inbox.test.js` (27 passed, 0 void) at the
+merged main (7043686), which carries all three. Read-only: nothing of r55w's was changed.
+
+- **d90db9e** (`job.js` prints its poll interval; the tests measure the job's own polls). Sound. I checked
+  the one place it could repeat 1598920's mistake: the clamp check takes its gaps from the fake herdr's
+  own timestamps, which are stamped late under load. That cannot shorten a gap. `rig job` calls herdr
+  synchronously, so each call's start delay falls inside the gap it begins, and the 5 s sleep is always
+  between two stamps. The test comment ("load lengthens it and can never shorten it") is right. The bar
+  (no gap under 4.9 s) goes red on a 60 s clamp, as its control shows.
+- **1598920** (`waitForTurn()` with an injectable sleep and clock). A faithful extraction: the same
+  stale-status rules, the same order of checks (finished, then never-started, then deadline). Only
+  `nap`/`clock` replace `sleep`/`Date.now`, and production passes the real ones by default. The
+  virtual-clock check (30 polls, a stop at 3000 ms on a 3 s deadline) tests the rule without any
+  wall time in it. That is the right fix for the 4-in-10 red under load average 27.
+- **5c09f73** (the example lead name in `checkLead`'s refusal is generic). Correct for a public repo.
+
+No medium findings. Two notes for 5.5.1, both low:
+- The CLI deadline check now accepts anything from 3 s to 60 s on a 3 s deadline, so on its own it would
+  not catch a job that overran its deadline by up to 57 s. The virtual-clock check covers the rule, so
+  nothing is unguarded today. If `waitForTurn` is ever bypassed, the CLI check alone would not notice.
+  An assertion that `job` calls `waitForTurn` (or a log line naming the deadline it stopped at) would
+  tie the two.
+- `rig job` computes the minutes it prints with `Date.now()`, while `waitForTurn` uses the injected
+  clock. This is harmless in production, but a future virtual-clock check of the printed minutes would
+  read wall time. Passing the end time back from `waitForTurn` would keep one clock.
