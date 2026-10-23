@@ -209,3 +209,18 @@ Looked at and fine:
 - The tap goes out as the swipe ends, as the bug needs.
 
 **Two low findings; neither blocks the Mac fix, which reads right.**
+
+## Verified at 67a194a (2026-10-23)
+
+I read 67a194a (`test/taste.test.js` only). Then I ran `test/taste.test.js` at 67a194a in a clean
+detached worktree on Linux: **41 passed, 0 failed, 0 void, 0 unproven**, exit 0. The swipe-tap
+control still goes red for the right reason (`B on disk: nothing (control: the fling ate the tap)`).
+
+| Finding | Verdict | How I checked |
+|---|---|---|
+| 1. the calibration checked an unused helper | **fixed** | `swallows()` and its plain page are gone. The new check, "the fling detector: on the real board a tap after a swipe reads as landed", runs `swipeThenTap()`, the same function `flingHere` and every control run read. Its control is a page whose click counter never counts, so no tap can read as landed. It passes, so it was seen red. |
+| 2. a control swipe that missed B graded red | **fixed** | In the control, `!r.reachedB` now sets up again, as `r.landed` does, and three misses return `allMissed()`, which is pass, so VOID. The real run still throws (FAIL). The new meta-check, "a swipe-tap control whose swipes never reached comp B grades VOID, never PASS", forces every control swipe to miss B in an inner suite and requires VOID. Its control is b934c41's throw on a missed B. It passes, so it was seen red. |
+
+Note, not blocking: the meta-check's control models b934c41's throw through the `allMissed` hook,
+rather than loading b934c41's code. The behaviour is the same, so it is fine. **Both findings
+verified fixed; nothing further from r55m.**
