@@ -257,7 +257,13 @@ async function press(page, input, selector, { touch }) {
   return waitFor(async () => (await clicks(page)) > before)
 }
 const clicks = (page) => page.eval('window.__rigClicks || 0')
-const CLICK_COUNTER = `window.__rigClicks = 0; window.addEventListener('click', () => { window.__rigClicks++ }, true)`
+// Each click is also logged with the card the board showed when it arrived, so a check can know a tap
+// landed while the board was still busy with the one before, rather than hope it did.
+const CLICK_COUNTER = `window.__rigClicks = 0; window.__rigClickLog = []
+window.addEventListener('click', () => {
+  window.__rigClicks++
+  window.__rigClickLog.push(document.getElementById('progress')?.textContent || '')
+}, true)`
 
 /** One key, as a keyboard sends it: key, code and key code set, down then up. */
 async function pressKey(page, key) {
@@ -830,22 +836,38 @@ await suite('rig taste', async (s) => {
 
   await s.check('a fast second tap is queued onto the next card, never dropped', {
     assert: async () => {
-      const b = await board()
-      const page = await openBoard(browser, b.url, VIEWPORTS.desktop)
-      const input = countInput(page)
-      try {
-        const p5 = await pointOn(page, '.rate[data-rating="5"]')
-        const p3 = await pointOn(page, '.rate[data-rating="3"]')
-        await input.click(p5.x, p5.y)
-        await input.click(p3.x, p3.y) // inside the 160 ms the board takes to move on
-        await waitFor(async () => (await progress(page)) === '3 of 6')
-        await saved(page)
-        const rd = newest(ratingsJson(b.root))
-        return rd.ratings?.[b.round.refs[0].id]?.rating === 5 && rd.ratings?.[b.round.refs[1].id]?.rating === 3
-      } finally {
-        await page.close()
-        await b.stop()
+      // The second click must land while the board is still moving on from the first (on card 1),
+      // or the check measures nothing. Both are sent at once, and the page's click log says where
+      // the second one landed; a set-up that missed (a loaded machine) is set up again, never scored.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const b = await board()
+        const page = await openBoard(browser, b.url, VIEWPORTS.desktop)
+        try {
+          const p5 = await pointOn(page, '.rate[data-rating="5"]')
+          const p3 = await pointOn(page, '.rate[data-rating="3"]')
+          const at = (p) =>
+            [
+              ['mouseMoved', 'none'],
+              ['mousePressed', 'left'],
+              ['mouseReleased', 'left'],
+            ].map(([type, button]) => page.send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button, clickCount: 1 }))
+          await Promise.all([...at(p5), ...at(p3)])
+          await waitFor(async () => (await clicks(page)) >= 2)
+          const log = await page.eval('window.__rigClickLog')
+          if (log[1] !== '1 of 6') {
+            console.log(`        attempt ${attempt}: the second tap landed on "${log[1]}", after the board moved on; setting up again`)
+            continue
+          }
+          await waitFor(async () => (await progress(page)) === '3 of 6')
+          await saved(page)
+          const rd = newest(ratingsJson(b.root))
+          return rd.ratings?.[b.round.refs[0].id]?.rating === 5 && rd.ratings?.[b.round.refs[1].id]?.rating === 3
+        } finally {
+          await page.close()
+          await b.stop()
+        }
       }
+      throw new Error('could not land a second tap while the board was busy in 3 tries')
     },
     // The control: the first draft's rule, a tap inside the busy window thrown away.
     breaks: pageBreak(`(() => {
@@ -867,9 +889,11 @@ await suite('rig taste', async (s) => {
           const before = await progress(page)
           await pressKey(page, k)
           await frame(page)
-          // The key is answered in its own keydown (the rating marked) or not at all.
-          const marked = await page.eval(`!!document.querySelector('.rate[data-rating="${k}"][aria-pressed=true]')`)
-          if (!marked || !(await waitFor(async () => (await progress(page)) !== before))) break
+          // The key is answered in its own keydown (the rating marked) or not at all. Under load the
+          // frame can come after the board has already moved on, which answers it too.
+          const moved = async () => (await progress(page)) !== before
+          const marked = (await moved()) || (await page.eval(`!!document.querySelector('.rate[data-rating="${k}"][aria-pressed=true]')`))
+          if (!marked || !(await waitFor(moved))) break
         }
         await saved(page)
         const rd = newest(ratingsJson(b.root))
