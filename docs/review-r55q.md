@@ -101,3 +101,41 @@ harness parser now takes `FAIL` lines only, which ends the "1 failing" line r55g
 2. **Nit:** `runHost` keeps every streamed byte in `all` for the life of the run. A chatty suite on
    the host holds its whole output in memory twice (`seen`'s tail is bounded, `all` is not); writing
    to the log fd as it streams would bound it. Not blocking.
+
+## Delta at 6a6cedd (2026-10-23)
+
+r55q's commits since `6912595`: `70fdf59` (a red run with no FAIL line tallies as `?`; each run holds
+the host lease under its own token, Zyro's #1 on 949e12b) and `6a6cedd` (`baseline.compared`). Read
+on `rig/r55q` (main is at 949e12b and has neither); repros in a scratch merge of `rig/r55q` and
+`rig/r55g` (2615858), with leases under a scratch `XDG_STATE_HOME`. Read only.
+
+The lease token holds. Two tokens for one label differ (`rig-r55g.12f74fc8`, `rig-r55g.f590fb1a`).
+While the first holds the lease, the second is refused, and so is the bare label (`rig-r55g`), which
+used to renew it. A stranger's release and the bare label's release are both refused, naming the
+holder. The holder's own renewal is `renewed: true`. After it expires, another token takes it over
+(`tookOver` names the first), and from then on the first's renewal and its release are refused.
+`compared` matches the records exactly: Zyro's baseline repro is still refused by r55g's finish on
+the merge ("did not compare this run (fake, …)").
+
+1. **A host failure that the base also has on the host reads as new.** `baselineStage` runs the base
+   only here. A failure that shows only on the second machine, at the head and at the base alike, is
+   then in the host head's list and missing from the base's, so it is new. Repro: a command that
+   prints `FAIL  remote regression` and exits 1 only on the host, at both shas. `rig qa <head>
+   --baseline <base>` with `qaHost: fake` exits 1, and the baseline says `1 new: remote regression`.
+   The opposite case, a host failure counted as known because the *local* base failed the same test,
+   is a loose waiver. A second OS is where the platform-only failures live, so "0 new" on the host
+   needs the base run on the host too, or the record should say the host side was not compared.
+   Medium. Finish fails either way, so this blocks nothing unsafe; it only costs a waiver the host
+   should get.
+2. **A renewal refused mid-run is only printed.** If a run's lease lapses (the process was suspended
+   past its TTL) and another run takes it, the first run's 30-minute `renew()` is refused (see above).
+   `qa.js` prints `could not renew the lease` and keeps running on the host beside the new holder,
+   which is the concurrent use the token was added to stop. Check: on a refused renewal, mark the run
+   so it is not recorded green, or stop it, the same way a stall stops a run. Low: it needs a suspend
+   longer than the TTL.
+3. **Nit: an interrupted run locks its own session out.** On Ctrl-C during a host stage the release is
+   skipped on purpose (`inFlight`). The token is random, so the same session's next run is now refused
+   for up to the TTL (120 min with no limit), where before it renewed. That is the safe choice, but the
+   refusal's advice ("Wait for it, or run here only with --no-host") could also say this is the
+   session's own earlier run, and that `rig lease host:<h> --by <token> --release` frees it once that
+   run is known to be gone.
