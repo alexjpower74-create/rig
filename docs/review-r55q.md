@@ -168,3 +168,34 @@ The scripts were scratch, not committed.
      gone" keeps it honest).
    - Also there: the host prints `the run on fake did not start` for a run that started and was
      stopped.
+
+## Delta at 363c011 (2026-10-23)
+
+r55q's `363c011`: before giving the host lease back, `rig qa` now waits up to 15 s for the host runs it
+stopped to come back (`hostRunsSettled`), and `qa-host-real` gives each check a fake host of its own.
+Read on `rig/r55q`. The repro used a detached checkout of `363c011` with the fake-ssh kit, and a
+wrapper ssh, like r55q's own, that takes 4 s to die on TERM. Read only.
+
+Holds:
+- **A host run that never comes back.** The wait is bounded at 15 s. After that `inFlight` is still
+  above 0, the release is skipped, and the lease expires at its TTL. That is the safe side, as before.
+- **A lease taken over meanwhile.** The release goes out under this run's own token. With another
+  holder it is refused (`NOTYOURS`, shown in my lease repro at 6a6cedd), so nothing of theirs is freed.
+  A lost lease has already cleared the renewal timer.
+- **Ctrl-C during the wait.** Read, not run. The SIGINT handler exits 130, and the exit hook's release
+  sees `inFlight > 0`. The lease is left to expire: the documented nit at 6a6cedd, now with the release
+  command in the refusal.
+- **`--repeat`** also waits before it exits.
+
+1. **5.5.1 note (low, not introduced here): a later host stage starts while the stalled one is still
+   dying, in the same session checkout.** The wait runs only at the end of `rig qa`. After a host stall
+   resolves the test stage (exit 124), the CI stage, or the base run on the host, starts a new
+   `runOnHost` at once. It runs in the same per-label checkout and test DB, while the stalled run's ssh
+   is still alive.
+   - Repro: `qaHost: fake`, a host test command that prints once and sleeps, `--stall 0.05`, a
+     `ciCommand` that stamps its start on the host, and the 4 s slow ssh. Exit 124. The stalled ssh died
+     at +7.4 s; the host CI started at +3.5 s, an overlap of about 4 s.
+   - The run is already red (124), so the gate is not fooled. But the host CI record on that sha may
+     have run beside a dying suite.
+   - Check: `await hostRunsSettled()` before each later host stage too. If it times out, skip the
+     remaining host stages and say why.
