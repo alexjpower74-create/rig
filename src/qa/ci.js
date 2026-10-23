@@ -90,7 +90,8 @@ export function planSeeds(n, listed = [], rand = () => Math.floor(Math.random() 
 
 /**
  * The command with the seed passed the way its runner takes one, for runners that have a seed:
- * node --test (--test-random-seed, which also turns on --test-randomize), Jest (--seed), Vitest
+ * node --test (--test-random-seed, which also turns on --test-randomize, where that node has it),
+ * Jest (--seed), Vitest
  * (--sequence.seed with --sequence.shuffle), rspec (--seed). Anything else gets RIG_SEED only.
  * Only the leading word decides (after npx / bunx / bundle exec), so a seed is never appended to a
  * pipeline or to `npm test`, whose arguments may go nowhere.
@@ -103,11 +104,15 @@ export function withSeed(cmd, seed) {
   if (['npx', 'bunx', 'pnpx'].includes(words[0])) i = 1
   else if (words[0] === 'bundle' && words[1] === 'exec') i = 2
   const tool = (words[i] ?? '').split('/').pop()
-  if (tool === 'node' && words.includes('--test'))
-    return {
-      cmd: `${words.slice(0, i + 1).join(' ')} --test-random-seed=${seed} ${words.slice(i + 1).join(' ')}`.trim(),
-      how: 'node --test-random-seed',
-    }
+  // Node 22 (the oldest the rig supports) has no --test-random-seed and refuses to start with it,
+  // so the flag goes in only when the node that runs the command takes it. The command asks its own
+  // node, on whichever machine runs it: a host may have another node than this one. RIG_SEED is
+  // always set. No backslash and no single quote: the command crosses ssh and a login shell.
+  if (tool === 'node' && words.includes('--test')) {
+    const node = words.slice(0, i + 1).join(' ')
+    const flag = `$(${node} --test-random-seed=1 -e 0 >/dev/null 2>&1 && echo --test-random-seed=${seed})`
+    return { cmd: `${node} ${flag} ${words.slice(i + 1).join(' ')}`.trim(), how: 'node --test-random-seed' }
+  }
   if (tool === 'jest') return { cmd: `${cmd} --seed=${seed}`, how: 'jest --seed' }
   if (tool === 'vitest') return { cmd: `${cmd} --sequence.shuffle --sequence.seed=${seed}`, how: 'vitest --sequence.seed' }
   if (tool === 'rspec') return { cmd: `${cmd} --seed ${seed}`, how: 'rspec --seed' }
