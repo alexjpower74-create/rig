@@ -267,6 +267,9 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       const rec = last(flakyRepo, 'repeat')
       return (
         r.status === 1 &&
+        // each seed failed on the spec's own assertion, not on a flag the node does not take
+        JSON.stringify(rec.failures) === '["settles in time"]' &&
+        !/bad option/.test(r.out) &&
         JSON.stringify(rec.repeat.failedSeeds) === '["7","9"]' &&
         rec.repeat.how === 'node --test-random-seed' &&
         /--test-random-seed=7/.test(r.out) &&
@@ -289,12 +292,14 @@ test('settles in time', () => { if (Number(process.env.RIG_SEED) % 2) throw new 
       const r = rigQa(flakyRepo, ['HEAD', '--repeat', '3', '--seeds', greenSeeds, '--run', 'node --test test/flaky.test.js'])
       const { lastQaOn } = await import('../src/qalog.js')
       const sha = git(['rev-parse', 'HEAD'], flakyRepo)
-      return (
+      const ok =
         r.status === 0 &&
         /3 of 3 green/.test(r.out) &&
         lastQaOn(flakyRepo, sha, 'test') === null &&
         lastQaOn(flakyRepo, sha, 'repeat')?.exit === 0
-      )
+      // CI on Node 22 showed this FAIL with no reason: say what the run printed.
+      if (!ok) throw new Error(`exit ${r.status}\n${r.out.slice(-800)}`)
+      return ok
     },
     // One odd seed in the list: not N green.
     breaks: () => {

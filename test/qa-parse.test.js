@@ -159,7 +159,11 @@ test('seeds: listed ones always run, and the flag goes only to runners that take
     planSeeds(3, ['7'], () => ++n),
     ['7', '1', '2'],
   )
-  assert.equal(withSeed('node --test test/a.test.js', 5).cmd, 'node --test-random-seed=5 --test test/a.test.js')
+  // node's flag only where that node takes it (Node 22 refuses to start with it); never a backslash
+  // or a single quote, which the trip over ssh and a login shell would change.
+  const nodeSeed = withSeed('node --test test/a.test.js', 5).cmd
+  assert.equal(nodeSeed, 'node $(node --test-random-seed=1 -e 0 >/dev/null 2>&1 && echo --test-random-seed=5) --test test/a.test.js')
+  assert.ok(!/[\\']/.test(nodeSeed))
   assert.equal(withSeed('npx jest a.test.js', 5).cmd, 'npx jest a.test.js --seed=5')
   assert.equal(withSeed('bundle exec rspec spec/a_spec.rb', 5).cmd, 'bundle exec rspec spec/a_spec.rb --seed 5')
   assert.equal(withSeed('npm test', 5).how, 'RIG_SEED')

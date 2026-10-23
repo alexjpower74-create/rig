@@ -637,7 +637,7 @@ async function repeatRuns(ctx, args, { n, seeds: listed }) {
   const how = withSeed(cmd, seeds[0]).how
   console.log(`\nrepeat: ${seeds.length} run${seeds.length === 1 ? '' : 's'} of ${cmd}`)
   console.log(
-    `  seeds ${seeds.join(', ')}${listed.length ? ` (listed: ${listed.join(', ')})` : ''}; passed as RIG_SEED${how === 'RIG_SEED' ? '' : ` and ${how}`}`,
+    `  seeds ${seeds.join(', ')}${listed.length ? ` (listed: ${listed.join(', ')})` : ''}; passed as RIG_SEED${how === 'RIG_SEED' ? '' : ` and ${how}`}${how === 'node --test-random-seed' ? ' where that node takes it (Node 22 does not)' : ''}`,
   )
   const series = async (machine) => {
     const out = []
