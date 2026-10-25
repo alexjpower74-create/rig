@@ -12,6 +12,8 @@
   people's repos are staged; the owner presses send.
 - **Tests that cannot lie.** Every new check is shown to go red once. A bug that reached a person gets
   a test that fails without the fix. Real input and hit-tests for anything a browser shows.
+- **Test what you touched.** Agents run only the tests their change touches; the whole suite runs once,
+  on the final sha, before merge or ship. No repeated seeds or triple runs unless the plan asks.
 - **Fresh eyes before done.** Medium and big jobs get a review by someone who didn't write the code.
 - **Review before merge:** no slice merges without a review file on base (`docs/review-<id>.md`).
 - **After `npm test`, the tree is clean:** a test that writes a tracked file untracks it or restores it.

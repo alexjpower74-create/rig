@@ -168,6 +168,10 @@ they win. In your report, name the principles behind them that you designed to.
    prints. Always give the sha: without one, \`rig qa\` pins the MAIN checkout's branch, not yours.
    Don't pipe a test run through \`tail\` or \`head\` and then read the exit code: write the
    output to a file instead. Your own working tree is half-finished by definition.
+   **Test what you touched.** While you build, run only the tests your change touches: the files
+   you changed, their direct tests and your feature's own suite. The lead runs the whole suite ONCE
+   on the final sha before merge or ship, as the safety net. No repeated seeds or triple runs unless
+   the plan asks for them; put that time into tests for the edge cases instead.
 6. **Fresh eyes before done.** Your tests share your blind spots, and every real defect crosses a
    boundary between two people's work. Ask for a review of your diff early (\`rig review ${agent.id}\`),
    while it is still cheap to change, and review others' diffs when asked: read-only, findings only.

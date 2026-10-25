@@ -56,7 +56,7 @@ per refusal. No screen, or no rules behind it? Replace this section with the lin
 <small (one agent) · medium (one builder plus a fresh-eyes reviewer) · big (a crew of slices)>
 
 ## Checks
-<how "done" is proved: which suites, which must be shown to go red once, which screens get screenshots>
+<how "done" is proved: the tests each slice's change touches, which must be shown to go red once, which screens get screenshots; plus ONE whole-suite run on the final sha>
 Negative controls: <the one command whose run proves the checks can go red, e.g. npm run demo; rig finish wants it green on the final sha>
 
 ## Budget and autonomy
@@ -75,6 +75,9 @@ Negative controls: <the one command whose run proves the checks can go red, e.g.
 - Commit only your own paths: `git commit -- <paths>`.
 - Never grade the shared tree. Numbers come from a QA worktree pinned to a commit:
   `rig qa <sha> --run "<tests>"`.
+- Test what you touched: run only the tests your change touches while you build. The lead runs the
+  whole suite once on the final sha before merge, as the safety net. No repeated seeds or triple runs
+  unless this plan asks for them.
 - A check that cannot fail measured nothing. Before you call something green, say what would
   make it red — and prove it by making it red once.
 - Stop only what you started: never kill a server by name or free a port you don't own.

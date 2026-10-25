@@ -973,6 +973,30 @@ await suite('rig 5.0, the creative prompt in every brief', async (s) => {
       }
     },
   })
+  // ------------------------------------------------------------------------------------------------
+  // 5.5.2: test what you touched. Every slice brief and both templates say agents run only the tests
+  // their change touches and the whole suite runs once on the final sha. Red on 5.5.1 (HEAD~ text).
+  {
+    const plan = parsePlan(FIVE)
+    const rule = /Test what you touched/i
+    const once = /whole suite (runs )?once/i
+    let brief = (a) => briefFor(plan, a, ctx())
+    let template = (name) => readFileSync(join(repoRoot, 'templates', name), 'utf8')
+    await s.check('slice briefs and the PLAN and AGENTS templates carry the test-what-you-touched rule', {
+      assert: async () =>
+        plan.agents.every((a) => rule.test(brief(a)) && once.test(brief(a))) &&
+        ['PLAN.md', 'AGENTS.md'].every((n) => rule.test(template(n)) && once.test(template(n))),
+      breaks: async () => {
+        const old = (path) => execFileSync('git', ['-C', repoRoot, 'show', `7c9dddb:${path}`], { encoding: 'utf8' })
+        brief = (a) => briefFor(plan, a, ctx()).replace(/\*\*Test what you touched\.\*\*[\s\S]*?edge cases instead\.\n/, '')
+        template = (name) => old(`templates/${name}`)
+        return () => {
+          brief = (a) => briefFor(plan, a, ctx())
+          template = (name) => readFileSync(join(repoRoot, 'templates', name), 'utf8')
+        }
+      },
+    })
+  }
 })
 
 rmSync(tmp, { recursive: true, force: true })

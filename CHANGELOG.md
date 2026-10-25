@@ -1,5 +1,17 @@
 # Changelog
 
+## 5.5.2 — test what you touched
+
+- **What changes:** every slice brief, the PLAN template (Rules and Checks) and the AGENTS template now
+  say it plainly: while building, an agent runs only the tests its change touches (the files it changed,
+  their direct tests, its feature's own suite). The lead runs the whole suite ONCE on the final sha before
+  merge or ship, as the safety net. No repeated seeds or triple runs unless the plan asks for them; that
+  time goes into tests for the edge cases instead.
+- **Why:** repeated whole-suite runs cost hours per round and still missed the bugs that mattered; a
+  single full run at the end, plus edge-case tests where the change lives, catches more for less.
+- **Check:** `brief-five` asserts the rule in every slice brief and both templates, and goes red on the
+  5.5.1 text.
+
 ## 5.5.1 — a host run stops on Debian and Ubuntu too
 
 - **What went wrong:** GitHub's Ubuntu runner went red on three second-machine checks after 5.5.0
