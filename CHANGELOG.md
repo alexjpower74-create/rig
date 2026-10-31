@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased — the Herdr desktop app
+## 5.6.0 — the Herdr desktop app
 
 - **What changes:** the rig drives the Herdr desktop app. In a terminal with `HC_TERMINAL_ID` set,
   `terminal: auto` picks a new backend (`src/hc.js`): `rig up`, `rig roll up` and `rig review
-  --launch` open one tab per slice in the CURRENT space with `herdr-app do tab.new` (named with the
-  slice id, in its worktree, pre-trusted, renamed back if the agent retitles it); `rig status`,
+  --launch` open one tab per slice in the CURRENT space (named with the slice id, in its worktree,
+  pre-trusted, renamed back if the agent retitles it) WITHOUT moving the person's view: the terminal
+  starts through `hc run` labelled with the space and a fresh tab id, never `herdr-app do tab.new`,
+  which jumps the window to the new tab; `rig status`,
   `rig rebase` and the blocked scan read agent state from `hc`; `rig job` briefs with `hc send` and
   reads hc's `turn` as the completion count; `rig down` closes only the plan's slice tabs in that
   space. Codex launch lines get `--no-daemon`. Force it with `"terminal": "hc"` (or `"herdr-app"`).
@@ -13,7 +15,8 @@
   saw no herdr and fell back to tmux.
 - **Unchanged:** terminal herdr (`HERDR_ENV=1`) and tmux work exactly as before. `HC_TERMINAL_ID`
   wins when both are set.
-- **Checks:** `test/hc.test.js` (18 checks, each with a negative control) runs against a fake `hc` and
+- **Checks:** `test/hc.test.js` (18 checks, each with a negative control; one fails if a slice tab is
+  opened with `tab.new`) runs against a fake `hc` and
   `herdr-app` on PATH. `test/clean-env.js` and the runner strip `HC_TERMINAL_ID` so a suite run from
   the app never drives the real window.
 
