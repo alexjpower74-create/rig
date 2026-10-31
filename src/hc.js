@@ -108,8 +108,21 @@ function newTab(cwd, label, command) {
   const space = home().space
   if (!space) throw new Error(`herdr-app: cannot tell which space ${homeTerminal()} is in`)
   const tabId = 'tb' + randomBytes(16).toString('hex')
-  const run = tryRun('hc', ['run', '--bg', '--keep', '--no-parent', '--json', '--cwd', cwd,
-    '--label', `herdr.space=${space}`, '--label', `herdr.tab=${tabId}`, '--', ...launchArgv(command)])
+  const run = tryRun('hc', [
+    'run',
+    '--bg',
+    '--keep',
+    '--no-parent',
+    '--json',
+    '--cwd',
+    cwd,
+    '--label',
+    `herdr.space=${space}`,
+    '--label',
+    `herdr.tab=${tabId}`,
+    '--',
+    ...launchArgv(command),
+  ])
   const terminal = parse(run)?.address
   if (!terminal) throw new Error('hc: could not start a terminal for ' + label + (run.err ? ': ' + run.err : ''))
   const r = { terminal, tab: tabId }

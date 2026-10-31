@@ -279,7 +279,9 @@ await suite('Herdr app backend (hc + herdr-app)', async (s) => {
       const t = launch()
       const call = calls('hc').find((c) => c.argv[0] === 'run')
       if (!call) throw new Error('no hc run: ' + JSON.stringify(calls()))
-      const v = call.argv, at = v.indexOf('--'), argv = v.slice(at + 1)
+      const v = call.argv,
+        at = v.indexOf('--'),
+        argv = v.slice(at + 1)
       const tabLabel = v.find((x) => x.startsWith('herdr.tab='))
       const ok =
         v.includes('herdr.space=spA') &&
