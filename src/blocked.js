@@ -9,6 +9,7 @@
 
 import { tryRun } from './sh.js'
 import * as herdr from './herdr.js'
+import * as hc from './hc.js'
 
 /** Signatures of a session waiting on a human, rather than working. */
 const PROMPT_MARKERS = [
@@ -27,6 +28,7 @@ const BUSY_MARKERS = [
 ]
 
 export function panes() {
+  if (hc.inHc()) return hc.allPanes()
   if (herdr.inHerdr()) return herdr.allPanes()
   const r = tryRun('tmux', ['list-panes', '-a', '-F', '#{session_name}\t#{window_index}\t#{window_name}\t#{pane_id}'])
   if (!r.ok) return []
@@ -40,6 +42,7 @@ export function panes() {
 }
 
 export function readPane(pane, lines = 40) {
+  if (hc.inHc()) return hc.readPane(pane, lines)
   if (herdr.inHerdr()) return herdr.readPane(pane, lines)
   const r = tryRun('tmux', ['capture-pane', '-p', '-t', pane, '-S', `-${lines}`])
   return r.ok ? r.out : ''
@@ -50,7 +53,7 @@ export function readPane(pane, lines = 40) {
  * ago is still sitting in the scrollback and would otherwise read as a live block forever.
  */
 export function inspect(pane, agentStatus = null) {
-  // herdr watches the agent itself and says `blocked` when it recognises an approval or question
+  // herdr (and hc) watches the agent itself and says `blocked` when it recognises an approval or question
   // UI. That is a better signal than scraping, so it wins outright; `working` is trusted too.
   // Anything else falls through to the text scan, because `unknown` proves nothing either way.
   if (agentStatus === 'working') return { blocked: false }

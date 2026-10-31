@@ -6,7 +6,7 @@ import { ensureWorktree } from '../worktrees.js'
 import { briefFor, shareTaste } from '../brief.js'
 import { openSliceIssues } from '../issues.js'
 import { reportPath } from '../reports.js'
-import { terminal } from '../terminal.js'
+import { availableHint, terminal } from '../terminal.js'
 import { git } from '../sh.js'
 import { rigDir } from '../rigdir.js'
 import { inboxRoot, leadName, leadDir, watcherState, freshInboxNote, DEFAULT_WAIT_MIN } from '../inbox.js'
@@ -114,7 +114,7 @@ export default async function up(args) {
     const term = terminal(cfg)
     if (!term.available()) {
       console.log(`\n${term.name} not available — worktrees and briefs are ready, but nothing was launched.`)
-      if (term.name === 'herdr') console.log('(run `rig up` from inside a herdr pane, or set "terminal": "tmux" in .rig/config.json)')
+      if (availableHint(term.name, 'rig up')) console.log(availableHint(term.name, 'rig up'))
     } else {
       const cmd = `${launchCmd} "Read .rig/BRIEF.md and follow it."`
       if (!term.sessionExists(session)) {
@@ -125,9 +125,7 @@ export default async function up(args) {
         const have = new Set(term.listWindows(session, ids))
         for (const m of made) if (!have.has(m.agent.id)) term.newWindow(session, m.agent.id, m.wt.path, cmd)
       }
-      console.log(
-        `\n${term.name} session: ${session}  (${term.name === 'herdr' ? 'tabs' : 'windows'}: ${term.listWindows(session, ids).join(', ')})`,
-      )
+      console.log(`\n${term.name} session: ${session}  (${term.tabs ? 'tabs' : 'windows'}: ${term.listWindows(session, ids).join(', ')})`)
       console.log(`attach with:  ${term.attachHint(session)}`)
       console.log('\nDo not type into an agent pane — keystrokes interrupt the turn. Read one with:')
       console.log(`  ${term.readHint(session, ids)}`)

@@ -448,16 +448,27 @@ The board listens on 127.0.0.1 unless `--lan` is passed for a phone.
 the build, and the standing rules. `rig brief <id>` prints it so you can hand it over yourself.
 
 The rig never types into an agent's pane. Keystrokes sent to a running session land as an interrupt
-and kill the turn it is in the middle of. Panes are read-only from outside: `herdr pane read <id>` or
-`tmux capture-pane -p`.
+and kill the turn it is in the middle of. Panes are read-only from outside: `hc read <terminal>` in the Herdr app,
+`herdr pane read <id>` or `tmux capture-pane -p`.
 
-## herdr or tmux
+## The Herdr app, herdr or tmux
 
-`rig up` launches agents in whichever multiplexer it is running inside. Under [herdr](https://herdr.dev)
+`rig up` launches agents in whichever terminal host it is running inside.
+
+In the **Herdr desktop app** (a terminal with `HC_TERMINAL_ID` set) it drives the window with
+`herdr-app` and the agents with herdr-core's `hc`. It **stays in the space it was run from** and
+opens one tab per slice, named with the slice id, in the slice's worktree: `herdr-app do tab.new`
+with the space from the lead terminal's `herdr.space` label. The worktree is pre-trusted, a trust
+prompt that shows anyway is answered once, and a tab the agent retitles is renamed back. Agent state
+comes from `hc ls`/`hc get`, `rig job` briefs an idle agent with `hc send` (which refuses a blocked
+one), and `rig down` closes only this plan's slice tabs in that space. A Codex launch line gets
+`--no-daemon`, which Codex needs under hc. Force it with `"terminal": "hc"` (or `"herdr-app"`).
+
+Under the older terminal [herdr](https://herdr.dev)
 (`HERDR_ENV=1`) it **stays in the workspace it was run from** and opens one tab per slice,
 labelled with the slice id — main and every helper on one screen, never a new workspace. Under
-tmux it makes a session with one window per slice. Force one with `"terminal": "herdr"` or
-`"tmux"` in `.rig/config.json`. `rig down` closes only this plan's slice tabs; the workspace is yours.
+tmux it makes a session with one window per slice. Force one with `"terminal": "hc"`, `"herdr"` or
+`"tmux"` in `.rig/config.json`. `rig down` closes only this plan's slice tabs; the space or workspace is yours.
 
 Slice tabs are found by **the plan's own ids**, never by a label pattern. Rig 1 matched "one letter,
 then digits": on a night with fifteen crews in one workspace, every crew used two-letter ids so their
@@ -467,10 +478,11 @@ its own tabs. `rig down` also stops any process still running inside a worktree 
 server outlives its directory and keeps its port), and nothing else: never a process by name.
 
 If the helper tabs already exist (someone made them by hand), label them with the slice ids
-(`herdr tab rename <tab-id> c1`) and use `rig up --no-launch`: the worktrees and briefs get made,
+(`herdr-app do tab.rename '{"id":"<tab-id>","name":"c1"}'` in the app, `herdr tab rename <tab-id> c1`
+under terminal herdr) and use `rig up --no-launch`: the worktrees and briefs get made,
 `rig status` finds the panes by label, and you brief them yourself.
 
-Under herdr, `rig status` trusts herdr's own agent state: a slice herdr reports as `blocked` is
+Under the Herdr app and herdr, `rig status` trusts the host's own agent state: a slice herdr reports as `blocked` is
 listed under WAITING ON YOU whether or not the prompt text is still on screen, and one it reports as
 `working` is never mistaken for blocked by a stale prompt in scrollback. The text scan is the fallback
 for `unknown`.

@@ -6,6 +6,7 @@
 // tell the fixed code from the broken code, not just pass. Where the only possible control is a change
 // of state (a repo, a directory), the comment says so.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync, realpathSync, symlinkSync } from 'node:fs'
 import { dirname, join } from 'node:path'

@@ -3,6 +3,7 @@
 // node:test (both reporters) and the Rig's own harness are run for real here; rspec, Playwright and
 // Jest are not dependencies of the Rig, so their lines are the formats those runners print.
 
+import './clean-env.js'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'

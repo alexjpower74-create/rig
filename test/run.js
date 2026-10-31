@@ -14,6 +14,9 @@ import { spawnSync } from 'node:child_process'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const LIMIT = Number(process.env.RIG_TEST_TIMEOUT_MS) || 20 * 60_000
+// Never let the suite drive the person's Herdr app: see test/clean-env.js.
+const env = { ...process.env }
+for (const k of ['HC_TERMINAL_ID', 'HC_TERMINAL_SOCKET', 'HC_SESSION']) delete env[k]
 const files = readdirSync(here)
   .filter((f) => f.endsWith('.test.js'))
   .sort()
@@ -22,7 +25,7 @@ console.log(`test/run.js: ${files.length} file(s)\n  ${files.join('\n  ')}\n`)
 
 for (const f of files) {
   console.log(`\n── ${f} ──`)
-  const r = spawnSync(process.execPath, [join(here, f)], { stdio: 'inherit', timeout: LIMIT, killSignal: 'SIGTERM' })
+  const r = spawnSync(process.execPath, [join(here, f)], { stdio: 'inherit', env, timeout: LIMIT, killSignal: 'SIGTERM' })
   const code = r.status ?? 128 + (r.signal ? 1 : 0)
   if (code !== 0) {
     if (r.error?.code === 'ETIMEDOUT')

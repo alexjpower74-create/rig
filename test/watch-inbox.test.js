@@ -5,6 +5,7 @@
 // Each check's control runs a copy of the rig's tree with the guard taken out, so a check that would
 // pass against the broken code is VOID. Every inbox is a temp directory; HOME is a temp directory.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, readdirSync, cpSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'

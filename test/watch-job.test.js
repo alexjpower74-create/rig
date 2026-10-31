@@ -5,6 +5,7 @@
 // Each check's control runs a copy of the rig's tree with the guard taken out (the old behaviour
 // swapped back in), so a check that would pass against the broken code is VOID.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, chmodSync, cpSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'

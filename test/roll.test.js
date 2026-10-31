@@ -4,6 +4,7 @@
 //
 // The fixture is invented (orchard, millpond, kiln, beacon, lantern); no real repo list lives here.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, existsSync, readdirSync, chmodSync } from 'node:fs'
 import { join, dirname } from 'node:path'

@@ -23,7 +23,7 @@
 import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { mainRoot, loadConfig } from '../config.js'
-import { agentInfo, agentPrompt, agentRead } from '../herdr.js'
+import { agentBackend, backendName } from '../terminal.js'
 import { leadName } from '../inbox.js'
 import { tellLine } from '../brief.js'
 
@@ -59,10 +59,13 @@ export default async function job(args) {
   const pollMs = Math.max(10, Math.min(MAX_POLL_MS, Number(process.env.RIG_JOB_POLL_MS) || 2000))
   const startMs = Number(process.env.RIG_JOB_START_MS) || 60_000
   const say = (s) => console.log(`rig job: ${s}`)
+  // In the Herdr app the pane is an hc terminal (t7); under terminal herdr, a herdr pane id.
+  const { agentInfo, agentPrompt, agentRead } = agentBackend(cfg)
+  const hcApp = backendName(cfg) === 'hc'
 
   const before = agentInfo(pane)
   if (!before) {
-    say(`no agent in pane ${pane} (herdr agent get found nothing). Nothing was sent.`)
+    say(`no agent in pane ${pane} (${hcApp ? 'hc get' : 'herdr agent get'} found nothing). Nothing was sent.`)
     process.exit(EXIT.refused)
   }
   if (before.status !== 'idle' && before.status !== 'done') {
@@ -76,7 +79,7 @@ export default async function job(args) {
   const start = Date.now()
   const sent = agentPrompt(pane, text)
   if (!sent.ok) {
-    say(`herdr would not take the prompt for ${pane}: ${sent.err || sent.out || 'no reason given'}`)
+    say(`${hcApp ? 'hc' : 'herdr'} would not take the prompt for ${pane}: ${sent.err || sent.out || 'no reason given'}`)
     process.exit(EXIT.refused)
   }
   say(`briefed ${pane}; waiting up to ${minutes} min for idle, done or blocked (polling every ${pollMs / 1000} s)`)

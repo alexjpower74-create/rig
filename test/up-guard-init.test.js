@@ -6,6 +6,7 @@
 // a stub on a PATH the test owns, recording its argv, so nothing reaches GitHub, the registry or a
 // terminal. HOME is a temp directory: the registry file and Claude's trust file live there.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync, rmSync, realpathSync, readFileSync, chmodSync, symlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'

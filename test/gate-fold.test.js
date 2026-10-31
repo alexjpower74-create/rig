@@ -4,6 +4,7 @@
 // the new shas are stamped old → new. The tree check's control is the defect it exists to catch: a
 // fold whose todo drops one fix, run with the check switched off, "succeeds" and loses the hunk.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'

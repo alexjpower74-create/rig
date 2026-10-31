@@ -69,7 +69,7 @@ export default function review(args) {
     const session = sessionName(root)
     if (term.sessionExists(session)) term.newWindow(session, label, root, cmd)
     else term.newSession(session, label, root, cmd)
-    console.log(`\nlaunched a fresh reviewer in ${term.name === 'herdr' ? 'tab' : 'window'} ${label}`)
+    console.log(`\nlaunched a fresh reviewer in ${term.tabs ? 'tab' : 'window'} ${label}`)
   }
 }
 

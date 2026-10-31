@@ -9,6 +9,7 @@
 // Controls swap the previous finish.js (a25b59f, or 949e12b for (c)) back in, or change the
 // repository's state.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'

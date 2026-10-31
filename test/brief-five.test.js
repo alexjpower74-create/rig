@@ -7,6 +7,7 @@
 // not exercise). The two checks that run the `rig up` CLI use Rig 4's whole tree, unpacked from
 // 7d40d97 with `git archive` into a temp folder.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'

@@ -3,6 +3,7 @@
 // report "tmux not found" on a Mac with a herdr window full of agents — or the reverse. So both
 // directions are checked, and each is broken by flipping the only thing the selection reads.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 
 // herdr is detected by HERDR_ENV=1 *and* HERDR_PANE_ID (both injected into every pane it manages).

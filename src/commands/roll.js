@@ -13,7 +13,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, copyFi
 import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { mainRoot, loadConfig, DEFAULTS } from '../config.js'
-import { terminal } from '../terminal.js'
+import { availableHint, terminal } from '../terminal.js'
 import { blockedPanes } from '../blocked.js'
 import { tryRun } from '../sh.js'
 import { preTrust } from '../trust.js'
@@ -149,7 +149,7 @@ function launchTabs(cfg, name, ids, tabs, rollDir, launchCmd) {
   const session = sessionFor(name)
   if (!term.available()) {
     console.log(`\n${term.name} not available — briefs are ready, but nothing was launched.`)
-    if (term.name === 'herdr') console.log('(run `rig roll up` from inside a herdr pane, or set "terminal": "tmux" in .rig/config.json)')
+    if (availableHint(term.name, 'rig roll up')) console.log(availableHint(term.name, 'rig roll up'))
     return
   }
   const cmdFor = (id) => `${launchCmd}${addDirs(launchCmd, tabs[id])} "Read ${join(rollDir, id, 'BRIEF.md')} and follow it."`
@@ -163,7 +163,7 @@ function launchTabs(cfg, name, ids, tabs, rollDir, launchCmd) {
     else term.newWindow(session, id, cwd, cmdFor(id))
     first = false
   }
-  console.log(`\n${term.name}: ${term.name === 'herdr' ? 'tabs' : session + ' windows'}: ${term.listWindows(session, ids).join(', ')}`)
+  console.log(`\n${term.name}: ${term.tabs ? 'tabs' : session + ' windows'}: ${term.listWindows(session, ids).join(', ')}`)
   console.log(`attach with:  ${term.attachHint(session)}`)
   console.log('\nDo not type into an agent pane — keystrokes interrupt the turn. Read one with:')
   console.log(`  ${term.readHint(session, ids)}`)

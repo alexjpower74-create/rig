@@ -6,6 +6,7 @@
 // BRIEF.md read as uncommitted work, so `rig down` refused without --force. Each check below is red
 // with the old implementation swapped back in: a bare mkdirSync of .rig/ and nothing else.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { appendFileSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

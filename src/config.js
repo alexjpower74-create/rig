@@ -10,7 +10,7 @@ export const DEFAULTS = {
   portBase: 5180,
   qaPort: 5199,
   launch: 'claude --model opus --effort medium',
-  terminal: 'auto', // auto | herdr | tmux
+  terminal: 'auto', // auto | hc (the Herdr app; also "herdr-app") | herdr | tmux
   devCommand: null,
   // The app registry slug (`~/.claude/apps/<slug>.md`); `rig init` fills it in, `rig finish` jots under it.
   slug: null,

@@ -5,6 +5,7 @@
 // red once with the old behaviour swapped back in: the 5.0 stub that reported nothing, or a drift
 // that skips the fetch and so compares against a stale copy of the base.
 
+import './clean-env.js'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

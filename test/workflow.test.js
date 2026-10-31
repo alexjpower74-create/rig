@@ -2,6 +2,7 @@
 // gate, and the rulebook. Every check is shown to go red. Gate checks are broken by changing the
 // repository's state, which is the honest control for a gate: the same code must give the other answer.
 
+import './clean-env.js'
 import { suite } from '../harness/check.js'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, realpathSync, readFileSync, lstatSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'

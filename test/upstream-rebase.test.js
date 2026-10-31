@@ -5,6 +5,7 @@
 // Each check runs the real `rig rebase` and is made red once: by the Rig this build started from
 // (its rebase is a stub), by a threshold that lets the rewrite through, or by leaving out the answer.
 
+import './clean-env.js'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
