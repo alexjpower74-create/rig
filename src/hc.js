@@ -12,6 +12,7 @@
 // labels `herdr.space` and `herdr.tab` say where the window shows it. Outside one, `available()` is
 // false and the next backend (terminal herdr, then tmux) takes over.
 
+import { randomBytes } from 'node:crypto'
 import { tryRun } from './sh.js'
 import { preTrust } from './trust.js'
 
@@ -93,12 +94,27 @@ export function launchArgv(command, shell = process.env.SHELL || '/bin/sh') {
   return [shell, '-ic', `${cmd}; exec ${shell} -i`]
 }
 
-/** A new tab in our space, named with the slice id, running the command; returns its terminal. */
+/** Blocks for `ms` without a busy loop (the rig's commands are synchronous). */
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+/**
+ * A new tab in our space, named with the slice id, running the command; returns its terminal.
+ * It never moves the person's view (his rule 2026-10-31: "when helpers open ... I don't want it to
+ * automatically jump to that"): `herdr-app do tab.new` always focuses the new tab, so the terminal is
+ * started through herdr-core instead, labelled with our space and a fresh tab id, and the window shows
+ * it as a new tab in that space without switching to it. Then the tab gets its name.
+ */
 function newTab(cwd, label, command) {
   const space = home().space
   if (!space) throw new Error(`herdr-app: cannot tell which space ${homeTerminal()} is in`)
-  const r = appDo('tab.new', { name: label, space, folder: cwd, argv: launchArgv(command) })
-  if (!r?.terminal) throw new Error('herdr-app: could not create a tab for ' + label)
+  const tabId = 'tb' + randomBytes(16).toString('hex')
+  const run = tryRun('hc', ['run', '--bg', '--keep', '--no-parent', '--json', '--cwd', cwd,
+    '--label', `herdr.space=${space}`, '--label', `herdr.tab=${tabId}`, '--', ...launchArgv(command)])
+  const terminal = parse(run)?.address
+  if (!terminal) throw new Error('hc: could not start a terminal for ' + label + (run.err ? ': ' + run.err : ''))
+  const r = { terminal, tab: tabId }
+  // The window picks the new tab up a moment after the core starts it; name it once it is there.
+  for (let i = 0; i < 20 && !appDo('tab.rename', { id: tabId, name: label }); i++) pause(250)
   // A fresh worktree is an untrusted folder to Claude Code: preTrust() normally prevents the prompt.
   // If it shows anyway, answer it once, before the agent's first turn; if it never appears, the wait
   // just checks in and nothing is pressed.

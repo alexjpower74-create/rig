@@ -53,6 +53,18 @@ const fakeHc = `${common.replace('TOOL', "'hc'")}
 const [cmd, target] = args
 const t = st.terminals[target]
 if (cmd === '--version') { console.log('hc 0.0-fake'); process.exit(0) }
+if (cmd === 'run') {
+  // hc run --bg ... --cwd DIR --label herdr.space=SP --label herdr.tab=TB -- ARGV: a labelled terminal
+  // shows up in the window as a new, unnamed tab of that space (and the view does not move).
+  const at = args.indexOf('--'), opts = args.slice(1, at), argv = args.slice(at + 1)
+  const label = (k) => { const i = opts.findIndex((o, j) => opts[j - 1] === '--label' && o.startsWith(k + '=')); return i < 0 ? null : opts[i].slice(k.length + 1) }
+  const sp = st.spaces.find((x) => x.id === label('herdr.space'))
+  if (!sp) { console.error('{"error":{"kind":"spawn_failed"}}'); process.exit(1) }
+  const n = (st.next = (st.next ?? 50) + 1), id = 't' + n
+  st.terminals[id] = { app: 'claude-code', status: 'idle', cwd: opts[opts.indexOf('--cwd') + 1], argv, screen: st.newScreen ?? 'ready' }
+  sp.tabs.push({ id: label('herdr.tab'), name: st.retitle ?? null, terminals: [id] })
+  save(); console.log(JSON.stringify({ address: id, state: 'live' })); process.exit(0)
+}
 if (cmd === 'ls') {
   const terminals = Object.entries(st.terminals).map(([address, x]) => {
     const w = where(address)
@@ -265,17 +277,20 @@ await suite('Herdr app backend (hc + herdr-app)', async (s) => {
     assert: async () => {
       setWorld()
       const t = launch()
-      const [call] = appDos('tab.new')
-      if (!call) throw new Error('no tab.new: ' + JSON.stringify(calls()))
-      const a = JSON.parse(call.argv[2])
+      const call = calls('hc').find((c) => c.argv[0] === 'run')
+      if (!call) throw new Error('no hc run: ' + JSON.stringify(calls()))
+      const v = call.argv, at = v.indexOf('--'), argv = v.slice(at + 1)
+      const tabLabel = v.find((x) => x.startsWith('herdr.tab='))
       const ok =
-        a.space === 'spA' &&
-        a.name === 'c1' &&
-        a.folder === join(tmp, 'wt-c1') &&
-        a.argv[0] === '/bin/zsh' &&
-        a.argv[1] === '-ic' &&
-        a.argv[2].startsWith('claude --model opus "Read .rig/BRIEF.md and follow it."; exec /bin/zsh -i')
-      if (!ok) throw new Error(JSON.stringify(a))
+        v.includes('herdr.space=spA') &&
+        /^herdr\.tab=tb[0-9a-f]{32}$/.test(tabLabel ?? '') &&
+        v[v.indexOf('--cwd') + 1] === join(tmp, 'wt-c1') &&
+        argv[0] === '/bin/zsh' &&
+        argv[1] === '-ic' &&
+        argv[2].startsWith('claude --model opus "Read .rig/BRIEF.md and follow it."; exec /bin/zsh -i')
+      if (!ok) throw new Error(JSON.stringify(v))
+      // His rule 2026-10-31: opening a slice never moves his view, and tab.new always does.
+      if (appDos('tab.new').length) throw new Error('used tab.new, which jumps the view to the new tab')
       if (calls('herdr-app').some((c) => c.argv[1] === 'space.new')) throw new Error('opened a new space')
       return t === 't51' && state().spaces[0].tabs.some((tb) => tb.name === 'c1' && tb.terminals[0] === 't51')
     },
