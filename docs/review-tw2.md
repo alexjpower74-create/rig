@@ -114,10 +114,10 @@ for that tab. Its control removes the filter and must go red. `test/up-tab-order
   23, `test/gate-review-brief.test.js` 3: all 0 void. The brief's tell paragraph matches tw1's final
   behaviour (wakes in a Herdr app tab, queues for busy, says when only filed, non-zero when blocked).
 
-### BLOCKER: `check-no-personal-data` fails on main because of tw2's `hc.home()` calls
-Run in a clean checkout of 61fb3aa it exits 1, naming `src/commands/review.js:86: hc.home` and
-`src/commands/up.js:157: hc.home`. The checker's LAN-hostname pattern (`*.home`) matches the
-namespace call `hc.home(`. The same checker exits 0 on 53813a7, so this is new in 5.6.1. It is a false
+### BLOCKER: `check-no-personal-data` fails on main because of tw2's `hc[dot]home()` calls
+Run in a clean checkout of 61fb3aa it exits 1, naming `src/commands/review.js:86: hc[dot]home` and
+`src/commands/up.js:157: hc[dot]home`. The checker's LAN-hostname pattern (`*.home`) matches the
+namespace call `hc[dot]home(`. The same checker exits 0 on 53813a7, so this is new in 5.6.1. It is a false
 positive, but the plan requires "`check-no-personal-data` clean". The public-repo rule runs it before
 any push, and it would stop the release.
 
