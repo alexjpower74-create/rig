@@ -105,6 +105,9 @@ unset by `clean-env.js` and only set per call by the test.
 
 Result on the committed tree: `18 passed, 0 failed, 0 void, 0 unproven`; `test/watch-inbox.test.js`
 (the existing tell/inbox suite) `27 passed, 0 void`. Both re-run after Biome formatted the files.
+Pinned QA: `rig qa d570e3d --run "node test/tell-wake.test.js && node test/watch-inbox.test.js"` →
+`rig qa: test exit 0 at d570e3d  3.4 min`; its negative control (`npm run demo`) printed its FAIL/VOID
+as designed.
 
 ## 4. The real-hc proof (DONE, run once by me; the lead runs it once more in the crew space)
 
