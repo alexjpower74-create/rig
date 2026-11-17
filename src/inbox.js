@@ -12,7 +12,7 @@
 // prefix is the home directory; point it at an older layout such as `~/.claude/inbox` to keep one),
 // $XDG_STATE_HOME/rig/inbox, ~/.local/state/rig/inbox. The default names no vendor.
 
-import { mkdirSync, writeFileSync, renameSync, readdirSync, readFileSync, existsSync, rmSync, watch } from 'node:fs'
+import { mkdirSync, writeFileSync, renameSync, readdirSync, readFileSync, existsSync, rmSync, rmdirSync, watch } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes } from 'node:crypto'
@@ -111,11 +111,52 @@ export function parseMessage(body) {
 }
 
 /**
+ * Where a delivery holds the messages it is typing in: `<inbox>/<name>/delivering/<pid>/` (src/deliver.js).
+ * A message is taken out of the inbox by whoever wins its rename, a reader into `read/` or a delivery
+ * into here, so it is never taken twice.
+ */
+export const CLAIMS = 'delivering'
+
+/**
+ * A delivery that died between claiming and filing leaves its claim behind: put those messages back
+ * where every reader finds them, so a crash loses nothing. Returns how many came back.
+ */
+export function recoverClaims(dir) {
+  const claims = join(dir, CLAIMS)
+  if (!existsSync(claims)) return 0
+  let n = 0
+  for (const pid of readdirSync(claims)) {
+    try {
+      process.kill(Number(pid), 0)
+      continue // still delivering
+    } catch (e) {
+      if (e.code === 'EPERM') continue
+    }
+    const d = join(claims, pid)
+    try {
+      for (const f of readdirSync(d)) {
+        try {
+          renameSync(join(d, f), join(dir, f))
+          n++
+        } catch {
+          /* someone else put it back */
+        }
+      }
+      rmdirSync(d)
+    } catch {
+      /* gone already, or not empty */
+    }
+  }
+  return n
+}
+
+/**
  * Take every waiting message: read it, file it under `read/`, and return them oldest first as
  * [{ name, from, at, text }]. A message another reader filed first is skipped, not doubled.
  */
 export function takeAll(root, lead) {
   const dir = leadDir(root, lead)
+  recoverClaims(dir)
   const out = []
   for (const m of pending(root, lead)) {
     let body
