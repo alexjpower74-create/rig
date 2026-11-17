@@ -84,3 +84,31 @@ Exit codes: 0 delivered, queued, watcher or filed-only; 3 not delivered (blocked
 usage. That matches the plan and `rig job`'s meaning of 3, and doesn't collide with `rig inbox`'s 4.
 
 Severity summary: 1 high, 1 medium, 2 low, 1 note.
+
+## Fix round verified at d2c4bb9 (2026-11-17)
+
+Ran `test/tell-wake.test.js` at d2c4bb9: 21 passed, 0 void. No `deliver.js --watch` process was left
+afterwards.
+
+1. **FIXED.** Every delivery holds `<inbox>/<name>/.send.lock` (`wx`, dead-pid takeover) from the
+   status read through send and filing. A tell that finds it held queues and starts the watcher.
+   I reran my exact repro (fake hc, `done` → `working` after send, 600 ms send delay, tells 250 ms
+   apart):
+   - Tell A: delivered. Tell B: "queued: boss (t1) is being sent another message right now", exit 0.
+   - `sends.log` held only A's send, at state `done`. After I set the state to `idle`, the watcher
+     sent B with `--if idle` at state `idle`, then exited. Both messages ended in `read/`.
+   - Red: with the lock disabled in a scratch copy (`if (false && !lock(...))`), the same repro logs
+     one `"state":"working","typed":true` send. The lock is what holds it.
+   The residual window (an outside actor starting a turn in the same milliseconds) is stated in the
+   header.
+2. **FIXED.** The real-hc stand-in now ends every turn in `done`. The proof covers free agents in
+   both `idle` and `done` and adds the concurrent-to-done case (tw1 reports 10/10 on real hc; I did
+   not rerun the real-hc proof, that is the lead's one run).
+3. **FIXED.** A blocked tell still exits 3 and types nothing, but now starts the watcher. A new check
+   types the message once the prompt is answered and the agent is free. Its control removes that
+   watcher.
+4. **NOTED** in the header as a known delay with no loss. Agreed.
+5. **REJECTED, accepted.** hc bounds the draft wait itself (`draft_wait`), and killing the client
+   mid-send risks a double delivery of a message already put back. That is the right trade.
+
+Verdict on the early findings: PASS. Final review on main's sha still to come.
