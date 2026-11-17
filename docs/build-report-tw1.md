@@ -108,6 +108,7 @@ Result after the review fixes: `21 passed, 0 failed, 0 void, 0 unproven` (first 
 Pinned QA: `rig qa d570e3d --run "node test/tell-wake.test.js && node test/watch-inbox.test.js"` →
 `rig qa: test exit 0 at d570e3d  3.4 min`; its negative control (`npm run demo`) printed its FAIL/VOID
 as designed.
+After the review fixes: `rig qa d2c4bb9 --run "…same…"` → `rig qa: test exit 0 at d2c4bb9  3.9 min`.
 
 ## 4. The real-hc proof (DONE, run once by me; the lead runs it once more in the crew space)
 
