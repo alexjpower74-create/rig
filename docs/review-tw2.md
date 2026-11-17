@@ -99,3 +99,10 @@ terminal whose tab is in a second space. Expect the order lead, slices, person's
 and no `tab.move` for the foreign id. It is red today.
 
 Verdict: 1–4 PASS; 6 is open (MEDIUM). Final review on main's sha still to come.
+
+## #6 verified at 33152ef (2026-11-17)
+
+**FIXED.** `arrangeTabs` keeps only ids present in this space's tabs (lead included). A new check
+records a reviewer whose tab is in a second space and expects `lead,s1,s2,notes` with no `tab.move`
+for that tab. Its control removes the filter and must go red. `test/up-tab-order.test.js` at
+33152ef: 7 passed, 0 void. All tw2 early findings PASS. Final review on main's sha still to come.
