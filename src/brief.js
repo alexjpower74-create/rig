@@ -74,6 +74,10 @@ A question left in your own pane reaches nobody: nobody is reading it. Ask the l
 things go to the human, because they need the human's own hands: a permission dialog, a go (for
 anything that leaves the machine), and a taste call. Everything else (a question, a decision you
 cannot make alone, a blocker, "done") goes to the lead, and the lead answers or escalates.
+\`rig tell <name>\` reaches the agent it names: it wakes one in a Herdr app tab as a turn, queues the
+message for one that is busy (delivered when it goes idle, never typed mid-turn), and says so when it
+could only file it (then \`rig inbox <name>\` reads it). It exits non-zero if the agent is blocked on
+a prompt. The lead keeps \`rig inbox --wait\` running as a listener where that applies.
 
 ${tellLine(lead, id)}
 `

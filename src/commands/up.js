@@ -11,6 +11,8 @@ import { git } from '../sh.js'
 import { rigDir } from '../rigdir.js'
 import { inboxRoot, leadName, leadDir, watcherState, freshInboxNote, DEFAULT_WAIT_MIN } from '../inbox.js'
 import inbox from './inbox.js'
+import * as hc from '../hc.js'
+import { recordMember } from '../crew.js'
 
 const YEL = (s) => `\x1b[33m${s}\x1b[0m`
 
@@ -125,9 +127,11 @@ export default async function up(args) {
         const have = new Set(term.listWindows(session, ids))
         for (const m of made) if (!have.has(m.agent.id)) term.newWindow(session, m.agent.id, m.wt.path, cmd)
       }
+      if (term.name === 'hc') recordCrew(root, lead, ids)
       console.log(`\n${term.name} session: ${session}  (${term.tabs ? 'tabs' : 'windows'}: ${term.listWindows(session, ids).join(', ')})`)
       console.log(`attach with:  ${term.attachHint(session)}`)
-      console.log('\nDo not type into an agent pane — keystrokes interrupt the turn. Read one with:')
+      console.log('\nDo not type into an agent pane — keystrokes interrupt the turn. Message one with `rig tell <name> "..."`:')
+      console.log('  it wakes an agent in a Herdr app tab, queues for a busy one, and says when it only filed the message. Read one with:')
       console.log(`  ${term.readHint(session, ids)}`)
     }
   }
@@ -139,6 +143,35 @@ export default async function up(args) {
   if (watch && args.includes('--watch')) {
     console.log(`\nwatching: ${watch.join(' ')}`)
     await inbox(watch.slice(2))
+  }
+}
+
+/**
+ * Under the Herdr app: write the crew record (.rig/crew.json) and put the tabs in reading order, lead,
+ * reviewer(s), then helpers in plan order. The lead is this very terminal; slice and reviewer tabs are
+ * the ones open right now, whether this run opened them or found them. Said out loud, so a record
+ * that could not be written is not a surprise when `rig tell` cannot find someone.
+ */
+export function recordCrew(root, lead, sliceIds) {
+  const names = [...sliceIds, ...sliceIds.map((i) => 'rv-' + i)]
+  const home = hc.home()
+  try {
+    if (lead && hc.homeTerminal())
+      recordMember(root, lead, { terminal: hc.homeTerminal(), tab: home.tab, space: home.space, role: 'lead', backend: 'hc' })
+    else console.log(YEL('crew record: no lead name, so the lead is not recorded; set "lead" in .rig/config.json.'))
+    const open = hc.crewTabs(names)
+    for (const m of open)
+      recordMember(root, m.name, {
+        terminal: m.terminal,
+        tab: m.tab,
+        space: m.space,
+        role: m.name.startsWith('rv-') ? 'reviewer' : 'slice',
+        backend: 'hc',
+      })
+    hc.arrangeTabs({ leadTab: home.tab, reviewers: open.filter((m) => m.name.startsWith('rv-')).map((m) => m.name), slices: sliceIds })
+    console.log(`crew record: ${[lead, ...open.map((m) => m.name)].filter(Boolean).join(', ')}  (rig crew)`)
+  } catch (e) {
+    console.log(YEL(`crew record not written: ${e.message}`))
   }
 }
 

@@ -7,6 +7,7 @@ import { tryGit, git } from '../sh.js'
 import { terminal } from '../terminal.js'
 import { processesIn, stopProcesses, insideDir } from '../procs.js'
 import { realpathSync } from 'node:fs'
+import { forgetMember } from '../crew.js'
 
 const real = (p) => {
   try {
@@ -91,6 +92,7 @@ export default async function down(args) {
   const term = terminal(cfg)
   if (term.available() && term.sessionExists(sessionName(root))) {
     const closed = term.killSession(sessionName(root), [...sliceIds, ...sliceIds.map((i) => 'rv-' + i)])
+    if (Array.isArray(closed)) for (const name of closed) forgetMember(root, name)
     if (Array.isArray(closed))
       console.log(closed.length ? `closed slice tabs: ${closed.join(', ')}` : 'no slice tabs of this plan were open')
     else console.log(`closed ${term.name} session ${sessionName(root)}`)

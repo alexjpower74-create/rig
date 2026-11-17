@@ -77,6 +77,65 @@ const slicePanes = (ids) =>
     })
     .filter(Boolean)
 
+/**
+ * This build's slice tabs as crew records: { name, terminal, tab, space }, one per tab named with a
+ * slice id (or `rv-<id>`). It is what `rig up` writes into `.rig/crew.json` (src/crew.js), so that
+ * `rig tell <name>` finds the terminal by the name the crew uses, never by a label pattern.
+ */
+export function crewTabs(ids) {
+  const h = home()
+  const want = new Set(ids ?? [])
+  return tabs(h.space)
+    .filter((t) => t.name && t.id !== h.tab && want.has(t.name))
+    .map((t) => ({ name: t.name, terminal: (t.terminals ?? [])[0]?.terminal ?? null, tab: t.id, space: h.space }))
+    .filter((m) => m.terminal)
+}
+
+/** Where a terminal sits in the window: { space, tab }, from its labels (else null parts). */
+export function whereIs(terminal) {
+  const labels = hcJson(['get', terminal])?.labels ?? {}
+  return { space: labels['herdr.space'] ?? null, tab: labels['herdr.tab'] ?? null }
+}
+
+/** One terminal's live state for `rig crew`: "idle", "working", "blocked" ..., or "gone". */
+export function terminalState(terminal) {
+  const t = hcJson(['get', terminal])
+  if (!t) return 'gone'
+  if (t.state === 'finished') return 'finished'
+  return t.status?.state ?? 'no agent'
+}
+
+/**
+ * Put the space's tabs in the order a person reads a build: the lead's tab, the reviewer tab(s)
+ * (`rv-*`, in the order given), then the helpers in plan order. Only OUR tabs move, and they are laid
+ * out in the slots from the earliest of them onward; the person's other tabs keep their order.
+ *
+ * Why this exists: a terminal started through `hc run` with a `herdr.space` label is not told where
+ * to sit, so the window decides, and a real build came out reversed and ahead of its reviewer.
+ * Arranging afterwards does not depend on where the window puts them, and `tab.move` never focuses
+ * anything: the person's view stays where it is (`tab.new` and `space.new` would jump it, so they
+ * are never used). `leadTab` is a tab id; `reviewers` and `slices` are tab names, in reading order.
+ * Returns how many tabs moved.
+ */
+export function arrangeTabs({ leadTab = null, reviewers = [], slices = [] } = {}) {
+  const space = home().space
+  if (!space) return 0
+  const byName = (n) => tabs(space).find((t) => t.name === n)
+  const wanted = () => [leadTab, ...reviewers.map((n) => byName(n)?.id), ...slices.map((n) => byName(n)?.id)].filter(Boolean)
+  const first = wanted()
+  if (!first.length) return 0
+  // Our tabs fill the slots from the earliest one of them onward; the person's own tabs keep theirs.
+  const start = Math.min(...first.map((id) => tabs(space).findIndex((t) => t.id === id)).filter((i) => i >= 0))
+  let moved = 0
+  first.forEach((id, k) => {
+    const now = tabs(space)
+    const at = now.findIndex((t) => t.id === id)
+    const to = start + k
+    if (at !== to && appDo('tab.move', { id, index: to + 1 })) moved++
+  })
+  return moved
+}
+
 // The "session" is kept for the shared driver shape; under the app it is always our own space.
 export function sessionExists() {
   return inHc()
