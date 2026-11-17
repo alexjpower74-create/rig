@@ -105,3 +105,17 @@ each fix myself against my original failing inputs:
 5. **FIXED.** `qaPort: 0` in the test; the server listens on a free port.
 
 Verdict on the early findings: PASS (one LOW residual, noted above). Final review on main's sha still to come.
+
+## Final at 61fb3aa (2026-11-17): PASS
+
+- tw3's files on main are byte-identical to rig/tw3 (437e8fe; only its report changed after 4b21f69).
+- `test/finish-negative.test.js` 12 pass, `test/qa-not-a-server.test.js` 7 pass on 61fb3aa.
+- README/CHANGELOG match the code: `negativeExpect` from config, the exact plan marker, or the flag
+  (the flag for this run only, with a note); caught/not caught recorded and gated; under "fail" a
+  missing script is not a catch; `testCommand` is the test; a server is refused (exit 2); a stopped run
+  is never green.
+- The LOW residual (a control test file that crashes at load still reads CAUGHT) is written down in
+  `docs/build-report-tw3.md`. One wording nit for the lead, not blocking: README's "a run must also
+  show a control actually failed" is slightly stronger than the code (it accepts any failure marker,
+  a crashed file included). "must also show a failure, and no sign the command itself broke" would be
+  exact.

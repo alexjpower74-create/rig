@@ -106,3 +106,32 @@ Verdict: 1–4 PASS; 6 is open (MEDIUM). Final review on main's sha still to com
 records a reviewer whose tab is in a second space and expects `lead,s1,s2,notes` with no `tab.move`
 for that tab. Its control removes the filter and must go red. `test/up-tab-order.test.js` at
 33152ef: 7 passed, 0 void. All tw2 early findings PASS. Final review on main's sha still to come.
+
+## Final at 61fb3aa (2026-11-17): FAIL (one blocker, a one-line fix)
+
+- tw2's files on main are byte-identical to rig/tw2 (33152ef).
+- `test/crew-record.test.js` 8 passed, `test/up-tab-order.test.js` 7 passed, `test/brief-five.test.js`
+  23, `test/gate-review-brief.test.js` 3: all 0 void. The brief's tell paragraph matches tw1's final
+  behaviour (wakes in a Herdr app tab, queues for busy, says when only filed, non-zero when blocked).
+
+### BLOCKER: `check-no-personal-data` fails on main because of tw2's `hc.home()` calls
+Run in a clean checkout of 61fb3aa it exits 1, naming `src/commands/review.js:86: hc.home` and
+`src/commands/up.js:157: hc.home`. The checker's LAN-hostname pattern (`*.home`) matches the
+namespace call `hc.home(`. The same checker exits 0 on 53813a7, so this is new in 5.6.1. It is a false
+positive, but the plan requires "`check-no-personal-data` clean". The public-repo rule runs it before
+any push, and it would stop the release.
+
+Fix (no checker change needed): import the function by name in those two files,
+`import { home as hcHome } from '../hc.js'` (or add a `hc.homeTab()`), and call that. Then rerun
+`check-no-personal-data` and expect exit 0. It is already shown red on 61fb3aa, so the check is live.
+
+### LOW (lead's README/CHANGELOG): the stated reason for avoiding `tab.new` is out of date
+README:462 says "never `herdr-app do tab.new`, which jumps the window". The window's own command list
+(`herdr-app commands`) says of `tab.new`: "focus false adds it last in its space and keeps the shown
+space". tw2's report says the same. Using `hc run` is still a fine choice. But the reason given is
+wrong, and the CHANGELOG's "inserts a labelled new tab right after the first one" is an observation
+about `hc run`-labelled terminals that tw2 could not prove from the real window. Reword it as what
+was seen ("in the practice run they landed reversed and in front"), or cite the real `herdr-app ls`
+from the lead's proof. Not blocking.
+
+Verdict: FAIL until the personal-data check is clean; PASS on behaviour.

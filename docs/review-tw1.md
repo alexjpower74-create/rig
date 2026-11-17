@@ -112,3 +112,21 @@ afterwards.
    mid-send risks a double delivery of a message already put back. That is the right trade.
 
 Verdict on the early findings: PASS. Final review on main's sha still to come.
+
+## Final at 61fb3aa (2026-11-17): PASS
+
+- tw1's files on main are byte-identical to rig/tw1 (6cceacc): `git diff rig/tw1 61fb3aa` over its
+  Owns list is empty.
+- `test/tell-wake.test.js` on 61fb3aa: 21 passed, 0 void; no `deliver.js --watch` process left.
+  `test/watch-inbox.test.js` (the inbox it shares): 27 passed, 0 void.
+- My repro of the done-race is closed (verified at d2c4bb9, same code on main).
+- Lead's README table and CHANGELOG match the code: delivered (idle or done, through `hc send`),
+  queued (watcher, never while working), filed for the inbox watcher, blocked → exit 3 and delivered
+  after the prompt, gone → exit 3, no tab → filed only, exit 0. USAGE says exits 0 / 3 / 2. The
+  "one send at a time per recipient, status read again right before it" sentence is the send lock.
+- Real-agent proof (the lead's run, reported to me, not rerun by me): idle 0.31 s (bar 5 s), busy
+  0.98 s after idle (bar 10 s) with nothing typed while working, blocked exit 3 naming the prompt and
+  delivered 0.52 s after it was answered, no-tab filed only exit 0; `tools/tell-wake-e2e.mjs` 10/10.
+  That matches the bar.
+- No AI names, home paths or hosts in tw1's new tracked text. (The `claude-code`/`codex` strings in
+  tests are hc app ids in fake state, the subject of the code.)
