@@ -457,8 +457,11 @@ and kill the turn it is in the middle of. Panes are read-only from outside: `hc 
 
 In the **Herdr desktop app** (a terminal with `HC_TERMINAL_ID` set) it drives the window with
 `herdr-app` and the agents with herdr-core's `hc`. It **stays in the space it was run from** and
-opens one tab per slice, named with the slice id, in the slice's worktree: `herdr-app do tab.new`
-with the space from the lead terminal's `herdr.space` label. The worktree is pre-trusted, a trust
+opens one tab per slice, named with the slice id, in the slice's worktree, without moving your view:
+each terminal starts through `hc run` labelled with the lead's space and a fresh tab id (never
+`herdr-app do tab.new`, which jumps the window). The window inserts a new tab right after the first
+one, so `rig up` then moves each into place with `tab.move`: the space reads lead, reviewer(s), then
+the helpers in plan order. The worktree is pre-trusted, a trust
 prompt that shows anyway is answered once, and a tab the agent retitles is renamed back. Agent state
 comes from `hc ls`/`hc get`, `rig job` briefs an idle agent with `hc send` (which refuses a blocked
 one), and `rig down` closes only this plan's slice tabs in that space. A Codex launch line gets
@@ -534,9 +537,11 @@ The lead should never have to be the human's alarm clock. Every wait has a deadl
 reports itself, every number is measured, and nothing called "ready" turns out stale an hour later.
 
 **Peers report themselves.** A peer that finishes, blocks or has a question runs
-`rig tell <lead> "<id>: done — <one line>"`, which is the last line of every brief. The lead keeps
-`rig inbox <lead> --wait` running as a background job (`rig up` prints the exact command, or
-`rig up --watch` becomes it). It wakes within seconds of a tell and files the message under `read/`.
+`rig tell <lead> "<id>: done — <one line>"`, which is the last line of every brief. In the Herdr app
+that tell reaches the lead as a turn (see *A tell wakes the agent it names*, below), and the lead can
+tell a helper or reviewer the same way. A lead outside the app keeps `rig inbox <lead> --wait`
+running as a background job (`rig up` prints the exact command, or `rig up --watch` becomes it). It
+wakes within seconds of a tell and files the message under `read/`.
 Inboxes live in `$XDG_STATE_HOME/rig/inbox/<lead>/` (`inboxDir` or `RIG_INBOX_DIR` moves them). To
 brief an agent with no inbox hook, such as a member from another vendor's CLI, use
 `rig job <pane> "<task>" --expect <file> --deadline <min>`. It prompts only an idle pane, ignores a
@@ -599,6 +604,48 @@ happened twice.
 record auto margins as `auto`, wait for the app to say it is ready instead of the first paint, and
 retake a snapshot that was not ready. Baselines carry `RECORDED_FROM: <sha>`, so `rig qa` can say
 when the base has moved past them.
+
+## A tell wakes the agent it names (5.6.1)
+
+Before 5.6.1, `rig tell` only dropped a file in the recipient's inbox. A lead watching its inbox
+saw it; a helper or reviewer, which watches nothing, never did. In a practice run a lead told its
+helpers and reviewer what to do next and the whole crew sat idle for 30 minutes.
+
+`rig tell <name> "<one line>"` now files the message in `<name>`'s inbox, looks `<name>` up in the
+crew record, and says in one line what happened:
+
+| Recipient | What happens | Exit |
+|---|---|---|
+| idle (or its turn just ended) in a Herdr app tab | **delivered**: typed in as one turn, through `hc send` | 0 |
+| working | **queued**: a small delivery watcher types it in once the agent is free, never while it works | 0 |
+| armed `rig inbox --wait` | **filed for the inbox watcher**: its exit wakes the recipient; nothing is typed | 0 |
+| blocked on a permission prompt | **not delivered**, and on what (`blocked on permission (approve Bash: …)`); nothing typed; the watcher delivers it once the prompt is answered | 3 |
+| its terminal is gone | **not delivered**; the message stays in the inbox | 3 |
+| no Herdr app tab (tmux, terminal herdr, a plain terminal) | **filed only**: read it with `rig inbox <name>` | 0 |
+
+Each message goes in once. A reader and a delivery both take a message by renaming it out of the
+inbox, and only one rename succeeds; one send at a time per recipient, with the status read again
+right before it, so two tells a moment apart never type into an agent that the first one started.
+hc itself does not queue: a plain `hc send` to a working agent types at once, which is why the
+watcher exists. Measured with real agents in the Herdr app: an idle agent took the turn 0.3 s after
+the tell, a busy one 1.0 s after it went idle, a blocked one 0.5 s after its prompt was answered
+(`tools/tell-wake-e2e.mjs` repeats the timings with stand-in agents).
+
+**The crew record.** Names resolve through `.rig/crew.json`, never a tab-label pattern. `rig up`
+records the lead (the terminal it runs in) and every slice tab; `rig review --launch` records its
+`rv-*` reviewer; `rig down` forgets the slices it closes. A member started some other way is added
+by hand: `rig crew add rv-final t31 --role reviewer`. `rig crew` lists who runs where and each
+member's live status.
+
+**Gates that mean one thing.** The same release fixed three faults from that run. A negative
+command's exit now has one stated meaning: `negativeExpect: "fail"` in the config (or
+`(exits non-zero when the break is caught)` on the plan's `Negative controls:` line, or
+`--negative-expect fail`) says a non-zero exit is the catch. Under it, a run must also show a control
+actually failed, so a typo'd script (`npm run negativ`, "Missing script") is never read as caught.
+`rig qa` and `rig finish` print the command, its exit and what that exit was taken to mean. `rig qa`
+grades `testCommand` (falling back to `devCommand` only when that is not a server), refuses a
+server command (`npm start`, `npm run dev`, `vite dev`, `nodemon`, …) as the test, and never records a run stopped
+by the deadline or a signal as green.
 
 ## Install
 

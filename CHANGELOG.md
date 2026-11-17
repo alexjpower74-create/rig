@@ -1,5 +1,42 @@
 # Changelog
 
+## 5.6.1 — a tell wakes the agent it names
+
+- **What went wrong:** `rig tell <name>` only wrote a file in `<name>`'s inbox. A lead keeps
+  `rig inbox --wait` running and saw it; helpers and reviewers watch nothing. In a practice run a lead
+  used `rig tell` to hand its helpers and reviewer their next step, and the crew sat idle for 30
+  minutes until the lead typed to them by hand.
+- **What changes:** `rig tell` files the message, then looks the name up in the crew's own record
+  (`.rig/crew.json`) and states its fate. An idle agent in a Herdr app tab gets it as a turn (`hc send`);
+  a working one gets it queued and typed in by a per-recipient delivery watcher once it is free; one
+  blocked on a permission prompt is not typed to (`not delivered: <name> is blocked on <what>`, exit 3,
+  delivered after the prompt is answered); a recipient with an armed `rig inbox --wait` is left to its
+  watcher; one with no Herdr app tab gets the old behaviour plus `filed only: …`. Each message goes in
+  once: readers and deliveries take it by rename, and sends to one recipient go one at a time with the
+  status read again first. Exit codes: 0 delivered/queued/filed, 3 not delivered, 2 usage.
+- **The crew record:** `rig up` records the lead's terminal and every slice tab, `rig review --launch`
+  its `rv-*` reviewer, `rig down` forgets what it closes; `rig crew` lists it, `rig crew add|rm` edits
+  it. Names resolve by exact name, never a tab-label pattern.
+- **Tab order:** the Herdr app inserts a labelled new tab right after the first one, so `rig up` opened
+  helpers reversed and in front of the reviewer. It now moves each tab into place (`tab.move`, which
+  does not move the person's view): lead, reviewer(s), helpers in plan order.
+- **Negative command meaning:** `negativeExpect: "pass"|"fail"` (or `(exits non-zero when the break is
+  caught)` on the plan's line, or `--negative-expect`) says what the negative command's exit means;
+  `rig qa` records caught / not caught and `rig finish` gates on that, printing command, exit and
+  meaning. Under `fail`, a non-zero exit also needs evidence a control ran, so a missing script is not
+  a catch. Existing `negativeCommand: "npm run demo"` configs read as before.
+- **QA never grades a server:** a new `testCommand` is the test; `devCommand` is used only when it is
+  not a server; a server command is refused as the test (exit 2), and a run stopped by the deadline or
+  a signal is never recorded green.
+- **Briefs:** every slice brief, `rig up`'s inbox hint and `rig review`'s hand-over say `rig tell <name>`
+  wakes the named agent and what it prints when it could only file the message.
+- **Checks:** `test/tell-wake.test.js` (fake `hc` on PATH: idle, done, working, blocked, gone, no tab,
+  armed watcher, concurrent tells; each seen red on 5.6.0's tell), `test/crew-record.test.js`,
+  `test/up-tab-order.test.js`, `test/finish-negative.test.js`, `test/qa-not-a-server.test.js`.
+  `tools/tell-wake-e2e.mjs` is the real-hc proof, run by hand (10/10 on hc 0.1.21). With real agents
+  in the Herdr app: idle 0.3 s, busy 1.0 s after going idle, blocked refused with exit 3 and delivered
+  0.5 s after its prompt was answered.
+
 ## 5.6.0 — the Herdr desktop app
 
 - **What changes:** the rig drives the Herdr desktop app. In a terminal with `HC_TERMINAL_ID` set,
