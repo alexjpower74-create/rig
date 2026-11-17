@@ -39,3 +39,11 @@ Related existing tests: `qa-finish`, `gate-finish` pass; `qa-watch` passes run d
 - No listening-port probe: a non-obviously-named server given as `--run` is only stopped by the deadline (recorded 124, never green), not refused up front.
 - `rig fold` (not mine) still falls back `testCommand` then `devCommand`; same server risk there.
 - Independent review (`rig review tw3`) not yet run; the full suite is the lead's single run.
+
+## Fix round: rv-561's early review of 58f5f45 (fixed in 4b21f69)
+All five findings fixed; the new tests are red on 58f5f45 (5 fail) and green on the fix.
+1. HIGH, DONE: under `fail`, a non-zero exit is "caught" only if the output also names a failing control (`parseFailures`, or a FAIL / RED / `not ok` / "went red" line) and shows none of the not-ran shapes (Missing script, SyntaxError, Cannot find module, ENOENT, command not found). Test: a typo'd npm script, an `exit 1` script that names nothing, and a node syntax error are NOT CAUGHT; the same plan with a script that names a failing control is caught. Red on 58f5f45: the typo'd script read CAUGHT.
+2. DONE: only a trailing `(exits non-zero when the break is caught)` or `(expect: fail|pass)` sets the meaning; prose never does.
+3. DONE: a line with meaning words and no backticked command is refused (`plan.negativeProblem`); `rig qa` exits 2, `rig finish` fails "negative controls line is usable".
+4. DONE: kept the flag, scoped to the run. `rig qa` prints a note when it disagrees with the repo, and `rig finish`'s message names the repair (set `negativeExpect` in .rig/config.json or put the marker on the plan line).
+5. DONE: tests use `qaPort: 0`.
