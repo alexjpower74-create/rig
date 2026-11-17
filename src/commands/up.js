@@ -12,7 +12,7 @@ import { rigDir } from '../rigdir.js'
 import { inboxRoot, leadName, leadDir, watcherState, freshInboxNote, DEFAULT_WAIT_MIN } from '../inbox.js'
 import inbox from './inbox.js'
 import * as hc from '../hc.js'
-import { recordMember } from '../crew.js'
+import { readCrew, recordMember } from '../crew.js'
 
 const YEL = (s) => `\x1b[33m${s}\x1b[0m`
 
@@ -156,9 +156,13 @@ export function recordCrew(root, lead, sliceIds) {
   const names = [...sliceIds, ...sliceIds.map((i) => 'rv-' + i)]
   const home = hc.home()
   try {
-    if (lead && hc.homeTerminal())
-      recordMember(root, lead, { terminal: hc.homeTerminal(), tab: home.tab, space: home.space, role: 'lead', backend: 'hc' })
-    else console.log(YEL('crew record: no lead name, so the lead is not recorded; set "lead" in .rig/config.json.'))
+    const mine = hc.homeTerminal()
+    const had = lead ? readCrew(root).members[lead] : null
+    if (!lead || !mine) console.log(YEL('crew record: no lead name, so the lead is not recorded; set "lead" in .rig/config.json.'))
+    else if (had && had.terminal !== mine && hc.isHcTerminal(had.terminal) && hc.terminalState(had.terminal) !== 'finished')
+      // A helper re-running `rig up` must not take the lead's name; `rig crew add <lead> <terminal>` rebinds on purpose.
+      console.log(`crew record: ${lead} stays ${had.terminal} (this terminal is ${mine}; \`rig crew add ${lead} ${mine}\` to rebind)`)
+    else recordMember(root, lead, { terminal: mine, tab: home.tab, space: home.space, role: 'lead', backend: 'hc' })
     const open = hc.crewTabs(names)
     for (const m of open)
       recordMember(root, m.name, {
@@ -168,7 +172,8 @@ export function recordCrew(root, lead, sliceIds) {
         role: m.name.startsWith('rv-') ? 'reviewer' : 'slice',
         backend: 'hc',
       })
-    hc.arrangeTabs({ leadTab: home.tab, reviewers: open.filter((m) => m.name.startsWith('rv-')).map((m) => m.name), slices: sliceIds })
+    // Every reviewer in the record is arranged, whatever it is called (rv-<slice>, or rv-561 added by hand).
+    hc.arrangeTabs({ leadTab: home.tab, reviewerTabs: hc.reviewerTabIds(readCrew(root).members), slices: sliceIds })
     console.log(`crew record: ${[lead, ...open.map((m) => m.name)].filter(Boolean).join(', ')}  (rig crew)`)
   } catch (e) {
     console.log(YEL(`crew record not written: ${e.message}`))

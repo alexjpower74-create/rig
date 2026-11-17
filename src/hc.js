@@ -105,6 +105,20 @@ export function terminalState(terminal) {
   return t.status?.state ?? 'no agent'
 }
 
+/** True when hc itself knows this terminal (`hc get` succeeds): the backend is decided by asking, not by the address's shape (t26z, t271, mac/t3 are all hc's). */
+export const isHcTerminal = (terminal) => terminalState(terminal) !== 'gone'
+
+/**
+ * Tab ids of every recorded reviewer, found by the terminal each runs in (the tab may carry any
+ * name: a reviewer added by hand is `rv-561`, not `rv-<slice>`). Record order is kept.
+ */
+export function reviewerTabIds(members) {
+  return Object.values(members ?? {})
+    .filter((m) => m.role === 'reviewer' && m.backend === 'hc')
+    .map((m) => whereIs(m.terminal).tab)
+    .filter(Boolean)
+}
+
 /**
  * Put the space's tabs in the order a person reads a build: the lead's tab, the reviewer tab(s)
  * (`rv-*`, in the order given), then the helpers in plan order. Only OUR tabs move, and they are laid
@@ -114,14 +128,15 @@ export function terminalState(terminal) {
  * to sit, so the window decides, and a real build came out reversed and ahead of its reviewer.
  * Arranging afterwards does not depend on where the window puts them, and `tab.move` never focuses
  * anything: the person's view stays where it is (`tab.new` and `space.new` would jump it, so they
- * are never used). `leadTab` is a tab id; `reviewers` and `slices` are tab names, in reading order.
+ * are never used). `leadTab` and `reviewerTabs` are tab ids, `reviewers` and `slices` tab names, in reading order.
  * Returns how many tabs moved.
  */
-export function arrangeTabs({ leadTab = null, reviewers = [], slices = [] } = {}) {
+export function arrangeTabs({ leadTab = null, reviewers = [], reviewerTabs = [], slices = [] } = {}) {
   const space = home().space
   if (!space) return 0
   const byName = (n) => tabs(space).find((t) => t.name === n)
-  const wanted = () => [leadTab, ...reviewers.map((n) => byName(n)?.id), ...slices.map((n) => byName(n)?.id)].filter(Boolean)
+  const wanted = () =>
+    [...new Set([leadTab, ...reviewerTabs, ...reviewers.map((n) => byName(n)?.id), ...slices.map((n) => byName(n)?.id)])].filter(Boolean)
   const first = wanted()
   if (!first.length) return 0
   // Our tabs fill the slots from the earliest one of them onward; the person's own tabs keep theirs.

@@ -83,8 +83,7 @@ export function recordReviewer(root, cfg, label, terminal) {
     const where = hc.whereIs(terminal)
     recordMember(root, label, { terminal, tab: where.tab, space: where.space, role: 'reviewer', backend: 'hc' })
     const lead = readCrew(root).members[leadOf(cfg)]
-    const existing = hc.crewTabs(Object.keys(readCrew(root).members).filter((n) => n.startsWith('rv-'))).map((m) => m.name)
-    hc.arrangeTabs({ leadTab: lead?.tab ?? hc.home().tab, reviewers: [...new Set([...existing, label])], slices: [] })
+    hc.arrangeTabs({ leadTab: lead?.tab ?? hc.home().tab, reviewerTabs: hc.reviewerTabIds(readCrew(root).members), slices: [] })
     console.log(`crew record: ${label} = ${terminal}`)
   } catch (e) {
     console.log(`crew record not written: ${e.message}`)

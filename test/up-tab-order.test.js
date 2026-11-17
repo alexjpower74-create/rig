@@ -236,6 +236,32 @@ await suite('rig up tab order (lead, reviewer(s), helpers in plan order)', async
     breaks: broken([['src/commands/review.js', 'hc.arrangeTabs({', 'void ({']]),
     timeout: 60_000,
   })
+
+  await s.check('a reviewer added by hand (rv-561, not rv-<slice>) that is already open is ordered right after the lead', {
+    assert: async () => {
+      setWorld({ insert: 'front' })
+      const w = state()
+      w.spaces[0].tabs.push({ id: 'tbRv561', name: 'rv-561', terminals: ['t8'] })
+      w.terminals.t8 = { app: 'claude-code', status: 'idle' }
+      writeFileSync(statePath, JSON.stringify(w))
+      rmSync(join(root, '.rig', 'crew.json'), { force: true })
+      const { recordMember } = await mod('src/crew.js')
+      recordMember(root, 'rv-561', { terminal: 't8', role: 'reviewer', backend: 'hc' })
+      const hc = await mod('src/hc.js')
+      for (const id of ['s1', 's2']) hc.newWindow('s', id, tmp, 'true')
+      const { recordCrew } = await mod('src/commands/up.js')
+      const log = console.log
+      console.log = () => {}
+      try {
+        recordCrew(root, 'boss', ['s1', 's2'])
+      } finally {
+        console.log = log
+      }
+      return order().join(',') === 'lead,rv-561,s1,s2,notes'
+    },
+    breaks: broken([['src/commands/up.js', 'reviewerTabs: hc.reviewerTabIds(readCrew(root).members)', 'reviewerTabs: []']]),
+    timeout: 60_000,
+  })
 })
 
 process.env.PATH = saved.PATH

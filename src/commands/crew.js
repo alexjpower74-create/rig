@@ -5,10 +5,15 @@
 
 import { mainRoot } from '../config.js'
 import { readCrew, recordMember, forgetMember } from '../crew.js'
-import { terminalState } from '../hc.js'
+import { isHcTerminal, terminalState } from '../hc.js'
 import { tryRun } from '../sh.js'
 
 export const USAGE = 'rig crew | rig crew add <name> <terminal> [--role lead|slice|reviewer] [--backend hc|herdr|tmux] | rig crew rm <name>'
+
+const usage = () => {
+  console.error(`usage: ${USAGE}`)
+  process.exit(2)
+}
 
 export default function crew(args) {
   const root = mainRoot()
@@ -17,11 +22,11 @@ export default function crew(args) {
   if (sub === 'add') return add(root, rest)
   if (sub === 'rm' || sub === 'remove') {
     const name = rest[0]
-    if (!name) throw new Error(`usage: ${USAGE}`)
+    if (!name) usage()
     console.log(forgetMember(root, name) ? `forgot ${name}` : `${name} was not in the crew record`)
     return
   }
-  throw new Error(`usage: ${USAGE}`)
+  usage()
 }
 
 function list(root) {
@@ -51,10 +56,15 @@ function add(root, rest) {
     else bare.push(rest[i])
   }
   const [name, terminal] = bare
-  if (!name || !terminal) throw new Error(`usage: ${USAGE}`)
+  if (!name || !terminal) usage()
   const role = flag('--role') || (name.startsWith('rv-') ? 'reviewer' : 'slice')
-  // An hc address looks like t14; anything else (a tmux target, a herdr pane) is recorded without a driver unless told.
-  const backend = flag('--backend') || (/^t\d+$/.test(terminal) ? 'hc' : null)
+  if (!['lead', 'slice', 'reviewer'].includes(role)) {
+    console.error(`rig crew: role must be lead, slice or reviewer, not "${role}"`)
+    process.exit(2)
+  }
+  // Asked, not guessed from the address: hc's are t14, t26z, t271, mac/t3. A terminal hc does not know
+  // (a tmux target, a herdr pane) is recorded without a driver unless told.
+  const backend = flag('--backend') || (isHcTerminal(terminal) ? 'hc' : null)
   const e = recordMember(root, name, { terminal, role, backend })
   console.log(`recorded ${name}: ${e.role} in ${e.terminal}${e.backend ? ' (' + e.backend + ')' : ''}`)
 }

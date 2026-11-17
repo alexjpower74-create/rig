@@ -54,3 +54,10 @@ space reads lead, reviewer(s), helpers in plan order; briefs say `rig tell <name
 ## Left
 - Real-window confirmation of the tab-order fix (`tools/` proof by the lead). `rig crew` does not yet show a member's current tab name.
 - Merge note: `test/watch-inbox.test.js` and `test/brief-five.test.js` pass `askTheLead` content checks; re-run after tw1 merges.
+
+## Review round 1 (rv-561 on e3dcccc), all DONE
+1. HIGH, `rig crew add` backend: now decided by asking hc (`hc get` succeeds), not by the address's shape. Test adds `t26z` and `mac/t46` (hc) and `sess:win` (null); red with the old `/^t\d+$/` swapped back in. `rig crew` shows hc's own state, `done` included (red with the status column forced to `idle`).
+2. MED, every reviewer is arranged: `rig up` and `rig review --launch` arrange the union of `rv-<slice>` tabs and every recorded reviewer, found by its terminal's tab (`hc.reviewerTabIds`), so a hand-added `rv-561` lands after the lead. Test red with `reviewerTabs: []`.
+3. LOW, lead rebind: `rig up` run from another terminal keeps a live recorded lead and says how to rebind (`rig crew add <lead> <terminal>`); a dead lead terminal is rebound. Test both ways, red with the guard removed.
+4. LOW, `rig crew` usage errors (missing argument, unknown subcommand, bad role) exit 2.
+5. NOTE (brief text vs tw1's final behaviour): left for the lead's merge check.

@@ -220,7 +220,7 @@ await suite('the crew record (.rig/crew.json)', async (s) => {
       await quiet(() => recordCrew(root, 'boss', ['s1']))
       return record().boss?.terminal === 't1' && record().boss?.role === 'lead'
     },
-    breaks: broken([['src/commands/up.js', 'if (lead && hc.homeTerminal())', 'if (false)']]),
+    breaks: broken([['src/commands/up.js', 'else recordMember(root, lead, {', 'else void (root, lead, {']]),
     timeout: 60_000,
   })
 
@@ -283,27 +283,72 @@ await suite('the crew record (.rig/crew.json)', async (s) => {
     timeout: 90_000,
   })
 
-  await s.check('rig crew add / list / rm: records by hand, lists with live hc status, forgets', {
+  await s.check(
+    'rig crew add / list / rm: real hc addresses (t26z, mac/t46) are recorded as hc, listed with live status (done included), forgotten',
+    {
+      assert: async () => {
+        resetRecord()
+        setWorld({
+          terminals: {
+            t1: { app: 'claude-code', status: 'working' },
+            t26z: { app: 'claude-code', status: 'done' },
+            'mac/t46': { app: 'codex', status: 'idle' },
+          },
+        })
+        const add = rig(['crew', 'add', 'rv-x', 't26z', '--role', 'reviewer'])
+        const addMac = rig(['crew', 'add', 'rv-y', 'mac/t46'])
+        const addTmux = rig(['crew', 'add', 'tm', 'sess:win'])
+        const list = rig(['crew'])
+        const row = list.stdout.split('\n').find((l) => l.startsWith('rv-x'))
+        const bad = rig(['crew', 'add', 'q', 't26z', '--role', 'boss'])
+        const none = rig(['crew', 'add', 'q'])
+        const rm = rig(['crew', 'rm', 'rv-x'])
+        const m = record()
+        const gone = rig(['crew', 'rm', 'rv-y', 'x'])
+        return (
+          add.status === 0 &&
+          m['rv-y']?.backend === 'hc' &&
+          m['rv-y'].role === 'reviewer' &&
+          m.tm?.backend === null &&
+          /reviewer\s+t26z\s+hc\s+done/.test(row ?? '') &&
+          bad.status === 2 &&
+          none.status === 2 &&
+          rm.status === 0 &&
+          gone.status === 0 &&
+          addMac.status === 0 &&
+          addTmux.status === 0 &&
+          record()['rv-x'] === undefined
+        )
+      },
+      // The old shape test (t + digits only), the role ignored, and a status column that says idle for everything.
+      breaks: broken([
+        ['src/commands/crew.js', 'isHcTerminal(terminal) ?', '/^t\\d+$/.test(terminal) ?'],
+        ['src/hc.js', "return t.status?.state ?? 'no agent'", "return 'idle'"],
+      ]),
+      timeout: 90_000,
+    },
+  )
+
+  await s.check('rig up run from another tab does not take the lead’s name while the recorded lead is live; a dead lead is rebound', {
     assert: async () => {
       resetRecord()
-      setWorld({}, true)
-      const add = rig(['crew', 'add', 'rv-x', 't7', '--role', 'reviewer'])
-      const list = rig(['crew'])
-      const row = list.stdout.split('\n').find((l) => l.startsWith('rv-x'))
-      const bad = rig(['crew', 'add', 'q', 't7', '--role', 'boss'])
-      const rm = rig(['crew', 'rm', 'rv-x'])
-      return (
-        add.status === 0 &&
-        /reviewer\s+t7\s+hc\s+idle/.test(row ?? '') &&
-        bad.status !== 0 &&
-        rm.status === 0 &&
-        record()['rv-x'] === undefined &&
-        rig(['crew']).stdout.includes('no crew recorded')
-      )
+      setWorld({ terminals: { t1: { app: 'claude-code', status: 'working' }, t4: { app: null, status: null } } })
+      const { recordCrew } = await mod('src/commands/up.js')
+      const { recordMember } = await mod('src/crew.js')
+      process.env.HC_TERMINAL_ID = 't4'
+      try {
+        recordMember(root, 'boss', { terminal: 't1', role: 'lead', backend: 'hc' })
+        await quiet(() => recordCrew(root, 'boss', []))
+        const kept = record().boss.terminal === 't1'
+        recordMember(root, 'boss', { terminal: 't99', role: 'lead', backend: 'hc' })
+        await quiet(() => recordCrew(root, 'boss', []))
+        return kept && record().boss.terminal === 't4'
+      } finally {
+        process.env.HC_TERMINAL_ID = 't1'
+      }
     },
-    // --role ignored: a reviewer added by hand comes out a slice.
-    breaks: broken([['src/commands/crew.js', "flag('--role') || (name", '(name']]),
-    timeout: 90_000,
+    breaks: broken([['src/commands/up.js', 'else if (had && had.terminal !== mine', 'else if (false && had.terminal !== mine']]),
+    timeout: 60_000,
   })
 
   await s.check('the brief tells a peer that rig tell wakes the agent it names, and the tell line is still its last line', {
