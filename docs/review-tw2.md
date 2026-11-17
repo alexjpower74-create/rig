@@ -65,3 +65,37 @@ decides wake-ability by `backend`, finding 1 is the only path that writes a null
 hc terminal.
 
 Severity summary: 1 high, 1 medium, 2 low.
+
+## Fix round verified at 72b8486 (2026-11-17)
+
+Ran `test/crew-record.test.js` + `test/up-tab-order.test.js` at 72b8486: 8 + 6 checks passed, 0 void
+(every check's control went red).
+
+1. **FIXED.** `rig crew add` asks hc (`isHcTerminal` = `hc get` answers). The test now adds `t26z`
+   and `mac/t46` and expects backend hc, with live status shown.
+2. **FIXED, but the fix opened a new hole: see 6.** `rig up` and `rig review --launch` now arrange
+   every reviewer in the record by its terminal's tab (`reviewerTabIds`). There is a test for a
+   hand-added `rv-561`.
+3. **FIXED.** A live recorded lead on another terminal is kept, with a line naming the explicit
+   rebind.
+4. **FIXED.** Usage errors and a bad role exit 2, and a test pins it.
+
+### 6. NEW, MEDIUM: a recorded reviewer in ANOTHER space breaks the order and moves a tab in that space
+`src/hc.js` `arrangeTabs` + `reviewerTabIds`. `reviewerTabIds` returns the tab of every recorded
+reviewer, wherever it is. `arrangeTabs` puts them in `first`, so each one takes up a slot (`to =
+start + k`) even though `findIndex` in this space is -1. It also calls `tab.move {id, index}` on it,
+which in the real app moves that tab "to a position in its space": the other space's tabs get
+rearranged, the opposite of "only our tabs move".
+
+`.rig/crew.json` outlives a build: a hand-added reviewer is never forgotten, and `rig down` only
+forgets what it closed. So this happens on the next build in a new crew space, with the last build's
+reviewer still alive somewhere else. I simulated the exact algorithm with space A = `[lead, s1, s2,
+X]` (X is the person's tab) and a reviewer recorded in space B. Result: A = `[lead, s1, X, s2]`, with
+the person's tab between the helpers, and a `tab.move` sent for B's tab.
+
+Fix: in `arrangeTabs`, keep only ids present in `tabs(space)` before computing slots, or have
+`reviewerTabIds` filter by `whereIs(...).space === home().space`. Test: a reviewer recorded with a
+terminal whose tab is in a second space. Expect the order lead, slices, person's tab, unchanged,
+and no `tab.move` for the foreign id. It is red today.
+
+Verdict: 1–4 PASS; 6 is open (MEDIUM). Final review on main's sha still to come.
