@@ -15,11 +15,13 @@
 // HC_TERMINAL_ID set to that member's terminal). It prints every measured time beside its bar and
 // exits 1 if any misses. The terminals are ended and removed afterwards (--keep leaves the temp dir).
 //
-// Bars: idle helper→lead, lead→helper, lead→reviewer, reviewer→lead each typed in within 5 s; a busy
-// agent never typed to while working and typed to within 10 s of going idle; a blocked agent refused
-// (exit 3, nothing typed, the message still filed).
+// Bars: helper→lead (idle), lead→helper, lead→reviewer, reviewer→lead (done, where real agents sit
+// between turns) each typed in within 5 s; two tells 250 ms apart to a done agent never type into the
+// turn the first started; a busy agent never typed to while working and typed to within 10 s of its
+// turn ending; a blocked agent refused (exit 3, nothing typed, the message filed) and typed to once
+// the prompt is answered; 0 messages unread at the end. The stand-in ends every turn in "done".
 
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -64,12 +66,13 @@ process.stdin.on('data', (d) => {
     const line = buf.slice(0, i).trim()
     buf = buf.slice(i + 1)
     if (!line) continue
-    fs.appendFileSync(log, JSON.stringify({ at: Date.now(), line }) + '\\n')
-    // A turn: work for a second, then idle again. "working auto" marks the turn as its own, so the
-    // timer never ends a working state the test set.
-    if (fs.readFileSync(ctl, 'utf8').trim() === 'idle') {
+    const was = fs.readFileSync(ctl, 'utf8').trim()
+    fs.appendFileSync(log, JSON.stringify({ at: Date.now(), line, state: was }) + '\\n')
+    // A turn: work for a second, then end in "done", where real agents sit between turns.
+    // "working auto" marks the turn as its own, so the timer never ends a state the test set.
+    if (was === 'idle' || was === 'done') {
       fs.writeFileSync(ctl, 'working auto')
-      setTimeout(() => { if (fs.readFileSync(ctl, 'utf8').trim() === 'working auto') fs.writeFileSync(ctl, 'idle') }, 1000)
+      setTimeout(() => { if (fs.readFileSync(ctl, 'utf8').trim() === 'working auto') fs.writeFileSync(ctl, 'done') }, 1000)
     }
   }
 })
@@ -137,26 +140,36 @@ try {
       await sleep(25)
     }
   }
-  const idleAll = async () => {
-    for (const n of Object.keys(members)) ctl(n, 'idle')
-    for (const n of Object.keys(members)) for (let i = 0; i < 100 && hc('get', term[n]).status?.state !== 'idle'; i++) await sleep(50)
+  const all = async (state) => {
+    for (const n of Object.keys(members)) ctl(n, state)
+    for (const n of Object.keys(members)) for (let i = 0; i < 100 && hc('get', term[n]).status?.state !== state; i++) await sleep(50)
   }
+  const idleAll = () => all('idle')
+  const tellAsync = (from, to, text) =>
+    new Promise((resolve) => {
+      const env = { ...process.env, RIG_INBOX_DIR: inbox, HC_TERMINAL_ID: term[from] }
+      delete env.RIG_AGENT_ID
+      const child = spawn(process.execPath, [join(repo, 'bin', 'rig.js'), 'tell', to, text], { cwd: root, env })
+      let out = ''
+      child.stdout.on('data', (d) => (out += d))
+      child.on('close', (code) => resolve({ code, out }))
+    })
 
-  // 1. Idle, every direction.
-  for (const [from, to] of [
-    ['helper', 'lead'],
-    ['lead', 'helper'],
-    ['lead', 'rv-e2e'],
-    ['rv-e2e', 'lead'],
+  // 1. Free agents, every direction: one idle, then "done" (where real agents sit between turns).
+  for (const [from, to, state] of [
+    ['helper', 'lead', 'idle'],
+    ['lead', 'helper', 'done'],
+    ['lead', 'rv-e2e', 'done'],
+    ['rv-e2e', 'lead', 'done'],
   ]) {
-    await idleAll()
-    const marker = `idle-${from}-${to}-${Date.now()}`
+    await all(state)
+    const marker = `${state}-${from}-${to}-${Date.now()}`
     const at = Date.now()
     const r = tell(from, to, marker)
     const got = await arrived(to, marker, 15_000)
     const s = got ? (got.at - at) / 1000 : Number.POSITIVE_INFINITY
     row(
-      `idle ${from}→${to}`,
+      `${state} ${from}→${to}`,
       got ? `${s.toFixed(2)} s` : 'never',
       '≤ 5 s',
       s <= 5 && r.status === 0,
@@ -164,7 +177,27 @@ try {
     )
   }
 
-  // 2. Busy: queued, nothing typed while working, typed within 10 s of idle.
+  // 1b. Two tells 250 ms apart to a "done" agent: the second is never typed into the turn the first
+  // started (the stand-in logs its own state at each arrival).
+  await all('done')
+  const m1 = `concurrent-a-${Date.now()}`
+  const m2 = `concurrent-b-${Date.now()}`
+  const pa = tellAsync('helper', 'lead', m1)
+  await sleep(250)
+  const pb = tellAsync('rv-e2e', 'lead', m2)
+  const [ca, cb] = await Promise.all([pa, pb])
+  const a1 = await arrived('lead', m1, 15_000)
+  const a2 = await arrived('lead', m2, 15_000)
+  const intoWorking = arrivals('lead').filter((x) => /^working/.test(x.state ?? '')).length
+  row(
+    'done: two tells 250 ms apart',
+    `${a1 && a2 ? 'both arrived' : 'missing'}, ${intoWorking} typed while working`,
+    'both, 0 while working',
+    !!(a1 && a2) && intoWorking === 0 && ca.code === 0 && cb.code === 0,
+    `${ca.out.split('\n')[0].trim()} | ${cb.out.split('\n')[0].trim()}`,
+  )
+
+  // 2. Busy: queued, nothing typed while working, typed within 10 s of the turn ending.
   await idleAll()
   ctl('helper', 'working')
   for (let i = 0; i < 100 && hc('get', term.helper).status?.state !== 'working'; i++) await sleep(50)
@@ -180,10 +213,10 @@ try {
     busy.stdout.split('\n')[0].trim(),
   )
   const idleAt = Date.now()
-  ctl('helper', 'idle')
+  ctl('helper', 'done')
   const late = await arrived('helper', busyMarker, 20_000)
   const bs = late ? (late.at - idleAt) / 1000 : Number.POSITIVE_INFINITY
-  row('busy: typed in after going idle', late ? `${bs.toFixed(2)} s` : 'never', '≤ 10 s', bs <= 10)
+  row('busy: typed in after its turn ends (done)', late ? `${bs.toFixed(2)} s` : 'never', '≤ 10 s', bs <= 10)
 
   // 3. Blocked: refused, exit 3, nothing typed, the file kept.
   await idleAll()
@@ -202,11 +235,18 @@ try {
     blocked.stdout.split('\n')[0].trim(),
   )
 
-  // 0 messages left unread, apart from the refused one.
+  // The refused message is queued behind the delivery watcher: it goes in once the prompt is answered.
+  const freeAt = Date.now()
+  ctl('rv-e2e', 'done')
+  const afterBlock = await arrived('rv-e2e', blockedMarker, 20_000)
+  const fs2 = afterBlock ? (afterBlock.at - freeAt) / 1000 : Number.POSITIVE_INFINITY
+  row('blocked: typed in once the prompt is answered', afterBlock ? `${fs2.toFixed(2)} s` : 'never', '≤ 10 s', fs2 <= 10)
+
+  // 0 messages left unread.
   const unread = Object.keys(members).flatMap((n) =>
     existsSync(join(inbox, n)) ? readdirSync(join(inbox, n)).filter((f) => f.endsWith('.md') && !f.startsWith('.')) : [],
   )
-  row('unread after the run', `${unread.length}`, '1 (the blocked one)', unread.length === 1)
+  row('unread after the run', `${unread.length}`, '0', unread.length === 0)
 } finally {
   for (const t of terminals) {
     spawnSync('hc', ['kill', t], { stdio: 'ignore' })

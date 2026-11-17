@@ -7,9 +7,12 @@
 //
 //   idle            typed in now, as one turn (`hc send --if idle`: hc checks and types in one step,
 //                   so an agent that starts working in between is refused, never typed into)
-//   done / error    the turn ended; typed in now, right after a fresh status read
+//   done / error    the turn ended (`done` is where an agent sits between turns); typed in now,
+//                   right after a status read taken under the recipient's send lock (below)
 //   working         queued; a delivery watcher (one per recipient) types it in when the agent is idle
-//   blocked         not delivered (exit 3): typing would answer its dialog
+//   blocked         not delivered now (exit 3): typing would answer its dialog. The delivery watcher
+//                   is started anyway: it never types to a blocked agent, and once the prompt is
+//                   answered and the agent is free it types the message in, so nothing is stranded
 //   gone            not delivered (exit 3): the terminal finished or no longer exists
 //   no status       filed only: a program that never reports status could be a shell, and a shell
 //                   would run the text as a command
@@ -26,6 +29,23 @@
 // refused). A rename succeeds once, so two readers never both take one message (Maildir's rule). And a
 // recipient whose `rig inbox --wait` watcher is armed is never typed to at all: the watcher's exit is
 // what wakes it.
+//
+// One send at a time per recipient: every delivery holds `<inbox>/<name>/.send.lock` (created
+// exclusively, a dead holder's lock cleared) from its status read through claim, send and filing.
+// hc's `--if` takes only idle or working, so for `done` the status read is the check, and without
+// the lock two tells a moment apart could both read `done` and the second type into the turn the
+// first had just started. Under the lock the second reads the `working` the first send caused (hc
+// returns from a send once the agent started, or after a few seconds of not starting) and queues.
+// A delivery that finds the lock held queues too. The window left is an actor outside rig starting
+// a turn in the same milliseconds; hc already holds a send while a person has an unfinished draft.
+//
+// Known delay, no loss: an armed `rig inbox --wait` that has just taken a message is about to exit;
+// a tell in that moment is left to it, and its re-arm (the lead re-arms after each message) takes
+// the message on its first look.
+//
+// `hc send` has no timeout here on purpose: it waits for a person's unfinished draft, at most
+// `draft_wait` (60 s by default) since their last key, so it is bounded; and killing the client
+// mid-send could leave hc typing a message we had put back, which would deliver it twice.
 //
 // The delivery watcher is this file run as a program (`node src/deliver.js --watch …`). It holds
 // `<inbox>/<name>/.deliver.lock` (created exclusively), so a second one exits at once; the lock bounds
@@ -59,6 +79,7 @@ export const DEFAULT_DELIVER_DEADLINE_MIN = 240
 
 const LOCK = '.deliver.lock'
 const LOG = '.deliver.log'
+const SEND_LOCK = '.send.lock'
 
 const alive = (pid) => {
   if (!Number.isInteger(pid) || pid <= 0) return false
@@ -193,15 +214,27 @@ export function turnText(msgs) {
  */
 export function deliverNow({ inbox, name, terminal }) {
   const dir = leadDir(inbox, name)
+  mkdirSync(dir, { recursive: true })
   recoverStale(dir)
   if (watcherState(inbox, name)) return { outcome: 'watcher' }
+  // One send at a time to this recipient, and the status read inside it (see the header).
+  const sendLock = join(dir, SEND_LOCK)
+  if (!lock(sendLock, { terminal })) return { outcome: 'busy', status: { state: 'sending' } }
+  try {
+    return sendLocked(dir, terminal)
+  } finally {
+    unlock(sendLock)
+  }
+}
+
+function sendLocked(dir, terminal) {
   const status = hcStatus(terminal)
   const verdict = classify(status)
   if (verdict !== 'send') return { outcome: verdict, status }
   const claimed = claimPending(dir)
   if (!claimed.length) return { outcome: 'nothing', status }
   // idle: hc checks and types in one step. done / error: hc's `--if` only takes idle or working, so
-  // the status read just above is the check.
+  // the status read just above, under the send lock, is the check.
   const sent = hcSend(terminal, turnText(claimed), { ifIdle: status.state === 'idle' })
   if (sent.ok) return { outcome: 'delivered', status, delivered: settle(dir, claimed) }
   putBack(dir, claimed)
@@ -237,18 +270,18 @@ export function watcherFor(inbox, name) {
   return w && alive(w.pid) ? w : null
 }
 
-function acquire(dir, terminal) {
-  const p = lockPath(dir)
+/** Take a lock file exclusively; a dead holder's lock is cleared. True when this process holds it. */
+function lock(p, info = {}) {
   for (let i = 0; i < 2; i++) {
     try {
-      writeFileSync(p, JSON.stringify({ pid: process.pid, terminal, since: Date.now() }) + '\n', { flag: 'wx' })
+      writeFileSync(p, JSON.stringify({ pid: process.pid, ...info, since: Date.now() }) + '\n', { flag: 'wx' })
       return true
     } catch (e) {
       if (e.code !== 'EEXIST') throw e
       const w = json(readFileSync(p, 'utf8'))
       if (w && alive(w.pid)) return false
-      // A watcher that died: its lock goes. Delivery stays once-only without the lock (the claim
-      // rename decides), so the rare race of two takeovers costs a spare watcher, never a double.
+      // A holder that died: its lock goes. Delivery stays once-only without the lock (the claim
+      // rename decides), so the rare race of two takeovers costs a spare holder, never a double.
       try {
         unlinkSync(p)
       } catch {
@@ -259,10 +292,13 @@ function acquire(dir, terminal) {
   return false
 }
 
-function release(dir) {
-  const w = json(existsSync(lockPath(dir)) ? readFileSync(lockPath(dir), 'utf8') : '')
-  if (w?.pid === process.pid) rmSync(lockPath(dir), { force: true })
+function unlock(p) {
+  const w = json(existsSync(p) ? readFileSync(p, 'utf8') : '')
+  if (w?.pid === process.pid) rmSync(p, { force: true })
 }
+
+const acquire = (dir, terminal) => lock(lockPath(dir), { terminal })
+const release = (dir) => unlock(lockPath(dir))
 
 const log = (dir, line) => {
   try {

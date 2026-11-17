@@ -67,7 +67,8 @@ export default function tell(args) {
       return
     case 'busy': {
       const w = ensureWatcher({ inbox, name: lead, terminal: t, root })
-      console.log(`queued: ${lead} (${t}) is working; it is typed in as a turn when ${lead} is idle (delivery watcher pid ${w.pid})`)
+      const why = r.status?.state === 'sending' ? 'is being sent another message right now' : 'is working'
+      console.log(`queued: ${lead} (${t}) ${why}; it is typed in as a turn when ${lead} is free (delivery watcher pid ${w.pid})`)
       console.log(`  ${file}`)
       return
     }
@@ -80,11 +81,17 @@ export default function tell(args) {
       return filedOnly(`${lead} (${t}) does not report whether it is busy, so nothing was typed`)
     case 'missing':
       return filedOnly(`hc is not on PATH here, so ${lead}'s tab cannot be reached`)
-    case 'blocked':
+    case 'blocked': {
+      // Nothing is typed now. The watcher never types to a blocked agent either; once the prompt is
+      // answered and the agent is free, it types this in, so the message is not stranded.
+      const w = ensureWatcher({ inbox, name: lead, terminal: t, root })
       console.log(`not delivered: ${lead} is blocked on ${blockedOn(r.status)}`)
-      console.log(`  filed, still waiting in ${lead}'s inbox (rig inbox ${lead}): ${file}`)
+      console.log(
+        `  filed and queued: typed in once ${lead} is free again (delivery watcher pid ${w.pid}), or read with rig inbox ${lead}: ${file}`,
+      )
       process.exit(EXIT_NOT_DELIVERED)
       break
+    }
     case 'gone':
       console.log(
         `not delivered: ${lead}'s terminal ${t} is gone (${r.status.gone === 'finished' ? 'it finished' : 'hc has no such terminal'})`,

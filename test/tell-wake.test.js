@@ -47,6 +47,16 @@ const broken = (spec) => async () => {
   }
 }
 const oldTell = broken({ files: { 'src/commands/tell.js': OLD_TELL } })
+/** The lead's control: "done" (where an agent sits between turns) treated as busy. */
+const doneIsBusy = broken({
+  patches: [
+    [
+      'src/deliver.js',
+      "if (s.state === 'idle' || s.state === 'done' || s.state === 'error') return 'send'",
+      "if (s.state === 'done') return 'busy'\n  if (s.state === 'idle' || s.state === 'error') return 'send'",
+    ],
+  ],
+})
 const mod = (rel) => import(pathToFileURL(join(tree, rel)).href + `?t=${tree === repo ? 0 : tree}`)
 
 // ---------------------------------------------------------------------------------------------------
@@ -217,16 +227,65 @@ await suite('rig 5.6.1: rig tell wakes the agent it names', async (s) => {
       await c.end()
       return r.status === 0 && t.length === 1 && t[0].if === null && /^delivered:/m.test(r.stdout)
     },
-    breaks: broken({
-      patches: [
-        [
-          'src/deliver.js',
-          "if (s.state === 'idle' || s.state === 'done' || s.state === 'error') return 'send'",
-          "if (s.state === 'idle') return 'send'",
-        ],
-      ],
-    }),
+    breaks: doneIsBusy,
     timeout: 30_000,
+  })
+
+  await s.check('a queued message goes in when the busy agent ends its turn as "done" (where agents sit), not only "idle"', {
+    assert: async () => {
+      const c = await crew({ tw1: { terminal: 't2', state: 'working' } })
+      c.tell(['tw1', 'after your turn'])
+      await sleep(1200)
+      c.state('t2', 'done')
+      const got = await until(() => c.typed('t2')[0], 8000)
+      await c.end()
+      return got && got.state === 'done' && got.if === null && got.text.endsWith('] after your turn')
+    },
+    breaks: doneIsBusy,
+    timeout: 30_000,
+  })
+
+  // Review finding 1 (HIGH): hc's --if cannot guard "done", so two tells a moment apart could both
+  // read "done" and the second type into the turn the first had just started.
+  await s.check('two tells 250 ms apart to a "done" agent: the second is never typed into the turn the first started', {
+    assert: async () => {
+      const c = await crew({ boss: { terminal: 't1', role: 'lead', state: 'done', afterSend: 'working' } })
+      writeFileSync(join(c.hcDir, 'send-delay-ms'), '600')
+      const a = c.tellBg(['boss', 'from A'], { ...c.env, RIG_AGENT_ID: 'tw2' })
+      await sleep(250)
+      const b = c.tellBg(['boss', 'from B'], { ...c.env, RIG_AGENT_ID: 'tw3' })
+      const [ra, rb] = await Promise.all([a.done, b.done])
+      rmSync(join(c.hcDir, 'send-delay-ms'))
+      const intoWorking = c.sends().filter((x) => x.typed && x.state === 'working').length
+      // The agent ends its turn; the queued one goes in then, once.
+      c.state('t1', 'done')
+      const both = await until(() => {
+        const t = c
+          .typed('t1')
+          .map((x) => x.text)
+          .join('\n')
+        return t.includes('] from A') && t.includes('] from B')
+      }, 10_000)
+      await sleep(300)
+      const all = c
+        .typed('t1')
+        .map((x) => x.text)
+        .join('\n')
+      await c.end()
+      return (
+        ra.code === 0 &&
+        rb.code === 0 &&
+        intoWorking === 0 &&
+        both &&
+        all.split('] from A').length === 2 &&
+        all.split('] from B').length === 2 &&
+        c.sends().every((x) => !x.typed || x.state !== 'working')
+      )
+    },
+    breaks: broken({
+      patches: [['src/deliver.js', "  if (!lock(sendLock, { terminal })) return { outcome: 'busy', status: { state: 'sending' } }\n", '']],
+    }),
+    timeout: 40_000,
   })
 
   // -------------------------------------------------------------------------------------------------
@@ -383,6 +442,30 @@ await suite('rig 5.6.1: rig tell wakes the agent it names', async (s) => {
       return ok
     },
     breaks: oldTell,
+    timeout: 30_000,
+  })
+
+  await s.check('a message refused as blocked is not stranded: typed in once the prompt is answered and the agent is free', {
+    assert: async () => {
+      const c = await crew({ tw1: { terminal: 't2', state: 'blocked permission Bash(x)' } })
+      const r = c.tell(['tw1', 'when you can'])
+      await sleep(1500)
+      const whileBlocked = c.typed('t2').length
+      c.state('t2', 'done')
+      const got = await until(() => c.typed('t2')[0], 8000)
+      await c.end()
+      return r.status === 3 && /filed and queued/.test(r.stdout) && whileBlocked === 0 && got?.text.endsWith('] when you can')
+    },
+    breaks: broken({
+      patches: [
+        [
+          'src/commands/tell.js',
+          // the blocked case's watcher left out: the refused message would sit until someone reads it
+          '      const w = ensureWatcher({ inbox, name: lead, terminal: t, root })\n      console.log(`not delivered',
+          '      const w = { pid: 0 }\n      console.log(`not delivered',
+        ],
+      ],
+    }),
     timeout: 30_000,
   })
 

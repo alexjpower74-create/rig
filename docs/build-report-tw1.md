@@ -76,7 +76,7 @@ once-only delivery.
 
 ## 3. Checks: each seen red, then green (DONE)
 
-`test/tell-wake.test.js`, harness `check`/`target`, 18 checks. A fake `hc` on PATH
+`test/tell-wake.test.js`, harness `check`/`target`, 21 checks (18 before the review). A fake `hc` on PATH
 (`test/fixtures/fake-hc/`: states from `<t>.state` files, `after-send` to simulate a turn starting,
 `send-delay-ms` for races, every send logged with the state at that moment and whether real hc would
 have typed it; exit codes are real hc's). No real hc, app, clipboard or display; `HC_TERMINAL_ID` is
@@ -103,7 +103,7 @@ unset by `clean-env.js` and only set per call by the test.
 | dead deliverer's claim put back and delivered | pass | recovery removed from `deliverNow` |
 | `rig inbox` puts back a dead deliverer's claim | pass | recovery removed from `takeAll` |
 
-Result on the committed tree: `18 passed, 0 failed, 0 void, 0 unproven`; `test/watch-inbox.test.js`
+Result after the review fixes: `21 passed, 0 failed, 0 void, 0 unproven` (first round: 18); `test/watch-inbox.test.js`
 (the existing tell/inbox suite) `27 passed, 0 void`. Both re-run after Biome formatted the files.
 Pinned QA: `rig qa d570e3d --run "node test/tell-wake.test.js && node test/watch-inbox.test.js"` →
 `rig qa: test exit 0 at d570e3d  3.4 min`; its negative control (`npm run demo`) printed its FAIL/VOID
@@ -134,15 +134,40 @@ correctly typed). Fixed in the stand-in (its own turn is marked `working auto`);
 unchanged. Note: hc kept the blocked `kind` (permission) but not the `msg` the stand-in sent, so the
 real line reads "blocked on permission"; with a real agent it says whatever hc reports.
 
+## Review rv-561 (early, at a2dd65a): every finding
+1. **HIGH, DONE.** Two tells 250 ms apart to a `done` agent typed the second into the turn the first had
+   started (hc's `--if` can't guard `done`). Fix: one send at a time per recipient, held in
+   `<inbox>/<name>/.send.lock` (`wx`, a dead holder's lock cleared) from the status read through claim,
+   send and filing. A tell that finds it held queues (`queued: … is being sent another message right
+   now`). Test: the reviewer's exact scenario (fake: `done`, `after-send working`, `send-delay-ms 600`).
+   It is red with the lock removed (a send logged `typed:true, state:working`, which is a2dd65a's
+   behaviour) and green with it. Real hc: `done: two tells 250 ms apart: both arrived, 0 typed while working`.
+2. **MEDIUM, DONE.** The e2e stand-in now ends every turn in `done`. Rows: one `idle` direction, three
+   `done` directions, the concurrent-to-`done` case (the stand-in logs its own state at each arrival),
+   a busy agent whose turn ends in `done`, and blocked→answered. 10/10 on hc 0.1.21.
+3. **LOW, DONE.** A tell refused as blocked starts the delivery watcher too (it never types to a
+   blocked agent), so the message goes in once the prompt is answered. Still exit 3, and it says so:
+   `filed and queued: typed in once <name> is free again (delivery watcher pid N), or read with rig
+   inbox <name>`. Test: blocked → answered (`done`) → typed; red with the watcher left out.
+4. **LOW, DONE (note only).** The re-arm delay after an armed inbox watcher has just taken a message is
+   written in `src/deliver.js`'s header.
+5. **NOTE, REJECTED with reason.** No timeout on the foreground `hc send`: hc bounds the draft wait
+   itself (`draft_wait`, 60 s by default, since the person's last key), and killing the client mid-send
+   could leave hc typing a message we had already put back, which would deliver it twice. Written in the
+   header.
+
+The lead's ask: `done` counts as free and is covered both ways. A tell to a `done` agent is typed in
+(no `--if`), and a queued message goes in when a busy agent's turn ends in `done`. Both checks are red
+under the lead's control, which classifies `done` as busy.
+
 ## Decided
 - Exit code **3** = not delivered (blocked, terminal gone, or an hc error). Unused elsewhere in rig
   (0, 1, 2, 4 and 75 are taken). Exported as `EXIT_NOT_DELIVERED` from `src/deliver.js`.
 - `done` and `error` count as "turn ended": typed to (without `--if`, which hc refuses for them).
 - A terminal that never reported a status is never typed to (it could be a shell running the text).
 - Several waiting messages go in as one turn, one line each, oldest first.
-- Blocked: refused now, the message stays in the inbox. A delivery watcher that is already running
-  for that recipient (from an earlier busy tell) delivers it with the rest when the agent is idle
-  again: at least once, never lost.
+- Blocked: refused now (exit 3), and queued behind the delivery watcher, which types it in once the
+  prompt is answered (review finding 3).
 - The sender of a tell from the lead is found by `HC_TERMINAL_ID` in the record.
 - Watcher poll 1 s, deadline 240 min, both overridable (`RIG_DELIVER_POLL_MS`, `RIG_DELIVER_DEADLINE_MIN`).
 - `.scratch/` (my evidence scripts) is in the clone's `info/exclude`, never committed.
