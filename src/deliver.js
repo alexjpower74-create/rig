@@ -49,7 +49,7 @@ import {
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveMember } from './crew.js'
-import { leadDir, parseMessage, watcherState } from './inbox.js'
+import { CLAIMS, leadDir, parseMessage, recoverClaims, watcherState } from './inbox.js'
 import { tryRun } from './sh.js'
 
 /** `rig tell`'s exit code for "not delivered": blocked on a prompt, or the terminal is gone. */
@@ -59,7 +59,6 @@ export const DEFAULT_DELIVER_DEADLINE_MIN = 240
 
 const LOCK = '.deliver.lock'
 const LOG = '.deliver.log'
-const CLAIMS = 'delivering'
 
 const alive = (pid) => {
   if (!Number.isInteger(pid) || pid <= 0) return false
@@ -167,25 +166,7 @@ const dropClaimDir = (dir, pid) => {
 }
 
 /** A deliverer that died between claim and settle leaves its claim behind: put those messages back. */
-export function recoverStale(dir) {
-  const root = join(dir, CLAIMS)
-  if (!existsSync(root)) return 0
-  let n = 0
-  for (const pid of readdirSync(root)) {
-    if (alive(Number(pid))) continue
-    const d = join(root, pid)
-    for (const f of readdirSync(d)) {
-      try {
-        renameSync(join(d, f), join(dir, f))
-        n++
-      } catch {
-        /* someone else recovered it */
-      }
-    }
-    dropClaimDir(dir, pid)
-  }
-  return n
-}
+export const recoverStale = recoverClaims
 
 /**
  * The turn the agent receives: one line per message, saying it is a rig tell, who from, and how to

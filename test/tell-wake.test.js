@@ -519,6 +519,22 @@ await suite('rig 5.6.1: rig tell wakes the agent it names', async (s) => {
 
   // -------------------------------------------------------------------------------------------------
   // Crash safety: a claim left by a dead deliverer goes back to the inbox.
+  await s.check("rig inbox also puts back a dead deliverer's claim, so a reader sees the message", {
+    assert: async () => {
+      const c = await crew({})
+      const { tellMessage } = await mod('src/inbox.js')
+      const f = tellMessage(c.inbox, 'boss', 'tw1', 'stranded')
+      const dead = join(c.inbox, 'boss', 'delivering', '999999998')
+      mkdirSync(dead, { recursive: true })
+      cpSync(f, join(dead, f.split('/').at(-1)))
+      rmSync(f)
+      const r = spawnSync(process.execPath, [join(tree, 'bin', 'rig.js'), 'inbox', 'boss'], { cwd: c.root, encoding: 'utf8', env: c.env })
+      return r.status === 0 && r.stdout.includes('stranded') && !existsSync(dead)
+    },
+    breaks: broken({ patches: [['src/inbox.js', '  recoverClaims(dir)\n  const out = []', '  const out = []']] }),
+    timeout: 30_000,
+  })
+
   await s.check('a message claimed by a deliverer that died is put back and delivered, not lost', {
     assert: async () => {
       const c = await crew({ tw1: { terminal: 't2', state: 'working' } })
