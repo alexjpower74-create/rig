@@ -1,357 +1,251 @@
-# Rig 5.5 — the gate, watching, upstream and decisions, tests that hold anywhere
+# Rig 5.6.1: `rig tell` wakes the agent it names
 
-One plan file. It is the contract. The seventeen items, the bar and the checks are written out in
-`docs/PLAN-5.5.md`: read that file whole before you start. This file adds the brief and the slices.
+One plan file. It is the contract.
 
 ## What it's for
-A lead running a crew loses hours to waits nobody watched, upstream drift found after a review round,
-and "green" claims nobody can trace. Rig 5.5 turns each of those into a gate, a watcher or a number.
-
-## What done looks like
-All seventeen items of docs/PLAN-5.5.md built, each check seen red then green, `npm run check` clean
-on both machines, a second-vendor review passed on the final sha, and `rig finish` passing on it.
-The lead writes README, CHANGELOG and releases 5.5.0.
-
-## Where it lives
-This public repo (MIT), installed by `npm link` and the Homebrew tap.
-
-## The feeling
-The lead never has to be the human's alarm clock. Every wait has a deadline, every peer reports
-itself, every number is measured, and nothing called "ready" turns out stale an hour later.
-
-## The specialist
-- r55g works like a **release engineer who owns a merge queue**: a gate is a list of facts with a sha
-  beside each, and "it passed on my machine" is not one of them.
-- r55q works like a **CI infrastructure engineer** who has run flaky suites at scale: every run
-  has a deadline, a baseline and a name for what hung.
-- r55m works like an **SRE writing a runbook for a shared lab**: two machines, leases with an owner
-  and an expiry, and a clock on every stage.
-- r55u works like a **maintainer of a long-lived fork** of a fast-moving upstream: drift is known
-  before the round, and a superseded commit is dropped, not resolved by hand.
-- r55w works like an **on-call tooling engineer**: nobody waits blind, and every alert names who acts.
-
-## The best at this job
-- Merge gates: GitHub merge queues and required status checks; Bors ("not rocket science": test the
-  merged result, not the branch); Gerrit's Verified +1 from a separate system.
-- Watching: Buildkite agent timeouts and "no output for N minutes" kills; GitHub Actions
-  `timeout-minutes`; PagerDuty escalation (every alert has an owner and a deadline).
-- Upstream: `git merge-tree --write-tree`, `git range-diff`, `git rebase --update-refs`, Linux
-  stable-queue practice of dropping patches upstream already carries.
-- Flakes and baselines: pytest-rerunfailures with seeds, Jest `--seed`/`--randomize`, rspec
-  `--seed` and bisect, "known failures" baselines in Chromium's test expectations.
-
-Anti-references:
-- A watchdog that only checks whether the process is alive.
-- "0 new failures" typed by hand into a PR description.
-- A lease that is a comment in a chat channel.
-- A gate that can be passed by a review recorded on an older sha.
-
-## The bar
-- A stalled test run is caught and named in 5 minutes or less (default); a run that keeps writing is
-  never stopped. Proven with a fake suite and a short configured window, and the default is 5 min.
-- A peer finishing or blocking reaches the lead in 60 seconds or less: `rig job` notices an idle,
-  done or blocked pane within 60 s, and `rig inbox --wait` wakes within 60 s of a `rig tell`.
-- Drift is known before a final round: `rig status`, `rig fold` and `rig finish` print it first.
-- `rig status --eta` prints only medians of measured stage times, and says "no data" when it has none.
-- `npm run check` stays green (Biome, the full suite, the personal-data scan); every existing test
-  passes, changed only where a new gate makes an old fixture incomplete (say which, and why).
+`rig tell <name> "..."` only drops a file in `<inbox>/<name>/`. The recipient sees it only if it keeps
+`rig inbox --wait` running, and leads do, but helpers and reviewers don't. In a practice run a lead used
+`rig tell` to message its helpers and reviewer; nothing woke them, and the crew sat idle for 30 minutes
+until the lead typed to them by hand. 5.6.1 makes a tell reach the agent it names, as a turn, without
+ever typing into an agent that is busy or waiting on a permission prompt. Three smaller faults from the
+same run are fixed alongside: the finish gate's negative-command exit semantics, `rig qa` grading a dev
+server as a test, and `rig up` opening helper tabs in reverse and in front of the reviewer.
 
 ## Who uses it, on what
-A lead session (Claude Code or Codex) driving a crew under herdr on Linux and macOS, with a second
-machine reachable by SSH and a reviewer from a second model vendor. Public repo: anyone running
-multi-agent builds with worktrees.
+A lead session (Claude Code or Codex) driving a crew in the Herdr desktop app (hc + herdr-app) on Linux
+and macOS; the same commands still run under terminal herdr, tmux, or a plain terminal. Public repo:
+anyone running multi-agent builds with worktrees.
 
-## Where we're starting from
-Rig 5.0.3 plus two plan commits (main at 93a7a9d), plus the scaffold commit that registers the new
-commands in `bin/rig.js` (stubs in `src/commands/{fold,decision,job,tell,inbox,lease,rebase}.js`)
-and writes contract stubs: `src/drift.js`, `src/baselines.js`, `src/timings.js`, `src/lease.js`,
-`src/remote.js`. Each stub's signature and JSDoc is the contract; its owner writes the body.
-Today: `rig qa` runs one command in a pinned worktree with a hard timeout and records
-`.rig/qa-history.jsonl`; `rig finish` gates on merge, review file, QA and negatives on the sha.
-The lead's helper scripts `tell-lead`, `lead-inbox` and `codex-job` exist outside the Rig (bash);
-their behaviour is described in item 5 and in the r55w task.
+## What done looks like
+Every bar below proved by a test that fails on 5.6.0's code (shown red by swapping the old behaviour
+back in), the real-hc end-to-end proof run once in the crew's Herdr space with idle, busy and blocked
+agents, an independent review passed on the final sha, one full `npm test` and `npm run check` green on
+it, README/CHANGELOG/briefs saying the new truth, version 5.6.1 committed locally (not pushed).
+
+## The bar
+- A `rig tell` to an IDLE agent in a Herdr app tab is delivered into that agent as a turn within 5 s,
+  any direction (helper→lead, lead→helper, lead→reviewer, reviewer→lead). 0 messages left unread.
+- To a BUSY agent: queued, then delivered within 10 s of it going idle (a small delivery watcher, or
+  hc's own queue if it has one: decide from evidence and write the evidence down), never typed
+  mid-turn.
+- To an agent BLOCKED on a permission prompt: nothing typed; `rig tell` prints that it is blocked and on
+  what, exits non-zero with a code that means "not delivered", and the file is still written.
+- A recipient with no Herdr app tab (plain terminal, tmux, terminal herdr): today's behaviour, plus one
+  line saying it was only filed. Exit 0.
+- A lead whose `rig inbox --wait` watcher is armed is never delivered twice: one rule, tested.
+- Names resolve through the crew's own record (`.rig/crew.json`, `src/crew.js`): slice ids, the lead
+  name and `rv-*` reviewer ids. Never a tab-label pattern.
+- `rig finish` cannot be fooled by, or wrongly fail on, a negative command that exits 1 when the break
+  is caught; `rig qa` never grades a long-running server as a test; `rig up` tab order is lead,
+  reviewer(s), then helpers in plan order.
 
 ## What must not happen or change
-- File-slice ownership, the QA worktree pinned to a sha, negative controls, the mindset block,
-  `rig taste`, and herdr tabs in the current workspace.
-- No new dependency: node, git, herdr, ssh only. No npm packages.
-- No test touches the real clipboard, the real display, a real second machine or a real herdr pane:
-  fakes on PATH (`ssh`, `herdr`, clipboard tools) in temp dirs. Run suites with
-  `env -u WAYLAND_DISPLAY -u DISPLAY`.
-- No personal data in tracked files: no home paths, host names, emails, or names of people,
-  companies or client repos. Examples stay generic. Run `check-no-personal-data` before you call
-  it done.
-- No AI credit anywhere: no Co-Authored-By trailers, no "generated with" lines.
-- Every commit's author and committer is the repo owner's identity from git config. Commit with
-  `env -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_EMAIL git commit …` (a session's environment may carry
-  another address) and check `git log -1 --format='%an %ae / %cn %ce'` after each commit.
-- Never push, tag or release. The lead merges, releases and publishes.
-- Never type into another agent's pane. Never open a herdr workspace or split a pane.
-- Do not edit files outside your Owns list. `bin/rig.js`, `README.md`, `CHANGELOG.md` and
-  `package.json` are the lead's: put the USAGE text and README paragraph you want in your report.
+- Nothing is ever typed into an agent that is working or blocked. Keystrokes into a busy pane mangle
+  the input. `hc send --force` is never used.
+- No test touches the real Herdr app, real hc, the real clipboard or display: fakes on PATH (`hc`,
+  `herdr-app`, `herdr`, `tmux`) in temp dirs; run suites with `env -u WAYLAND_DISPLAY -u DISPLAY` and
+  with `HC_TERMINAL_ID` unset unless the test sets it. The real-hc proof is a separate script
+  (`tools/`), run by hand, not part of `npm test`.
+- No new dependency: node, git, hc/herdr/tmux only.
+- File-slice ownership, the QA worktree pinned to a sha, negative controls, the inbox file format
+  (`from:`, `at:`, blank line, text) and `rig inbox --wait` exit codes stay as they are.
+- Public repo: no home paths, host names, emails, names of people or companies, no AI tool names or
+  credits in new tracked text where avoidable. `check-no-personal-data` clean.
+- Every commit's author and committer is the repo owner's git identity: commit with
+  `env -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_EMAIL git commit …`. No Co-Authored-By, no "generated with".
+- Never push, tag or release. Never type into another agent's pane, never open a new Herdr space or
+  tab by hand except through the code under test.
+- Do not edit files outside your Owns list. `bin/rig.js`, `README.md`, `CHANGELOG.md`, `package.json`,
+  `AGENTS.md`, `PLAN.md` and `src/crew.js` are the lead's: put the text you want there in your report.
+
+## Where it lives
+This public repo (MIT), installed with `npm link`.
+
+## Where we're starting from
+Rig 5.6.0 (bf44de6) plus the scaffold commit: `src/crew.js` (the crew record: `readCrew`,
+`recordMember`, `forgetMember`, `resolveMember`; its JSDoc is the contract) and a `rig crew` command
+registered in `bin/rig.js` with a stub at `src/commands/crew.js`.
+Today: `src/commands/tell.js` writes a file via `src/inbox.js` `tellMessage` and nothing else.
+`src/hc.js` opens slice tabs with `hc run --bg` labelled with the space and a fresh tab id.
+`hc send <t> <text>` pastes and presses Enter, refuses a blocked program unless `--force`, takes
+`--if idle|working`, and "waits for a person's unfinished draft"; `hc wait <t>` waits until it stops
+working; `hc get <t> --json` has `status.state` (`idle`, `working`, `blocked` …) and `turn`.
+
+## The feeling
+A message sent is a message read. The lead never has to be a crew's alarm clock, and no agent ever
+has its half-typed turn trampled by a delivery.
+
+## The specialist
+- tw1 works like a **messaging-systems engineer** (at-least-once delivery, idempotent consumers,
+  dead-letter queues): a message is filed first, delivered once, and its fate is always stated.
+- tw2 works like a **terminal-multiplexer maintainer**: tabs land where the user expects, and the
+  record of who runs where is written by the code that started them.
+- tw3 works like a **CI gate maintainer**: an exit code means exactly one thing, and a gate that a
+  server can pass measured nothing.
+
+## The best at this job
+- Delivery: SMTP's queue-and-retry with a bounce that names the reason; Maildir's tmp→new→cur rename
+  (claim by rename, so two readers never both take one message); systemd's `Type=notify` readiness.
+- Busy/idle: tmux's `wait-for`, `hc wait`, editors that hold a paste until the user stops typing.
+- Gates: GitHub Actions `continue-on-error` vs a step's exit code; `! cmd` and `expect-fail` in test
+  runners; Bazel's distinction between a test target and a run target.
+Anti-references:
+- A delivery that types into whatever pane matches a label regex.
+- "Sent" printed when the message is only sitting in a folder.
+- A gate whose meaning flips depending on how a script was written.
 
 ## Freedom
-Names of flags beyond those the plan fixes, file formats under `.rig/`, and module layout inside your
-slice are yours. Where the plan doesn't settle a choice, decide it, write it under "Decided" in your
-report, and carry on.
+Flag names beyond those fixed here, file formats under `.rig/`, module layout inside your slice.
+Where the plan doesn't settle a choice, decide it, write it under "Decided" in your report, carry on.
 
 ## Tools
-Node 22, `node:test` or the harness (`harness/check.js`: `s.check` with `breaks`), Biome
-(`npx biome check --write <your files>`), `npm run check`, `rig qa <sha> --run "npm test"`,
-`rig review <id>`. Headless Chrome only through `harness/cdp.js` (RIG_CHROME), debugging port 9355
-for r55u; existing tests use 9351 and 9352.
+Node 22, `node:test` or the harness (`harness/check.js`). Biome: `npx biome check --write <your files>`.
+Run only the tests your change touches (your files, their direct tests); the lead runs the whole suite
+once on the final sha.
 
 ## Checks
-- Every check in `docs/PLAN-5.5.md` "Checks" is a test that is seen red once (the old behaviour
-  swapped back in, or the guard removed), then green. Your report says how each was made red.
-- `npm test` runs every `test/*.test.js`. New test files are yours; existing ones only if listed in
-  your Owns.
+- Every bar above is a test that is seen red once (5.6.0's behaviour swapped back in, or the guard
+  removed), then green. Your report says how each was made red.
+- `npm test` runs every `test/*.test.js`. New test files are yours; existing ones only if in your Owns.
 - Negative controls: `npm run demo`
 
 ## Budget and autonomy
-Usage is finite: aim to finish your slice in one sitting, and spawn no sub-agents. Decide everything
-that has an established answer yourself.
+Aim to finish your slice in one sitting; spawn no sub-agents. Decide everything that has an
+established answer yourself.
 
 ## Asking and reporting
-A question left in your pane reaches nobody. Ask the lead, never the human:
-`tell-lead rig55 "<id>: <question>"`. When you finish, or block, run
-`tell-lead rig55 "<id>: <one line: done|blocked, sha, tests>"` as your last step. Only things that
-need the human's own hands (a permission dialog) go to the human, and you still tell the lead.
+This crew's own messages go through the lead's terminal (the bug being fixed is that `rig tell`
+does not wake anyone yet): report with `hc send t26z "<id>: <one line>"` when the lead's status is idle,
+or keep it short and send anyway (hc waits for a draft). Questions the same way. When you finish or
+block, that line is your last step: `<id>: done|blocked, <sha>, <tests>`.
 
 ## What to hand back
 Green commits on your branch. `docs/build-report-<id>.md`: what you built, the red you saw for each
 check and how, what you decided, the USAGE/README text for the lead, and what's left.
 
 ## Size and mode
-Big: five slices. Cross-review EARLY, at each slice's first real commit, round-robin: r55g reviews
-r55q, r55q reviews r55m, r55m reviews r55u, r55u reviews r55w, r55w reviews r55g. Write findings to
-`docs/review-<reviewee>.md` in your own worktree and commit it. The finder verifies the fix. The lead
-merges in the order r55m, r55u, r55w, r55q, r55g.
+Medium: three slices and one reviewer (rv-561, an Opus reviewer from the start; no second-vendor
+reviewer this round). The reviewer reads each slice at its first real commit and again at the end;
+findings go to `docs/review-<id>.md` on the reviewer's side, and the finder verifies the fix. The lead
+merges tw3, tw2, then tw1.
 
 ## Contract between slices
-- **r55m → everyone:** `src/timings.js` (`recordTiming`, `readTimings`, `estimate`), `src/lease.js`
-  (`acquire`, `release`, `holderOf`), `src/remote.js` (`runOnHost`), with the signatures in the
-  stubs. Leases on a host must hold across machines and sessions, not just in one repo's `.rig/`.
-- **r55u → r55g, r55q:** `src/drift.js` `drift(root, opts)` and `src/baselines.js`
-  `staleBaselines(root, opts)`, with the shapes in the stubs.
-- **r55q → r55g:** records in `.rig/qa-history.jsonl` keep today's fields and add: `host`
-  (`'local'` or the ssh host), `kind: 'ci'` for the repo's own local CI command (3b), `baseline`
-  (`{ base, baseSha, newFailures: [name], known: [{ name, where: 'here'|'there'|'both' }] }`),
-  `stalled` (`{ worker, spec, quietMs }` when the watchdog stopped it), `needsStub` ([spec]), and
-  `repeat` (`{ n, seeds, failedSeeds }`). The config keys are `qaHost` (ssh host or null) and
-  `ciCommand` (or detected, r55q decides how and documents it).
-- **r55g reads those:** finish needs a local test pass on the sha, the same on `qaHost` when it is
-  set, the CI command's pass (both machines when a host is set) when the repo has one, a
-  second-vendor review pass on the sha, no open decisions, and it prints drift first.
-- **r55w → r55g:** nothing in code. `rig up` and every brief end with the `rig tell` line.
+- **lead → everyone:** `src/crew.js`. Entry: `{ terminal, tab, space, role: 'lead'|'slice'|'reviewer',
+  backend: 'hc'|'herdr'|'tmux'|null, at }`, keyed by exact name.
+- **tw2 writes the record:** `rig up` records the lead (its `lead` name → the terminal `rig up` runs in,
+  `HC_TERMINAL_ID` under hc) and every slice tab it opens or finds; `rig review --launch` records its
+  `rv-<id>` tab; `rig crew add <name> <terminal> [--role r]` records one by hand (a reviewer spawned
+  outside rig), `rig crew` lists, `rig crew rm <name>` forgets. `rig down` forgets the slices it closes.
+- **tw1 reads it:** `rig tell <name>` resolves the terminal with `resolveMember(mainRoot(), name)`,
+  delivers or queues, and states the outcome. tw1 owns the delivery code and the exit codes.
+- **tw2 → tw1:** the brief/hint text says "rig tell <name> wakes it" only after tw1's behaviour lands;
+  tw2 writes the text to the plan's bar, the lead checks it against tw1's final behaviour at merge.
 
 ## Agents
 
-### r55g — The gate: second vendor, one fold, decisions, finish
+### tw1 — Delivery: `rig tell` wakes idle agents, queues for busy ones, refuses blocked ones
+Model: opus (hard: concurrency and live agent state)
 Owns:
-- src/commands/finish.js
-- src/commands/review.js
-- src/commands/fold.js
-- src/commands/decision.js
-- src/fold.js
-- src/decisions.js
-- src/vendor.js
-- test/qa-finish.test.js
-- test/workflow.test.js
-- test/gate-*.test.js
-- docs/DECISIONS.md
-- docs/review-r55q.md
-- docs/build-report-r55g.md
-
-Task:
-Items 1, 2 and 13 of docs/PLAN-5.5.md, and the finish side of 3, 3b, 4 and 11.
-
-1. `rig review --vendor <name> --pass "<what ran>"` records a second-vendor pass on the current
-   sha of the base (`--sha` to name another) in `.rig/`, with the time it took when given
-   (`--ms`, else since the review brief was written) via `recordTiming(stage 'review')`. The
-   builder's vendor comes from `vendor` in the config, else from the launch command (claude →
-   anthropic, codex → openai). A pass from the same vendor is refused with a message saying why.
-   `--fail "<what it found>"` records a failing verdict; the newest verdict on the sha wins.
-2. `rig fold [--base <ref>]`: fix commits (subject starting `fixup!`/`squash!`, or listed with
-   `--fix <sha>`) fold into their owning commits with an autosquash rebase run non-interactively.
-   Then: every commit walked (each checked out in a scratch worktree and the configured test or
-   `--each "<cmd>"` command run, exit recorded), the folded tip's tree compared to the old tip's tree
-   (which already contains the fixes) and refused unless `git diff` is empty, and the new shas
-   stamped in `.rig/fold.json` (old → new). A fold that drops a hunk is refused and the branch is
-   put back. Drift (`drift()`) is printed first. Timing recorded as stage 'fold'.
-3. `rig decision "<what>" --source <transcript|thread>` appends to `docs/DECISIONS.md` (id, date,
-   what, source, status open). `rig decision <id> --built|--scheduled <round>|--not-in-scope`.
-   `rig finish` lists every decision since the round started (the oldest slice branch point, or
-   `--since <ref>`) and fails while any is open.
-4. `rig finish` gains gates: second-vendor pass on this sha (`--no-vendor` downgrades to a warning
-   and FINISH.md says so); host tally on `qaHost` when set; the CI command's result (r55q's `ci`
-   records) on both machines when it ran; open decisions; baseline "0 new" shown when recorded.
-   Drift is printed before the gates.
-Checks (each red once): finish refuses without a vendor pass, without the host tally when
-configured, with an open decision; a same-vendor pass is refused; a fold that drops a hunk is
-refused by the tree check. Existing finish fixtures that now lack a vendor pass get one added:
-list each in your report.
-
-### r55q — QA that cannot hang, lie, or touch the desktop
-Owns:
-- src/commands/qa.js
-- src/qalog.js
-- src/qa/**
-- test/qa-*.test.js
-- docs/review-r55m.md
-- docs/build-report-r55q.md
-
-Task:
-Items 3b, 4, 7, 8, 16, and the `rig qa` side of 3, 9 and 15.
-
-1. **Stall watchdog (7).** While a command runs, watch output growth per worker: the command's own
-   output, plus per-worker logs when `qaWorkerLogs` (a glob) is configured. No growth for
-   `qaStallMinutes` (default 5) names the worker and the last spec it mentioned, stops the whole
-   process group (reuse `groups.stop`), records `stalled`, and exits non-zero with a message that
-   names both. Output must still reach the terminal live.
-2. **Desktop-free (8).** By default the command runs with DISPLAY and WAYLAND_DISPLAY unset and a
-   shim dir first on PATH holding `xclip`, `xsel`, `wl-copy`, `wl-paste`, `pbcopy`, `pbpaste` that
-   fail fast and log the call. Specs whose failure coincides with a shim call are listed as
-   "needs a stub" (`needsStub`), not new failures. `--desktop` opts back in.
-3. **Baseline (4).** `rig qa <sha> --baseline [<base>]` also runs the same command on the merge base
-   (or `<base>`) in a second pinned worktree, parses failure names (node:test, TAP `not ok`, the
-   harness's `FAIL  <name>`, rspec `rspec ./path:line`, Playwright; add a `qaFailurePattern` regex
-   option), and reports only new failures, with known ones listed by where they also fail (here,
-   there, both, when a host ran too). "0 new" is computed from both runs.
-4. **Local CI (3b).** When the repo defines a local CI command (`ciCommand` in config, else a
-   detection rule you choose and document, e.g. `scripts.ci` in package.json or an executable
-   `bin/ci`), `rig qa` runs exactly that command and records kind `ci`, on both machines when a
-   host is set. Record a "CI passed" status the command posts when it can be read (decide; say).
-5. **Second machine (3).** `rig qa <sha> --host <ssh-host>` (or `qaHost` in config) runs the same
-   command there through r55m's `runOnHost`, under a lease (`acquire(root, 'host:<h>', session)`),
-   and prints both tallies side by side. A held lease is refused with the holder's name.
-6. **Repeat (16).** `rig qa <sha> --repeat N --seeds [<list>] --run "<one file>"`: N runs with a
-   seed each (exported as `RIG_SEED`, plus `--seed` passing for known runners: say which), on both
-   machines when a host is set; reports N green or names the failing seeds. Listed seeds always run.
-7. **Timings (9) and baselines (15).** Every stage's wall time goes to `recordTiming` (stages
-   `qa:test`, `qa:negative`, `qa:ci`, `qa:host`, `qa:baseline`). `rig qa` warns when
-   `staleBaselines()` returns anything.
-Checks (each red once): a fake suite that stops writing is stopped and named within the window; one
-that keeps writing is not; "0 new" from two real runs in a fixture (and a new failure shown as new);
-a spec calling a clipboard tool is listed "needs a stub" and the real tool is never reached.
-
-### r55m — Two machines, leases, measured time
-Owns:
-- src/remote.js
-- src/lease.js
-- src/timings.js
-- src/commands/lease.js
-- test/machines-*.test.js
-- test/fixtures/fake-ssh/**
-- docs/review-r55u.md
-- docs/build-report-r55m.md
-
-Task:
-Items 3 (the runner), 9 (the record and the estimate) and 10.
-
-1. `runOnHost` (see stub): sends the commit with `git bundle` over `ssh <host>` (nothing pushed),
-   into a checkout per session under a configurable remote dir (`qaHostDir`, default
-   `~/.rig-qa/<repo>`), checks out exactly the sha, installs deps when the lockfile changed, runs
-   the command with `RIG_TEST_DB=<repo>_<session>` (the per-session test DB name) and the same
-   desktop-free env as local, streams output, honours `limitMs`, and returns the exit. An ssh
-   failure is exit 255 with the reason, never a hang (ConnectTimeout, BatchMode).
-2. Leases (10): `acquire/release/holderOf` for `host:<h>` and `db:<name>`. A host lease lives on the
-   host (an atomic `mkdir` lock plus a JSON holder file over ssh), so two sessions on two machines
-   see the same lease; a local db lease lives under the user's state dir, not a repo. Leases expire
-   (`ttlMin`). `rig lease <resource> --by <id> [--release] [--ttl <min>]` prints the holder on refusal
-   and exits 1.
-3. Timings (9): `.rig/timings.jsonl` via `rigDir`; `estimate()` takes the median per stage, says
-   "no data" for a stage with none and returns totalMs null then.
-Checks (each red once): a second holder is refused (two sessions, a fake ssh host); a lease past its
-ttl is taken over; `runOnHost` on a fake ssh (a script on PATH that runs the remote command in a temp
-"host" dir) checks out exactly the sha and returns its exit, and an unreachable host returns 255
-quickly; `estimate` medians are exact on fixture data and say no data on none.
-
-### r55u — Upstream: drift, rebase, baselines that know their sha
-Owns:
-- src/drift.js
-- src/baselines.js
-- src/commands/rebase.js
-- src/commands/status.js
-- harness/snapshot.js
-- harness/index.js
-- test/upstream-*.test.js
-- test/snapshot.test.js
-- examples/snapshot-fixture.html
-- test/taste.test.js
-- src/taste/**
-- docs/review-r55w.md
-- docs/build-report-r55u.md
-
-Task:
-Items 11, 12, 15, and `rig status --eta` (9's display).
-
-1. `drift()` (see stub): fetch, then commits on the live base since the merge base, the files they
-   touched mapped to owning slices (via the plan's Owns), owned files untouched listed as safe, and
-   `git merge-tree --write-tree` for whether the head still merges, with conflicting files.
-2. `rig status` prints drift first (`--no-fetch` to skip fetching) and gains `--eta`, which prints
-   r55m's `estimate()` for the stages of a final round and says when there is no data.
-3. `rig rebase <id> [--base <ref>]`: rebase a slice's branch onto the live base. Before resolving
-   anything, when upstream deleted or rewrote (a configurable share of lines, decide) a file the
-   slice changed, stop, write `.rig/rebase-<id>.md` asking the owner what upstream now covers, print
-   it, and exit 3. `--covered "<what upstream covers>"` records the answer and lets the rebase go on,
-   with `--drop <sha>` to drop superseded commits.
-4. `harness/snapshot.js`: platform-neutral snapshot helpers on top of `harness/cdp.js`: pin the user
-   agent, locale and modifier-key hints (Meta vs Control); record auto margins as "auto"; wait for
-   an app-ready signal (a selector, a global or a function) instead of first paint; retake when not
-   ready, with a bounded number of tries. Baselines carry `RECORDED_FROM: <sha>`.
-   `staleBaselines()` finds them (a `snapshotDirs` config or a sensible default) and reports how far
-   the base moved past each. Export the helpers from `harness/index.js` (additions only).
-Checks (each red once): a fixture repo whose base moved, touching an owned file, is flagged and the
-untouched files listed as safe; a non-merging stack is reported; rebase stops on an upstream-deleted
-file; the snapshot helper records "auto", and a not-ready page is retaken.
-
-### r55w — Watching: peers report themselves, briefs say who acts
-Owns:
-- src/commands/job.js
 - src/commands/tell.js
 - src/commands/inbox.js
 - src/inbox.js
-- src/herdr.js
-- src/brief.js
-- src/plan.js
-- src/roll.js
-- src/commands/up.js
-- src/commands/brief.js
-- templates/**
-- test/watch-*.test.js
-- test/brief-five.test.js
-- test/up-guard-init.test.js
-- test/crew.test.js
-- docs/review-r55g.md
-- docs/build-report-r55w.md
+- src/deliver.js
+- test/tell-wake.test.js
+- test/fixtures/fake-hc/**
+- tools/tell-wake-e2e.*
+- docs/build-report-tw1.md
 
 Task:
-Items 5, 6 and 14.
+1. Find out from evidence what hc does with `hc send` to a working agent (does it queue until idle,
+   type immediately, or refuse?) and with `--if idle`. Use a throwaway terminal running a plain
+   program that reads stdin (never another agent's pane), and write what you saw in the report. That
+   evidence decides whether busy delivery leans on hc or on a small delivery watcher of our own.
+2. `rig tell <name> "<text>"`: always file the message first (today's format). Then resolve `<name>`
+   through `src/crew.js`. If it is an hc terminal: idle → `hc send` the message as a turn (one line
+   that says who it is from and that it is a rig tell, plus the text), and on success move the file
+   to `read/`; working → queue it and make sure a delivery watcher exists that sends within 10 s of
+   the agent going idle (one watcher per recipient, never two; it exits when the queue is empty;
+   it re-checks the status right before each send and never sends to a working or blocked agent);
+   blocked → print `not delivered: <name> is blocked on <what hc says>`, exit with a distinct code.
+   No hc terminal, no record, or another backend → print one line `filed only: <name> has no Herdr
+   app tab; it reads this with rig inbox <name>`, exit 0.
+3. No double delivery: pick one rule (e.g. the file is claimed by an atomic rename into `read/` or a
+   `delivering/` dir; whoever wins the rename delivers; a recipient with an armed `rig inbox --wait`
+   watcher gets the file through its watcher, not typed) and test both orders.
+4. Exit codes: 0 delivered or queued or filed-only; one documented non-zero code for "not delivered"
+   (blocked, or the terminal is gone). Usage errors stay 2.
+5. A fake `hc` on PATH for the tests (states idle/working/blocked scripted from a file, every `send`
+   logged), and `tools/tell-wake-e2e.*`: the real-hc proof the lead runs once (idle helper→lead,
+   lead→helper, lead→reviewer, reviewer→lead within 5 s; busy delivered within 10 s of idle; blocked
+   refused), printing the measured times.
+Checks (each red once on 5.6.0's tell): idle delivered as a turn within 5 s; busy never typed while
+working and delivered within 10 s of idle; blocked not typed, exit code, file present; no-tab prints
+filed-only and exits 0; a watcher-armed lead gets each message exactly once; two concurrent tells to
+one busy agent spawn one watcher and deliver both, in order.
 
-1. `rig tell <lead> "<msg>"` writes one message file atomically into the lead's inbox (a state dir:
-   `RIG_INBOX_DIR`, else `$XDG_STATE_HOME/rig/inbox`, else `~/.local/state/rig/inbox`, decide and
-   document; honour an existing `~/.claude/inbox` layout only if you can do it without naming a
-   vendor in the default). The sender comes from `RIG_AGENT_ID`, the slice id, or `CODEX_PERSONA`.
-2. `rig inbox [<lead>] [--wait] [--deadline <min>]` prints new messages and files them under
-   `read/`; `--wait` blocks until one lands or the deadline, polling at most every 5 s (the 60 s bar).
-3. `rig job <pane> "<task>" [--expect <file>] [--deadline <min>]`: brief a pane through
-   `herdr agent prompt`, wait for it to leave idle, then until idle, done or blocked, or the deadline;
-   print the state, the minutes, whether the expected file exists and is non-empty, BLOCKED when it
-   is, and the pane's last lines. The task it sends ends with the tell line. Exit codes per outcome
-   (decide; document). Refuse to prompt a busy pane.
-4. `rig up` prints, and when it can, starts, the lead's inbox watcher (the exact background command
-   `rig inbox <lead> --wait --deadline <min>`), with the lead name from `lead` in config or
-   `RIG_LEAD`. Every brief ends with the tell line: `briefFor` and `tabBrief` are yours; export a
-   `tellLine(lead, id)` helper from `src/brief.js` and r55g calls it at the end of `reviewBrief`.
-   Briefs state item 6 outright: ask the lead, never the human; only permission dialogs, a go,
-   or a taste call go to the human.
-5. Item 14: plans gain a `## Refusals` (refusal → repair) section in `templates/PLAN.md`; `rig up`
-   warns when a plan whose work has a UI over rules lacks it (decide the trigger; an explicit
-   `UI: none` line silences it).
-Checks (each red once): `rig job` exits on idle, done and blocked, and on its deadline against a fake
-`herdr` on PATH whose pane never finishes; `rig inbox --wait` wakes within 60 s of `rig tell`; the
-brief's last line is the tell line; `rig up` warns on a missing refusal matrix.
+### tw2 — Crew record, tab order, and the briefs' messaging text
+Model: sonnet
+Owns:
+- src/commands/up.js
+- src/commands/review.js
+- src/commands/down.js
+- src/commands/crew.js
+- src/hc.js
+- src/brief.js
+- templates/**
+- test/crew-record.test.js
+- test/up-tab-order.test.js
+- docs/build-report-tw2.md
 
-## Open questions
-- None for the crew. The lead brings the release.
+Task:
+1. `rig up` and `rig review --launch` record members in `.rig/crew.json` through `src/crew.js` (see
+   Contract). Under hc, the lead's terminal is `HC_TERMINAL_ID`; slice tabs opened by `rig up` or found
+   already open (named with the slice id) are recorded with their terminal, tab and space; `rig down`
+   forgets the ones it closes.
+2. `rig crew` (list, with each member's live hc status when hc is available), `rig crew add <name>
+   <terminal> [--role lead|slice|reviewer]`, `rig crew rm <name>`. Put the USAGE line in your report.
+3. Item 7: under hc, `rig up` opens tabs so the space reads lead, reviewer(s), then helpers in PLAN
+   order. Find out why they land reversed and in front (where the window inserts a tab labelled into
+   a space) using a fake `herdr-app` for the test and the evidence from the code; fix it with
+   `herdr-app do tab.move` (or the right label/ordering), never with anything that moves the person's
+   view (`tab.new`, `space.new`, focus). `rig review --launch` puts `rv-*` right after the lead.
+4. Briefs and hints: `tellLine`/`askTheLead` in `src/brief.js`, `rig up`'s inbox hint, `rig review`'s
+   hand-over text and anything in `templates/` that tells agents how to message: say the new truth
+   (`rig tell <name>` wakes an agent in a Herdr app tab, queues for a busy one, and says when it only
+   filed the message). Keep `rig inbox --wait` as the lead's listener where it still applies.
+Checks (each red once): the record holds the lead, every slice and the reviewer after `rig up` +
+`rig review --launch` with a fake hc/herdr-app; resolve is exact-name (a label that merely matches a
+pattern resolves to nothing); tab order after `rig up` with an existing reviewer tab is lead, reviewer,
+slices in plan order, and no command that moves the view was called; the brief's tell line says it
+wakes the named agent.
+
+### tw3 — Gate semantics: negative command exit, qa never grades a server
+Model: sonnet
+Owns:
+- src/commands/finish.js
+- src/commands/qa.js
+- src/plan.js
+- src/config.js
+- test/finish-negative.test.js
+- test/qa-not-a-server.test.js
+- docs/build-report-tw3.md
+
+Task:
+1. Item 4: today `rig finish` wants the negative command to exit 0, and a plan's `npm run negative`
+   that exits 1 when the break is caught is read as red. Make the meaning explicit and hard to get
+   wrong: decide the rule (for example a `negativeExpect: "fail"|"pass"` setting, or the plan line
+   saying "exits non-zero when the break is caught", or Rig inverting it itself when the command is
+   a known-red demo), make `rig qa --negative` record what the run's exit MEANS (caught / not caught),
+   and make `rig finish` gate on that meaning. The printed line names the command, its exit, and what
+   that exit was taken to mean. Existing configs (`negativeCommand: "npm run demo"` where the script
+   ends `|| true`) keep working.
+2. Item 5: `rig qa` without `--run` used `devCommand` (`npm start`) as the test and counted a server
+   that ran 5 minutes as green. A QA test run must be a test: decide the rule (e.g. a separate
+   `testCommand`, with `devCommand` never used as the test; or refuse a command that is still running
+   and listening on a port when the stall or deadline ends, and never record a killed run as green)
+   and enforce it. A run killed by the deadline or a signal is never green.
+Checks (each red once): a negative command that exits 1 when the break is caught passes the gate when
+configured as such and fails it otherwise, with the meaning printed; a negative command that exits 0
+because nothing broke is not counted as caught; `rig qa` with only `devCommand: "npm start"`-style
+config refuses to grade it as the test (or never records it green); a deadline-killed run is never
+recorded green.

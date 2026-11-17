@@ -28,6 +28,7 @@ const COMMANDS = {
     'record a decision: rig decision "<what>" --source <transcript|thread>; close it: rig decision <id> --built | --scheduled <round> | --not-in-scope; finish refuses while one of this round is open',
   job: 'brief an agent in another pane and wait until it is idle, done or blocked, or the deadline: rig job <pane> "<task>" --expect <file> --deadline <min>',
   tell: 'tell the lead something, from any peer: rig tell <lead> "<one line>"',
+  crew: 'the crew record: which terminal each member (lead, slices, rv-* reviewers) runs in: rig crew | add <name> <terminal> [--role r] | rm <name>',
   inbox: 'the lead’s inbox: print new messages, or --wait until one lands (--deadline <min>)',
   lease: 'lease a shared resource (a second machine, a test DB): rig lease <host|db> --by <id>; refused while someone else holds it',
   rebase: 'rebase a slice onto the live base; stops and asks the slice owner when upstream deleted or rewrote a file the slice changed',
@@ -86,6 +87,7 @@ rig decision --list`,
   exits 0 finished · 3 refused (busy, blocked, unknown) · 4 deadline · 5 BLOCKED
         6 expected file missing/empty · 7 never started`,
   tell: `rig tell [<lead>] "<one line>"      (lead: "lead" in .rig/config.json, else RIG_LEAD)`,
+  crew: `rig crew | rig crew add <name> <terminal> [--role lead|slice|reviewer] | rig crew rm <name>`,
   inbox: `rig inbox [<lead>] [--wait] [--deadline <min>]   exits 0 messages · 4 deadline`,
   lease: `rig lease <host:<ssh-host>|db:<name>[@<ssh-host>]> --by <id> [--ttl <min>]   take or renew (default ttl 120 min)
 rig lease <resource> --by <id> --release                                    give it back (holder only)
