@@ -42,7 +42,7 @@ function repoAt(config = {}) {
   mkdirSync(join(repo, '.rig'), { recursive: true })
   writeFileSync(
     join(repo, '.rig', 'config.json'),
-    JSON.stringify({ worktreeDir: '.worktrees', qaPort: 5199, branchPrefix: 'rig/', ...config }),
+    JSON.stringify({ worktreeDir: '.worktrees', qaPort: 0, branchPrefix: 'rig/', ...config }),
   )
   return repo
 }

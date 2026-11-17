@@ -51,8 +51,13 @@ rig qa <ref> --repeat <N> [--seeds [<s1,s2,…>]] --run "<one file>" [--host <ss
                      (with the CI and host runs, when they run, counted between the two)
   --negative-expect pass|fail   what the negative command's exit means: "pass" (exit 0 once every
                      control went red; default) or "fail" (non-zero when the break is caught). Also
-                     negativeExpect in the config, or "(exits non-zero when the break is caught)" on
-                     the plan's "Negative controls:" line. The run records caught / not caught.
+                     negativeExpect in the config, or the exact marker "(exits non-zero when the break is
+                     caught)" or "(expect: fail)" at the end of the plan's "Negative controls:" line
+                     (prose elsewhere in the line never changes it). Under "fail" a non-zero exit is
+                     caught only when the output also names a failing control (a FAIL or "went red"
+                     line, a failing test) and shows no sign the command itself broke (Missing
+                     script, SyntaxError, Cannot find module). The flag applies to this run only:
+                     rig finish reads the config and the plan. The run records caught / not caught.
   --negative "<cmd>" the negative-control command (default: negativeCommand in the config or the
                      plan's "Negative controls:" line); recorded as kind "negative" on the same sha
   --port <n>         PORT for the command (default: qaPort, +1 per extra QA worktree in use)
@@ -131,9 +136,24 @@ export default async function qa(args) {
   }
   const cmd = picked.cmd
   const negative = argOf(args, '--negative') || cfg.negativeCommand || planNegative(root, cfg)
+  if (!negative) {
+    const problem = planNegativeProblem(root, cfg)
+    if (problem) {
+      console.error(`rig qa: refused: ${problem}. Nothing was run.`)
+      process.exit(2)
+    }
+  }
   let negativeExpect = 'pass'
+  let flagNote = null
   try {
-    if (negative) negativeExpect = negativeExpectation(argOf(args, '--negative-expect'), cfg.negativeExpect, planNegativeExpect(root, cfg))
+    if (negative) {
+      const flag = argOf(args, '--negative-expect')
+      const repoSays = negativeExpectation(cfg.negativeExpect, planNegativeExpect(root, cfg))
+      negativeExpect = negativeExpectation(flag, repoSays)
+      // The gate reads the repo's reading, never the flag: a flag that disagrees cannot pass rig finish.
+      if (flag && flag !== repoSays)
+        flagNote = `--negative-expect ${flag} is only for this run: rig finish reads "${repoSays}" from negativeExpect in .rig/config.json or the plan line. To make ${flag} the rule, set "negativeExpect": "${flag}" in .rig/config.json or write (exits non-zero when the break is caught) / (expect: ${flag}) on the plan's Negative controls line.`
+    }
   } catch (e) {
     console.error(`rig qa: ${e.message}. Nothing was run.`)
     process.exit(2)
@@ -275,6 +295,7 @@ export default async function qa(args) {
   }
 
   if (negative) {
+    if (flagNote) console.log(`\nrig qa: note: ${flagNote}`)
     const r = await localStage(ctx, ['negative'], negative)
     fail(r)
   }
@@ -381,7 +402,14 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
     kind === 'negative'
       ? {
           expect: ctx.negativeExpect || 'pass',
-          ...classifyNegative({ exit: r.exit, expect: ctx.negativeExpect || 'pass', stalled: r.stalled, timedOut: r.timedOut }),
+          ...classifyNegative({
+            exit: r.exit,
+            expect: ctx.negativeExpect || 'pass',
+            stalled: r.stalled,
+            timedOut: r.timedOut,
+            text: r.text,
+            failures,
+          }),
         }
       : null
   const green = negative ? negative.caught : r.exit === 0 && !r.timedOut && !r.stalled
@@ -826,6 +854,15 @@ export function dirtyMessage(tracked, untracked = []) {
 function planNegativeExpect(root, cfg) {
   try {
     return loadPlan(join(root, cfg.plan)).negativeExpect || null
+  } catch {
+    return null
+  }
+}
+
+/** Why the plan's Negative controls line cannot be used (meaning in prose, no backticked command), or null. */
+function planNegativeProblem(root, cfg) {
+  try {
+    return loadPlan(join(root, cfg.plan)).negativeProblem || null
   } catch {
     return null
   }

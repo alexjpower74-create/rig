@@ -196,21 +196,50 @@ export function negativeExpectation(...values) {
  * A run that never reached a verdict (deadline, stall, signal, not found, not executable) catches
  * nothing under either reading, and neither does a "fail" command that exited 0 because nothing broke.
  */
-export function classifyNegative({ exit, expect = 'pass', stalled = null, timedOut = false }) {
+export function classifyNegative({ exit, expect = 'pass', stalled = null, timedOut = false, text = '', failures = [] }) {
   if (stalled || timedOut || exit === 124) return { caught: false, meaning: 'not caught: the run was stopped before it reached a verdict' }
   if (exit >= 126)
     return {
       caught: false,
       meaning: `not caught: exit ${exit} means the command did not run to a verdict (signal, not found or not executable)`,
     }
-  if (expect === 'fail')
-    return exit === 0
-      ? {
-          caught: false,
-          meaning: 'not caught: it exited 0, and this command is expected to exit non-zero when the break is caught, so nothing broke',
-        }
-      : { caught: true, meaning: 'caught: it exited non-zero, as it does when the break is caught' }
+  if (expect === 'fail') {
+    if (exit === 0)
+      return {
+        caught: false,
+        meaning: 'not caught: it exited 0, and this command is expected to exit non-zero when the break is caught, so nothing broke',
+      }
+    // A non-zero exit alone cannot tell "the guard caught the break" from "the guard never ran" (a typo'd
+    // npm script, a syntax error, a missing fixture all exit 1). Under "fail" the run must also show the
+    // controls working: a named failure, or a red/FAIL line, and none of the shapes of a command that broke.
+    const broke = NOT_RAN.find((re) => re.test(text))
+    if (broke)
+      return {
+        caught: false,
+        meaning: `not caught: it exited ${exit}, but its output shows the command itself broke (${broke.source.replace(/\\/g, '')}), not a control going red`,
+      }
+    if (!failures.length && !RED_EVIDENCE.test(text))
+      return {
+        caught: false,
+        meaning: `not caught: it exited ${exit}, but its output names no failing control (a FAIL or "went red" line, or a failing test); a command that never ran exits non-zero too`,
+      }
+    return { caught: true, meaning: 'caught: it exited non-zero and its output shows a failing control' }
+  }
   return exit === 0
     ? { caught: true, meaning: 'caught: it exited 0, the command reports every control red' }
     : { caught: false, meaning: `not caught: it exited ${exit}, and this command is expected to exit 0 once every control went red` }
 }
+
+/** Output of a command that broke before any control could run. */
+const NOT_RAN = [
+  /Missing script/,
+  /ERR_MODULE_NOT_FOUND/,
+  /Cannot find module/,
+  /SyntaxError/,
+  /command not found/,
+  /No such file or directory/,
+  /ENOENT/,
+  /ERR_UNKNOWN_FILE_EXTENSION/,
+]
+/** A line that says a control went red. */
+const RED_EVIDENCE = /(^|[^A-Za-z])(FAIL|FAILED|RED|not ok)([^A-Za-z]|$)|✖|✗|went red/m

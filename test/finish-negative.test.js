@@ -62,12 +62,13 @@ function repoAt(negLine = '- Negative controls: `npm run negative`', config = {}
   writeFileSync(join(repo, '.gitignore'), '.rig/\n.worktrees/\n')
   writeFileSync(join(repo, 'PLAN.md'), PLAN(negLine))
   writeFileSync(join(repo, 'README.md'), '# x\n')
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { negative: 'echo FAIL control; exit 1', hollow: 'exit 1' } }))
   git(['add', '-A'], repo)
   git(['commit', '-qm', 'plan'], repo)
   mkdirSync(join(repo, '.rig'), { recursive: true })
   writeFileSync(
     join(repo, '.rig', 'config.json'),
-    JSON.stringify({ worktreeDir: '.worktrees', qaPort: 5199, branchPrefix: 'rig/', ...config }),
+    JSON.stringify({ worktreeDir: '.worktrees', qaPort: 0, branchPrefix: 'rig/', ...config }),
   )
   return repo
 }
@@ -114,7 +115,7 @@ test('a negative command that exits 1 when the break is caught: caught, and the 
 
 test('the same record fails the gate when the repo says exit 0 is what a caught break looks like', () => {
   const repo = repoAt()
-  rig(repo, ['main', '--negative', 'exit 1', '--negative-expect', 'fail'])
+  rig(repo, ['main', '--negative', 'echo "FAIL: control one"; exit 1', '--negative-expect', 'fail'])
   const c = gate(repo) // nothing says "fail" any more: the default reading is exit 0
   assert.equal(c.state, 'fail')
   assert.match(c.detail, /exited 1, read as expecting non-zero, but the repo now says exit 0/)
@@ -143,9 +144,9 @@ test('a negative command that exits 0 because nothing broke is not counted as ca
 })
 
 test('the plan line can say it: "(exits non-zero when the break is caught)" is read, run and gated', () => {
-  const repo = repoAt('- Negative controls: `exit 3` (exits non-zero when the break is caught)')
+  const repo = repoAt('- Negative controls: `echo "FAIL: c"; exit 3` (exits non-zero when the break is caught)')
   assert.equal(loadPlan(join(repo, 'PLAN.md')).negativeExpect, 'fail')
-  assert.equal(loadPlan(join(repo, 'PLAN.md')).negativeCommand, 'exit 3')
+  assert.equal(loadPlan(join(repo, 'PLAN.md')).negativeCommand, 'echo "FAIL: c"; exit 3')
   const r = rig(repo, ['main']) // no flag: the plan's line decides
   assert.equal(r.status, 0, r.out)
   assert.match(r.out, /CAUGHT/)
@@ -185,17 +186,91 @@ test('classifyNegative: the whole table, and a bad setting is refused by name', 
   const rows = [
     [{ exit: 0, expect: 'pass' }, true],
     [{ exit: 1, expect: 'pass' }, false],
-    [{ exit: 1, expect: 'fail' }, true],
-    [{ exit: 2, expect: 'fail' }, true],
+    [{ exit: 1, expect: 'fail', text: 'FAIL: control one' }, true],
+    [{ exit: 2, expect: 'fail', failures: ['spec a'] }, true],
+    [{ exit: 1, expect: 'fail' }, false], // no sign any control ran
+    [{ exit: 1, expect: 'fail', text: 'npm error Missing script: "negativ"' }, false],
+    [{ exit: 1, expect: 'fail', text: 'SyntaxError: Unexpected token\nFAIL' }, false],
     [{ exit: 0, expect: 'fail' }, false],
     [{ exit: 124, expect: 'fail' }, false],
     [{ exit: 137, expect: 'fail' }, false],
     [{ exit: 127, expect: 'fail' }, false], // command not found is not a caught break
     [{ exit: 0, expect: 'pass', timedOut: true }, false],
-    [{ exit: 1, expect: 'fail', stalled: { worker: 'output' } }, false],
+    [{ exit: 1, expect: 'fail', text: 'FAIL', stalled: { worker: 'output' } }, false],
   ]
   for (const [input, caught] of rows) assert.equal(classifyNegative(input).caught, caught, JSON.stringify(input))
   assert.equal(negativeExpectation(undefined, null, 'fail'), 'fail')
   assert.equal(negativeExpectation(), 'pass')
   assert.throws(() => negativeExpectation('sometimes'), /negativeExpect must be "pass" or "fail"/)
+})
+
+// ---- rv-561's early review ----------------------------------------------------------------------
+
+test('under "fail", a negative command that never ran its controls is NOT caught (a typo\'d npm script, a syntax error)', () => {
+  const sha = (repo) => git(['rev-parse', 'main'], repo)
+  // `npm run negativ` (missing script) exits 1: on 58f5f45 this read CAUGHT and passed rig finish.
+  const typo = repoAt('- Negative controls: `npm run negativ` (exits non-zero when the break is caught)')
+  const r = rig(typo, ['main'])
+  assert.notEqual(r.status, 0, r.out)
+  assert.match(r.out, /NOT CAUGHT/)
+  assert.equal(lastNegativeOn(typo, sha(typo)).caught, false)
+  assert.equal(gate(typo).state, 'fail')
+  // a script that exits 1 without ever naming a failing control is no evidence either
+  const hollow = repoAt('- Negative controls: `npm run hollow` (exits non-zero when the break is caught)')
+  assert.notEqual(rig(hollow, ['main']).status, 0)
+  assert.equal(gate(hollow).state, 'fail')
+  // a syntax error in a node script
+  const syn = repoAt('- Negative controls: `node bad.js` (exits non-zero when the break is caught)')
+  writeFileSync(join(syn, 'bad.js'), 'const = ;\n')
+  git(['add', '-A'], syn)
+  git(['commit', '-qm', 'bad'], syn)
+  assert.notEqual(rig(syn, ['main']).status, 0)
+  assert.equal(gate(syn).state, 'fail')
+  // known-good partner: the same plan with a script that names a failing control IS caught
+  const real = repoAt('- Negative controls: `npm run negative` (exits non-zero when the break is caught)')
+  const ok = rig(real, ['main'])
+  assert.equal(ok.status, 0, ok.out)
+  assert.equal(gate(real).state, 'ok')
+})
+
+test('plan marker: only the exact trailing parenthesis changes the meaning, prose never does', () => {
+  const prose = negativeLine(
+    '- Negative controls: `npm run demo` (each control expects failure of its guarded test; the script exits 0 once all went red)',
+  )
+  assert.deepEqual(prose, { cmd: 'npm run demo', expect: 'pass' })
+  assert.equal(negativeLine('- Negative controls: `x` (expect: fail)').expect, 'fail')
+  assert.equal(negativeLine('- Negative controls: `x` (expect: pass)').expect, 'pass')
+  assert.equal(negativeLine('- Negative controls: `x` (exits non-zero when the break is caught)').expect, 'fail')
+  assert.equal(negativeLine('- Negative controls: `x`, which exits non-zero when the break is caught').expect, 'pass')
+})
+
+test('a line that states the meaning in prose with no backticked command is refused, not guessed', () => {
+  const l = negativeLine('- Negative controls: npm run negative, which exits non-zero when the break is caught')
+  assert.equal(l.cmd, null)
+  assert.match(l.problem, /backticked command/)
+  const repo = repoAt('- Negative controls: npm run negative, which exits non-zero when the break is caught')
+  const plan = loadPlan(join(repo, 'PLAN.md'))
+  assert.equal(plan.negativeCommand, null)
+  const r = rig(repo, ['main'])
+  assert.equal(r.status, 2, r.out)
+  assert.match(r.out, /backticked command/)
+  const cfg = { plan: 'PLAN.md', worktreeDir: '.worktrees', branchPrefix: 'rig/' }
+  assert.equal(finishChecks(repo, cfg, plan, 'main').checks.find((c) => c.name === 'negative controls line is usable').state, 'fail')
+  // a plain bare command with no meaning words still works as it did
+  assert.deepEqual(negativeLine('- Negative controls: npm run demo'), { cmd: 'npm run demo', expect: 'pass' })
+})
+
+test('--negative-expect that disagrees with the repo says so, and finish names the real repair', () => {
+  const repo = repoAt()
+  const r = rig(repo, ['main', '--negative', 'echo "FAIL: c"; exit 1', '--negative-expect', 'fail'])
+  assert.match(r.out, /note: --negative-expect fail is only for this run: rig finish reads "pass"/)
+  assert.match(r.out, /set "negativeExpect": "fail" in \.rig\/config\.json/)
+  const c = gate(repo)
+  assert.equal(c.state, 'fail')
+  assert.match(c.detail, /Set "negativeExpect" in \.rig\/config\.json/)
+  // no note when the flag agrees with the repo
+  const agree = rig(repo, ['main', '--negative', 'echo "FAIL: c"; exit 1', '--negative-expect', 'fail'])
+  assert.match(agree.out, /note: /)
+  const quiet = repoAt('- Negative controls: `npm run negative` (expect: fail)')
+  assert.doesNotMatch(rig(quiet, ['main', '--negative-expect', 'fail']).out, /note: --negative-expect/)
 })

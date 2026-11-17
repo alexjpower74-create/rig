@@ -488,6 +488,7 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
   // 3b. The negatives went red again on THIS sha. Four source-patching controls silently went NOT
   // RED after a formatter moved the strings they anchored on; the sha changed, so the record must.
   if (wantsNegative(cfg, plan)) {
+    if (plan.negativeProblem && !cfg.negativeCommand) add('negative controls line is usable', 'fail', plan.negativeProblem)
     const neg = lastNegativeOn(root, sha)
     const why = 'formatting moves the strings source-patching controls anchor on; re-run `rig qa ' + short + ' --negative`'
     const t = `negative controls red on ${short}`
@@ -509,7 +510,7 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
           add(
             t,
             'fail',
-            `${named}, read as expecting ${recorded === 'fail' ? 'non-zero' : 'exit 0'}, but the repo now says ${expect === 'fail' ? 'non-zero' : 'exit 0'} when the break is caught — re-run \`rig qa ${short} --negative\``,
+            `${named}, read as expecting ${recorded === 'fail' ? 'non-zero' : 'exit 0'}, but the repo now says ${expect === 'fail' ? 'non-zero' : 'exit 0'} when the break is caught. Set "negativeExpect" in .rig/config.json, or end the plan's Negative controls line with (exits non-zero when the break is caught), to match the command; then re-run \`rig qa ${short} --negative\``,
           )
         else if (neg.caught === undefined)
           add(
