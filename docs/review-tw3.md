@@ -78,3 +78,30 @@ test fails with `actual: 0`. The lead's single full-suite run on a busy machine 
 - `finish` changed its warn from `devCommand` to `testCommand`; correct now that devCommand isn't the test.
 
 Severity summary: 1 high, 1 medium, 1 low–medium, 2 low.
+
+## Fix round verified at 4b21f69 (2026-11-17)
+
+Ran `test/finish-negative.test.js` + `test/qa-not-a-server.test.js` at 4b21f69: 19/19 pass. Checked
+each fix myself against my original failing inputs:
+
+1. **FIXED, with a residual (LOW).** Under "fail" a non-zero exit now needs evidence: a named failure
+   or a FAIL / not ok / ✖ / "went red" line, and none of the not-ran shapes (Missing script, Cannot
+   find module, SyntaxError, ENOENT …). `npm error Missing script: "negativ"` now reads NOT caught.
+   I proved the new test red by putting 58f5f45's `src/config.js` back: 0 pass, 1 fail.
+   Residual: a control test file that crashes at load with a ReferenceError or TypeError still reads
+   CAUGHT. `node --test` on a file whose second line calls an undefined function exits 1 and prints
+   `✖ c.test.mjs` under "failing tests", which matches RED_EVIDENCE. That is narrower than the
+   original hole, and a runner cannot tell it from a real red without per-test names. Accept it and
+   document it in USAGE ("under fail, a test file that cannot load counts as a failing control"), or
+   require `failures` to name a test rather than a file. Not blocking.
+   Also note: NOT_RAN fails closed on a control whose real red mentions ENOENT or "No such file or
+   directory". That is the safe direction, fine.
+2. **FIXED.** Only the trailing marker counts. My line "(each control expects failure …; exits 0
+   once all went red)" now reads `expect: 'pass'`.
+3. **FIXED.** A prose-only line is refused (`cmd: null`, `problem` set). `rig qa` exits 2, and
+   `rig finish` fails "negative controls line is usable".
+4. **FIXED.** A disagreeing flag prints a note naming the config key and the plan marker, and finish's
+   mismatch message names the real repair.
+5. **FIXED.** `qaPort: 0` in the test; the server listens on a free port.
+
+Verdict on the early findings: PASS (one LOW residual, noted above). Final review on main's sha still to come.
