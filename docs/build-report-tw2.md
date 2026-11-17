@@ -61,3 +61,4 @@ space reads lead, reviewer(s), helpers in plan order; briefs say `rig tell <name
 3. LOW, lead rebind: `rig up` run from another terminal keeps a live recorded lead and says how to rebind (`rig crew add <lead> <terminal>`); a dead lead terminal is rebound. Test both ways, red with the guard removed.
 4. LOW, `rig crew` usage errors (missing argument, unknown subcommand, bad role) exit 2.
 5. NOTE (brief text vs tw1's final behaviour): left for the lead's merge check.
+6. MED (rv-561, round 2): `arrangeTabs` only counts tabs of this space, so a recorded reviewer in another space no longer eats a slot or gets a `tab.move`. Test red with the filter removed.

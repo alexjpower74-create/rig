@@ -135,8 +135,12 @@ export function arrangeTabs({ leadTab = null, reviewers = [], reviewerTabs = [],
   const space = home().space
   if (!space) return 0
   const byName = (n) => tabs(space).find((t) => t.name === n)
+  // A recorded reviewer in another space is not ours to move: only tabs of this space count.
+  const here = () => new Set(tabs(space).map((t) => t.id))
   const wanted = () =>
-    [...new Set([leadTab, ...reviewerTabs, ...reviewers.map((n) => byName(n)?.id), ...slices.map((n) => byName(n)?.id)])].filter(Boolean)
+    [...new Set([leadTab, ...reviewerTabs, ...reviewers.map((n) => byName(n)?.id), ...slices.map((n) => byName(n)?.id)])].filter(
+      (id) => id && here().has(id),
+    )
   const first = wanted()
   if (!first.length) return 0
   // Our tabs fill the slots from the earliest one of them onward; the person's own tabs keep theirs.

@@ -262,6 +262,34 @@ await suite('rig up tab order (lead, reviewer(s), helpers in plan order)', async
     breaks: broken([['src/commands/up.js', 'reviewerTabs: hc.reviewerTabIds(readCrew(root).members)', 'reviewerTabs: []']]),
     timeout: 60_000,
   })
+  await s.check('a recorded reviewer in another space is not arranged here: no slot used, no tab.move for it', {
+    assert: async () => {
+      setWorld({ insert: 'back' })
+      const w = state()
+      w.spaces.push({ id: 'spB', name: 'Other', tabs: [{ id: 'tbX', name: 'rv-other', terminals: ['t9'] }] })
+      w.terminals.t9 = { app: 'claude-code', status: 'idle' }
+      writeFileSync(statePath, JSON.stringify(w))
+      rmSync(join(root, '.rig', 'crew.json'), { force: true })
+      const { recordMember } = await mod('src/crew.js')
+      recordMember(root, 'rv-other', { terminal: 't9', role: 'reviewer', backend: 'hc' })
+      const hc = await mod('src/hc.js')
+      for (const id of ['s1', 's2']) hc.newWindow('s', id, tmp, 'true')
+      const { recordCrew } = await mod('src/commands/up.js')
+      const log = console.log
+      console.log = () => {}
+      try {
+        recordCrew(root, 'boss', ['s1', 's2'])
+      } finally {
+        console.log = log
+      }
+      const moved = calls()
+        .filter((c) => c.tool === 'herdr-app' && c.argv[1] === 'tab.move')
+        .map((c) => JSON.parse(c.argv[2]).id)
+      return order().join(',') === 'lead,s1,s2,notes' && !moved.includes('tbX')
+    },
+    breaks: broken([['src/hc.js', '(id) => id && here().has(id),', '(id) => id,']]),
+    timeout: 60_000,
+  })
 })
 
 process.env.PATH = saved.PATH
