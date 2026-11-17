@@ -135,3 +135,18 @@ was seen ("in the practice run they landed reversed and in front"), or cite the 
 from the lead's proof. Not blocking.
 
 Verdict: FAIL until the personal-data check is clean; PASS on behaviour.
+
+## Final at 43c84c1 (2026-11-17): PASS
+
+- Blocker fixed: `up.js` and `review.js` call `hcHome` (`import { home as hcHome } from '../hc.js'`);
+  `grep -rn "hc\.home" src/` finds only `hc.homeTerminal()`. `check-no-personal-data` in a clean
+  checkout of 43c84c1 exits 0. The same check exited 1 on 61fb3aa naming those two lines, so the
+  check went red, then green.
+- `test/crew-record.test.js` 8 passed, `test/up-tab-order.test.js` 7 passed, both 0 void. No test
+  control anchors on the renamed call.
+- README lows: the `tab.new` reason now matches the window's own description ("focuses the new tab
+  unless told not to"), and the negative evidence sentence matches the code. Left as is, and fine to
+  ship: README/CHANGELOG still state "the window inserts a new tab right after the first one" as
+  fact. tw2 could not prove that from the real window, so it rests on the lead's observation in the
+  real-agent run.
+- 43c84c1 touches only README.md and those two call sites, so tw1's and tw3's PASS at 61fb3aa carry over.
