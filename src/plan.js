@@ -133,7 +133,15 @@ export function parsePlan(text) {
   for (const a of agents) a.task = a.task.join('\n').trim()
   const sections = parseSections(lines)
   const fields = briefFields(sections)
-  return { title, agents, sections, ...fields, ui: uiLine(text), negativeCommand: negativeCommand(fields.checks) }
+  return {
+    title,
+    agents,
+    sections,
+    ...fields,
+    ui: uiLine(text),
+    negativeCommand: negativeCommand(fields.checks),
+    negativeExpect: negativeLine(fields.checks)?.expect ?? null,
+  }
 }
 
 /**
@@ -146,13 +154,25 @@ export function parsePlan(text) {
  * backticked span, when there is one, is the command and the rest is prose. `null` when unnamed.
  */
 export function negativeCommand(checksBody) {
+  return negativeLine(checksBody)?.cmd ?? null
+}
+
+/**
+ * The negative line, read whole: { cmd, expect }. `expect` is "fail" when the line says the command
+ * exits non-zero when the break is caught: "(exits non-zero when the break is caught)", "(expect:
+ * fail)" or "(expects failure)" anywhere in the line; "pass" otherwise ("(expect: pass)" says it too).
+ * That is what `rig finish` gates on, so the plan states the meaning in the same line as the command.
+ */
+export function negativeLine(checksBody) {
   for (const raw of (checksBody || '').split('\n')) {
     const m = raw.replace(/^\s*[-*]\s+/, '').match(/^negative(?: controls?|-control command(?: for this repo)?):\s*(.+?)\s*$/i)
     if (!m) continue
     if (/^<.*>$/.test(m[1])) continue
     const span = m[1].match(/`([^`]+)`/)
-    const cmd = (span ? span[1] : m[1]).trim()
-    if (cmd) return cmd
+    const prose = span ? m[1].replace(span[0], '') : m[1]
+    const expectFail = /\bexits? non-?zero\b|\bexpects? (?:fail|failure)\b|\bexpect:\s*fail\b/i.test(prose)
+    const cmd = (span ? span[1] : m[1].replace(/\s*\([^)]*\)\s*$/, '')).trim()
+    if (cmd) return { cmd, expect: expectFail ? 'fail' : 'pass' }
   }
   return null
 }

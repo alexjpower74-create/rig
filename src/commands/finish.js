@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { mainRoot, loadConfig, currentBranch } from '../config.js'
+import { mainRoot, loadConfig, currentBranch, negativeExpectation } from '../config.js'
 import { loadPlan, missingBrief } from '../plan.js'
 import { worktreePath, dirtyFiles } from '../worktrees.js'
 import { reportPath } from '../reports.js'
@@ -405,11 +405,22 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
   }
   const knownOnly = (run) => (waiver(run).ok ? waiver(run).why : null)
   const failWhy = (run) => `exited ${run.exit}${waiver(run).why ? ` (not waived: ${waiver(run).why})` : ''}`
-  const qaState = (run) => (run.exit === 0 || knownOnly(run) ? 'ok' : 'fail')
+  // A run the deadline or a signal stopped never finished, whatever exit it recorded: never green.
+  const stopped = (run) => Boolean(run.timedOut || run.stalled)
+  const qaState = (run) => (run.exit === 0 && !stopped(run) ? 'ok' : knownOnly(run) ? 'ok' : 'fail')
   if (!qa) add(`QA green on ${short}`, 'fail', `no \`rig qa ${short} --run …\` recorded on this commit`)
-  else add(`QA green on ${short}`, qaState(qa), qa.exit === 0 ? qa.cmd : knownOnly(qa) || `last run ${failWhy(qa)}: ${qa.cmd}`)
-  if (qa && cfg.devCommand && qa.cmd !== cfg.devCommand)
-    add('QA ran the project’s test command', 'warn', `ran "${qa.cmd}", the config's devCommand is "${cfg.devCommand}"`)
+  else
+    add(
+      `QA green on ${short}`,
+      qaState(qa),
+      qa.exit === 0 && !stopped(qa)
+        ? qa.cmd
+        : stopped(qa)
+          ? `the run was stopped (deadline or stall) and is never green: ${qa.cmd}`
+          : knownOnly(qa) || `last run ${failWhy(qa)}: ${qa.cmd}`,
+    )
+  if (qa && cfg.testCommand && qa.cmd !== cfg.testCommand)
+    add('QA ran the project’s test command', 'warn', `ran "${qa.cmd}", the config's testCommand is "${cfg.testCommand}"`)
 
   // 3a. The second machine, when there is one: a second OS caught 34 platform-only failures and a
   // 1-in-3 flake the first never showed. Its tally has to be on this sha too.
@@ -479,13 +490,36 @@ export function finishChecks(root, cfg, plan, base, opts = {}) {
   if (wantsNegative(cfg, plan)) {
     const neg = lastNegativeOn(root, sha)
     const why = 'formatting moves the strings source-patching controls anchor on; re-run `rig qa ' + short + ' --negative`'
-    if (!neg) add(`negative controls red on ${short}`, 'fail', `no negative run recorded on this commit — ${why}`)
-    else
-      add(
-        `negative controls red on ${short}`,
-        neg.exit === 0 ? 'ok' : 'fail',
-        neg.exit === 0 ? neg.cmd : `last negative run exited ${neg.exit}: ${neg.cmd} — ${why}`,
-      )
+    const t = `negative controls red on ${short}`
+    if (!neg) add(t, 'fail', `no negative run recorded on this commit — ${why}`)
+    else {
+      // The gate reads what the exit MEANT when it ran ("caught" or not), against what the repo says it
+      // means now. A record from before 5.6.1 has no meaning: exit 0 was caught, as it always was.
+      let expect
+      try {
+        expect = negativeExpectation(cfg.negativeExpect, plan.negativeExpect)
+      } catch (e) {
+        expect = null
+        add(t, 'fail', e.message)
+      }
+      if (expect) {
+        const recorded = neg.negativeExpect ?? 'pass'
+        const named = `"${neg.cmd}" exited ${neg.exit}`
+        if (recorded !== expect)
+          add(
+            t,
+            'fail',
+            `${named}, read as expecting ${recorded === 'fail' ? 'non-zero' : 'exit 0'}, but the repo now says ${expect === 'fail' ? 'non-zero' : 'exit 0'} when the break is caught — re-run \`rig qa ${short} --negative\``,
+          )
+        else if (neg.caught === undefined)
+          add(
+            t,
+            expect === 'pass' && neg.exit === 0 ? 'ok' : 'fail',
+            `${named}, ${expect === 'pass' && neg.exit === 0 ? 'caught: exit 0' : `not caught: expecting exit 0 — ${why}`}`,
+          )
+        else add(t, neg.caught ? 'ok' : 'fail', `${named}, ${neg.meaning}${neg.caught ? '' : ` — ${why}`}`)
+      }
+    }
   }
 
   // 3c. The tree was clean right after the tests. A file a test writes is invisible in a suite's

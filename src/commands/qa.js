@@ -1,6 +1,14 @@
 import { closeSync, mkdirSync, openSync, rmSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
-import { mainRoot, loadConfig, currentBranch, currentBranchOrNull } from '../config.js'
+import {
+  mainRoot,
+  loadConfig,
+  currentBranch,
+  currentBranchOrNull,
+  classifyNegative,
+  negativeExpectation,
+  testCommandFor,
+} from '../config.js'
 import { acquireQaWorktree, cleanWorktree, porcelainLines } from '../worktrees.js'
 import { loadPlan } from '../plan.js'
 import { git, tryGit } from '../sh.js'
@@ -36,9 +44,15 @@ rig qa <ref> --repeat <N> [--seeds [<s1,s2,…>]] --run "<one file>" [--host <ss
 
   <ref>              the commit to pin (a sha, a branch, a tag); defaults to the current branch of
                      the MAIN checkout. Give the sha: "rig qa" alone grades main, not your slice.
-  --run "<cmd>"      the test command (default: devCommand in .rig/config.json); recorded as kind
+  --run "<cmd>"      the test command (default: testCommand in .rig/config.json; a devCommand that is
+                     not a server is used with a note; a server such as npm start is refused, exit 2;
+                     a run stopped by the deadline or a signal is never green); recorded as kind
                      "test". rig qa exits with the first non-zero of the test run, then the negative
                      (with the CI and host runs, when they run, counted between the two)
+  --negative-expect pass|fail   what the negative command's exit means: "pass" (exit 0 once every
+                     control went red; default) or "fail" (non-zero when the break is caught). Also
+                     negativeExpect in the config, or "(exits non-zero when the break is caught)" on
+                     the plan's "Negative controls:" line. The run records caught / not caught.
   --negative "<cmd>" the negative-control command (default: negativeCommand in the config or the
                      plan's "Negative controls:" line); recorded as kind "negative" on the same sha
   --port <n>         PORT for the command (default: qaPort, +1 per extra QA worktree in use)
@@ -87,7 +101,7 @@ export default async function qa(args) {
     console.log(USAGE)
     return
   }
-  for (const flag of ['--run', '--negative', '--host', '--repeat', '--by']) {
+  for (const flag of ['--run', '--negative', '--negative-expect', '--host', '--repeat', '--by']) {
     if (args.includes(flag) && !argOf(args, flag)) {
       console.error(`rig qa: ${flag} needs a value, e.g. ${EXAMPLES[flag]}. Nothing was run.`)
       process.exit(2)
@@ -107,6 +121,23 @@ export default async function qa(args) {
       console.error(`rig qa: qaFailurePattern in .rig/config.json is not a regex (${e.message}). Nothing was run.`)
       process.exit(2)
     }
+  // A QA test run must be a test. devCommand is what `npm start` runs; a server is never graded.
+  // Decided before a lease or a worktree is touched, so a refusal costs nothing.
+  const runFlag = argOf(args, '--run')
+  const picked = testCommandFor(cfg, runFlag)
+  if (picked.refused) {
+    console.error(`rig qa: refused: ${picked.refused} Nothing was run.`)
+    process.exit(2)
+  }
+  const cmd = picked.cmd
+  const negative = argOf(args, '--negative') || cfg.negativeCommand || planNegative(root, cfg)
+  let negativeExpect = 'pass'
+  try {
+    if (negative) negativeExpect = negativeExpectation(argOf(args, '--negative-expect'), cfg.negativeExpect, planNegativeExpect(root, cfg))
+  } catch (e) {
+    console.error(`rig qa: ${e.message}. Nothing was run.`)
+    process.exit(2)
+  }
   const ref = resolveRef(args, currentBranch(root))
   const fresh = args.includes('--fresh')
   const desktop = args.includes('--desktop')
@@ -185,7 +216,10 @@ export default async function qa(args) {
     desktop,
     lease,
     leaseLost: leaseLost.signal,
+    negativeExpect,
   }
+  if (cmd && picked.from?.startsWith('devCommand'))
+    console.log(`\nrig qa: no testCommand set; grading devCommand "${cmd}" as the test (${picked.from}).`)
   ctx.env = shims ? desktopFreeEnv(baseEnv, shims) : baseEnv
 
   if (repeat) {
@@ -194,20 +228,19 @@ export default async function qa(args) {
     process.exit(code)
   }
 
-  const runFlag = argOf(args, '--run')
-  const cmd = runFlag || cfg.devCommand
-  const negative = argOf(args, '--negative') || cfg.negativeCommand || planNegative(root, cfg)
   const wantCi = !args.includes('--no-ci') && (!runFlag || args.includes('--ci'))
   const ci = wantCi ? detectCi(wt.path, cfg) : null
   if (!cmd && !negative && !ci) {
-    console.log('\nNo dev command configured. Set "devCommand" in .rig/config.json or pass --run "<cmd>".')
+    console.log('\nNo test command configured. Set "testCommand" in .rig/config.json or pass --run "<cmd>".')
     return
   }
 
   let exit = 0
   // A CI that exits 0 but posted "failure" is not green (r55g review 2): the posted verdict counts.
   const fail = (r) => {
-    const code = r.exit !== 0 ? r.exit : r.ciStatus?.state === 'failure' ? 1 : 0
+    // A negative run is read by what its exit means (caught or not), never by exit 0 alone.
+    if (r.negative) return void (!r.negative.caught && exit === 0 && (exit = r.exit !== 0 ? r.exit : 1))
+    const code = r.exit !== 0 ? r.exit : r.timedOut || r.stalled ? 124 : r.ciStatus?.state === 'failure' ? 1 : 0
     if (exit === 0 && code !== 0) exit = code
   }
   ctx.seen = new Set()
@@ -255,6 +288,7 @@ export default async function qa(args) {
 const EXAMPLES = {
   '--run': '--run "npm test"',
   '--negative': '--negative "npm run demo"',
+  '--negative-expect': '--negative-expect fail',
   '--host': '--host build-box',
   '--repeat': '--repeat 10',
   '--by': '--by r55q',
@@ -342,6 +376,15 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
   const calls = ctx.shims ? readShimCalls(ctx.shims.log).slice(callsBefore) : []
   const stub = needsStub(r.lines, calls, { pattern: ctx.pattern })
   const t = tally(r.text, failures, r.exit)
+  // A negative run records what its exit MEANS; a run the deadline or a signal stopped is never green.
+  const negative =
+    kind === 'negative'
+      ? {
+          expect: ctx.negativeExpect || 'pass',
+          ...classifyNegative({ exit: r.exit, expect: ctx.negativeExpect || 'pass', stalled: r.stalled, timedOut: r.timedOut }),
+        }
+      : null
+  const green = negative ? negative.caught : r.exit === 0 && !r.timedOut && !r.stalled
   const ciStatus = statusFile ? readCiStatus(statusFile) : null
   if (statusFile) tryRm(statusFile)
   const left = dirtiedBy(wt.path)
@@ -373,14 +416,21 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
       tallyConflict: t.conflict,
       needsStub: stub.map((s) => s.name),
       stalled: r.stalled,
+      timedOut: r.timedOut || false,
+      ...(negative && k === 'negative' ? { negativeExpect: negative.expect, caught: negative.caught, meaning: negative.meaning } : {}),
       log: log.path,
       ...(k === 'ci' ? { ciFrom: ci?.from ?? null, ciStatus } : {}),
     })
-    timing(root, `qa:${k}`, r.ms, full, 'local', r.exit === 0)
+    timing(root, `qa:${k}`, r.ms, full, 'local', green)
   }
   console.log(
-    `\nrig qa: ${kinds.join(' + ')} exit ${r.exit} at ${sha}${r.exit === 0 ? '' : '  (NOT green)'}  ${fmtMs(r.ms)}  — recorded in .rig/qa-history.jsonl`,
+    `\nrig qa: ${kinds.join(' + ')} exit ${r.exit} at ${sha}${green ? '' : '  (NOT green)'}  ${fmtMs(r.ms)}  — recorded in .rig/qa-history.jsonl`,
   )
+  if (negative)
+    console.log(
+      `rig qa: negative control "${cmd}" exited ${r.exit}, expecting ${negative.expect === 'fail' ? 'non-zero when the break is caught' : 'exit 0 once every control went red'}: ${negative.meaning.toUpperCase().startsWith('CAUGHT') ? 'CAUGHT' : 'NOT CAUGHT'} (${negative.meaning})`,
+    )
+  else if (r.timedOut) console.log(`rig qa: the deadline stopped this run; a stopped run is never green`)
   if (r.stalled)
     console.log(
       `rig qa: stalled: worker ${r.stalled.worker}, last spec ${r.stalled.spec ?? 'none named'}, quiet ${fmtMs(r.stalled.quietMs)}`,
@@ -402,7 +452,19 @@ async function localStage(ctx, kinds, cmd, { ci = null } = {}) {
     )
   if (kinds.includes('ci')) printCiStatus(ciStatus, r.exit, '')
   if (dirtied.length || untracked.length) console.log(dirtyMessage(dirtied, untracked))
-  return { ...r, at, host: 'local', cmd, failures, diff, needsStub: stub.map((s) => s.name), tally: t, ciStatus, label: `${kind} here` }
+  return {
+    ...r,
+    negative,
+    at,
+    host: 'local',
+    cmd,
+    failures,
+    diff,
+    needsStub: stub.map((s) => s.name),
+    tally: t,
+    ciStatus,
+    label: `${kind} here`,
+  }
 }
 
 function printCiStatus(status, exit, where) {
@@ -760,6 +822,15 @@ export function dirtyMessage(tracked, untracked = []) {
   return `the tests ${parts.join(' and ')} — untrack it (git rm --cached) or have the test restore it; check-no-personal-data and \`rig finish\` see a dirty tree`
 }
 
+/** What the plan says the negative command's exit means ('pass' | 'fail'), or null. */
+function planNegativeExpect(root, cfg) {
+  try {
+    return loadPlan(join(root, cfg.plan)).negativeExpect || null
+  } catch {
+    return null
+  }
+}
+
 /** The plan's negative-control command, if rg2's parser found one; null without a plan. */
 function planNegative(root, cfg) {
   try {
@@ -797,7 +868,19 @@ function holdLock(wt) {
   }
 }
 
-const VALUE_FLAGS = new Set(['--ref', '--branch', '--port', '--run', '--negative', '--timeout', '--stall', '--host', '--repeat', '--by'])
+const VALUE_FLAGS = new Set([
+  '--ref',
+  '--branch',
+  '--port',
+  '--run',
+  '--negative',
+  '--negative-expect',
+  '--timeout',
+  '--stall',
+  '--host',
+  '--repeat',
+  '--by',
+])
 
 /**
  * Flags whose value is optional, and when the next argument is theirs: `--seeds [<list>]` takes a
