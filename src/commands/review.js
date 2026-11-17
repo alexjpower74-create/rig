@@ -4,6 +4,8 @@ import { mainRoot, loadConfig, sessionName, currentBranch } from '../config.js'
 import { loadPlan, withoutPlaceholders } from '../plan.js'
 import { tryGit } from '../sh.js'
 import { terminal } from '../terminal.js'
+import { recordMember, readCrew } from '../crew.js'
+import * as hc from '../hc.js'
 import { rigDir } from '../rigdir.js'
 import { MINDSET } from '../mindset.js'
 import { tellLine } from '../brief.js'
@@ -55,8 +57,10 @@ export default function review(args) {
   console.log(`  findings go to: ${brief.out}`)
 
   if (by) {
-    console.log(`\nhand it to ${by} when it is idle: "Read ${rel} and follow it."`)
-    console.log('(the rig never types into a running agent — a keystroke interrupts its turn)')
+    console.log(`\nhand it to ${by}: rig tell ${by} "Read ${rel} and follow it."`)
+    console.log(
+      '(rig tell wakes an agent in a Herdr app tab, queues for a busy one, and says when it only filed the message; the rig never types into a running agent)',
+    )
   }
   if (args.includes('--launch')) {
     const term = terminal(cfg)
@@ -67,9 +71,22 @@ export default function review(args) {
     const label = `rv-${id}`
     const cmd = `${argOf(args, '--launch-cmd') || cfg.launch} "Read ${rel} and follow it."`
     const session = sessionName(root)
-    if (term.sessionExists(session)) term.newWindow(session, label, root, cmd)
-    else term.newSession(session, label, root, cmd)
+    const terminalId = term.sessionExists(session) ? term.newWindow(session, label, root, cmd) : term.newSession(session, label, root, cmd)
+    if (term.name === 'hc' && terminalId) recordReviewer(root, cfg, label, terminalId)
     console.log(`\nlaunched a fresh reviewer in ${term.tabs ? 'tab' : 'window'} ${label}`)
+  }
+}
+
+/** The reviewer's tab goes in the crew record and sits right after the lead's (never moves the view). */
+export function recordReviewer(root, cfg, label, terminal) {
+  try {
+    const where = hc.whereIs(terminal)
+    recordMember(root, label, { terminal, tab: where.tab, space: where.space, role: 'reviewer', backend: 'hc' })
+    const lead = readCrew(root).members[leadOf(cfg)]
+    hc.arrangeTabs({ leadTab: lead?.tab ?? hc.home().tab, reviewerTabs: hc.reviewerTabIds(readCrew(root).members), slices: [] })
+    console.log(`crew record: ${label} = ${terminal}`)
+  } catch (e) {
+    console.log(`crew record not written: ${e.message}`)
   }
 }
 
