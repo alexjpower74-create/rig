@@ -12,6 +12,7 @@ import { rigDir } from '../rigdir.js'
 import { inboxRoot, leadName, leadDir, watcherState, freshInboxNote, DEFAULT_WAIT_MIN } from '../inbox.js'
 import inbox from './inbox.js'
 import * as hc from '../hc.js'
+import { home as hcHome } from '../hc.js'
 import { readCrew, recordMember } from '../crew.js'
 
 const YEL = (s) => `\x1b[33m${s}\x1b[0m`
@@ -154,7 +155,7 @@ export default async function up(args) {
  */
 export function recordCrew(root, lead, sliceIds) {
   const names = [...sliceIds, ...sliceIds.map((i) => 'rv-' + i)]
-  const home = hc.home()
+  const home = hcHome()
   try {
     const mine = hc.homeTerminal()
     const had = lead ? readCrew(root).members[lead] : null

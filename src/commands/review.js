@@ -6,6 +6,7 @@ import { tryGit } from '../sh.js'
 import { terminal } from '../terminal.js'
 import { recordMember, readCrew } from '../crew.js'
 import * as hc from '../hc.js'
+import { home as hcHome } from '../hc.js'
 import { rigDir } from '../rigdir.js'
 import { MINDSET } from '../mindset.js'
 import { tellLine } from '../brief.js'
@@ -83,7 +84,7 @@ export function recordReviewer(root, cfg, label, terminal) {
     const where = hc.whereIs(terminal)
     recordMember(root, label, { terminal, tab: where.tab, space: where.space, role: 'reviewer', backend: 'hc' })
     const lead = readCrew(root).members[leadOf(cfg)]
-    hc.arrangeTabs({ leadTab: lead?.tab ?? hc.home().tab, reviewerTabs: hc.reviewerTabIds(readCrew(root).members), slices: [] })
+    hc.arrangeTabs({ leadTab: lead?.tab ?? hcHome().tab, reviewerTabs: hc.reviewerTabIds(readCrew(root).members), slices: [] })
     console.log(`crew record: ${label} = ${terminal}`)
   } catch (e) {
     console.log(`crew record not written: ${e.message}`)

@@ -458,8 +458,8 @@ and kill the turn it is in the middle of. Panes are read-only from outside: `hc 
 In the **Herdr desktop app** (a terminal with `HC_TERMINAL_ID` set) it drives the window with
 `herdr-app` and the agents with herdr-core's `hc`. It **stays in the space it was run from** and
 opens one tab per slice, named with the slice id, in the slice's worktree, without moving your view:
-each terminal starts through `hc run` labelled with the lead's space and a fresh tab id (never
-`herdr-app do tab.new`, which jumps the window). The window inserts a new tab right after the first
+each terminal starts through `hc run` labelled with the lead's space and a fresh tab id, rather
+than `herdr-app do tab.new`, which focuses the new tab unless told not to. The window inserts a new tab right after the first
 one, so `rig up` then moves each into place with `tab.move`: the space reads lead, reviewer(s), then
 the helpers in plan order. The worktree is pre-trusted, a trust
 prompt that shows anyway is answered once, and a tab the agent retitles is renamed back. Agent state
@@ -640,8 +640,8 @@ member's live status.
 **Gates that mean one thing.** The same release fixed three faults from that run. A negative
 command's exit now has one stated meaning: `negativeExpect: "fail"` in the config (or
 `(exits non-zero when the break is caught)` on the plan's `Negative controls:` line, or
-`--negative-expect fail`) says a non-zero exit is the catch. Under it, a run must also show a control
-actually failed, so a typo'd script (`npm run negativ`, "Missing script") is never read as caught.
+`--negative-expect fail`) says a non-zero exit is the catch. Under it, the run's output must also carry a
+test-failure line, so a typo'd script (`npm run negativ`, "Missing script") is never read as caught.
 `rig qa` and `rig finish` print the command, its exit and what that exit was taken to mean. `rig qa`
 grades `testCommand` (falling back to `devCommand` only when that is not a server), refuses a
 server command (`npm start`, `npm run dev`, `vite dev`, `nodemon`, …) as the test, and never records a run stopped
