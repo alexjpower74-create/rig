@@ -157,6 +157,9 @@ real line reads "blocked on permission"; with a real agent it says whatever hc r
    could leave hc typing a message we had already put back, which would deliver it twice. Written in the
    header.
 
+Verified by rv-561 at d2c4bb9 (its b57bdee): race closed (B queued and sent later with `--if idle`;
+red with the lock disabled), 21 passed 0 void, finding 3 fixed, 4 and 5 accepted.
+
 The lead's ask: `done` counts as free and is covered both ways. A tell to a `done` agent is typed in
 (no `--if`), and a queued message goes in when a busy agent's turn ends in `done`. Both checks are red
 under the lead's control, which classifies `done` as busy.
