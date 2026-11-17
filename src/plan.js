@@ -133,7 +133,16 @@ export function parsePlan(text) {
   for (const a of agents) a.task = a.task.join('\n').trim()
   const sections = parseSections(lines)
   const fields = briefFields(sections)
-  return { title, agents, sections, ...fields, ui: uiLine(text), negativeCommand: negativeCommand(fields.checks) }
+  return {
+    title,
+    agents,
+    sections,
+    ...fields,
+    ui: uiLine(text),
+    negativeCommand: negativeCommand(fields.checks),
+    negativeExpect: negativeLine(fields.checks)?.expect ?? null,
+    negativeProblem: negativeLine(fields.checks)?.problem ?? null,
+  }
 }
 
 /**
@@ -146,13 +155,33 @@ export function parsePlan(text) {
  * backticked span, when there is one, is the command and the rest is prose. `null` when unnamed.
  */
 export function negativeCommand(checksBody) {
+  return negativeLine(checksBody)?.cmd ?? null
+}
+
+/**
+ * The negative line, read whole: { cmd, expect, problem }. The meaning of the exit is stated only by
+ * an exact marker in a trailing parenthesis: "(exits non-zero when the break is caught)" or "(expect:
+ * fail)" for "fail"; "(expect: pass)" for "pass" (also the default). Prose elsewhere in the line never
+ * changes the meaning. A line with no backticked command that carries meaning words in its prose is
+ * refused (`problem` set, `cmd` null): put the command in backticks. That is what `rig finish` gates on.
+ */
+export function negativeLine(checksBody) {
   for (const raw of (checksBody || '').split('\n')) {
     const m = raw.replace(/^\s*[-*]\s+/, '').match(/^negative(?: controls?|-control command(?: for this repo)?):\s*(.+?)\s*$/i)
     if (!m) continue
     if (/^<.*>$/.test(m[1])) continue
     const span = m[1].match(/`([^`]+)`/)
-    const cmd = (span ? span[1] : m[1]).trim()
-    if (cmd) return cmd
+    const marker = m[1].match(/\((exits? non-?zero when the break is caught|expect:\s*(fail|pass))\)\s*\.?\s*$/i)
+    const expect = marker ? (/fail|non-?zero/i.test(marker[1]) ? 'fail' : 'pass') : 'pass'
+    if (span) return { cmd: span[1].trim(), expect }
+    const bare = (marker ? m[1].replace(marker[0], '') : m[1]).trim()
+    if (/\b(exits?|expects?)\b|\bnon-?zero\b|\bwhen the break\b|,\s*which\b/i.test(bare))
+      return {
+        cmd: null,
+        expect,
+        problem: `the Negative controls line states a meaning in prose without a backticked command: write \`<command>\` (exits non-zero when the break is caught)`,
+      }
+    if (bare) return { cmd: bare, expect }
   }
   return null
 }

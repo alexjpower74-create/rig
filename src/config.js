@@ -11,7 +11,13 @@ export const DEFAULTS = {
   qaPort: 5199,
   launch: 'claude --model opus --effort medium',
   terminal: 'auto', // auto | hc (the Herdr app; also "herdr-app") | herdr | tmux
+  // What `npm start` would run: a server. Never graded as the test (see testCommandFor).
   devCommand: null,
+  // The command `rig qa` grades as the test when --run is not given. Must exit, and mean it.
+  testCommand: null,
+  // What the negative-control command's exit means: "pass" (it exits 0 after every control went red,
+  // the older `... || true` shape) or "fail" (it exits non-zero when the break is caught).
+  negativeExpect: null,
   // The app registry slug (`~/.claude/apps/<slug>.md`); `rig init` fills it in, `rig finish` jots under it.
   slug: null,
   // Open one GitHub issue per slice at `rig up` (when gh and a remote exist); `--no-issues` skips.
@@ -128,3 +134,112 @@ export function headState(cwd) {
   // `--verify HEAD` fails only when HEAD points at nothing: a fresh repo. A detached HEAD resolves.
   return tryGit(['rev-parse', '--verify', '-q', 'HEAD'], cwd).ok ? 'detached' : 'unborn'
 }
+
+// ---- Gate semantics (5.6.1) -------------------------------------------------------------------
+// An exit code means exactly one thing, and a server cannot pass a gate.
+
+/** A command that starts something and keeps running: a dev server or watcher, never a test. */
+const SERVER_WORDS = 'start|dev|serve|watch|preview'
+const SERVER_SHAPES = [
+  new RegExp(`(^|[\\s&;|(])(npm|pnpm|yarn|bun)\\s+(run\\s+)?(${SERVER_WORDS})(\\s|$|[&;|)])`),
+  /(^|[\s&;|(/])(vite|next|nuxt|astro|webpack|rails)\s+(dev|start|serve|server|s)(\s|$|[&;|)])/,
+  /(^|[\s&;|(/])(nodemon|http-server|live-server|serve)(\s|$|[&;|)])/,
+]
+export function serverShaped(cmd) {
+  const c = String(cmd || '')
+  return SERVER_SHAPES.some((re) => re.test(c))
+}
+
+/**
+ * The command `rig qa` grades as the test: --run, else testCommand, else devCommand only when it is
+ * not a server. Returns { cmd, from } or { cmd: null, refused: <why> | null }. devCommand is what
+ * `npm start` runs: on 5.6.0 it was the default test, and a server that ran until the deadline was
+ * recorded green.
+ */
+export function testCommandFor(cfg, runFlag) {
+  if (runFlag) {
+    if (serverShaped(runFlag))
+      return {
+        cmd: null,
+        refused: `--run "${runFlag}" starts a server, and a server is not a test: it never finishes, so it cannot pass or fail. Run the project's tests.`,
+      }
+    return { cmd: runFlag, from: '--run' }
+  }
+  if (cfg.testCommand) {
+    if (serverShaped(cfg.testCommand))
+      return { cmd: null, refused: `testCommand "${cfg.testCommand}" starts a server, and a server is not a test.` }
+    return { cmd: cfg.testCommand, from: 'testCommand' }
+  }
+  if (cfg.devCommand) {
+    if (serverShaped(cfg.devCommand))
+      return {
+        cmd: null,
+        refused: `devCommand "${cfg.devCommand}" starts a server, and rig qa does not grade a server as the test. Set "testCommand" in .rig/config.json or pass --run "<cmd>".`,
+      }
+    return { cmd: cfg.devCommand, from: 'devCommand (set "testCommand" to name the test command outright)' }
+  }
+  return { cmd: null, refused: null }
+}
+
+/** 'pass' | 'fail': what a negative command's exit means. `value` is the first one given (flag, config, plan). */
+export function negativeExpectation(...values) {
+  const v = values.find((x) => x !== undefined && x !== null && x !== '')
+  if (v === undefined) return 'pass'
+  if (v !== 'pass' && v !== 'fail') throw new Error(`negativeExpect must be "pass" or "fail", got ${JSON.stringify(v)}`)
+  return v
+}
+
+/**
+ * What a negative-control run's exit MEANS: { caught, meaning }.
+ * "pass": the command exits 0 once every control went red (its own script absorbs the red).
+ * "fail": the command exits non-zero when the break is caught, like `! cmd` or expect-fail.
+ * A run that never reached a verdict (deadline, stall, signal, not found, not executable) catches
+ * nothing under either reading, and neither does a "fail" command that exited 0 because nothing broke.
+ */
+export function classifyNegative({ exit, expect = 'pass', stalled = null, timedOut = false, text = '', failures = [] }) {
+  if (stalled || timedOut || exit === 124) return { caught: false, meaning: 'not caught: the run was stopped before it reached a verdict' }
+  if (exit >= 126)
+    return {
+      caught: false,
+      meaning: `not caught: exit ${exit} means the command did not run to a verdict (signal, not found or not executable)`,
+    }
+  if (expect === 'fail') {
+    if (exit === 0)
+      return {
+        caught: false,
+        meaning: 'not caught: it exited 0, and this command is expected to exit non-zero when the break is caught, so nothing broke',
+      }
+    // A non-zero exit alone cannot tell "the guard caught the break" from "the guard never ran" (a typo'd
+    // npm script, a syntax error, a missing fixture all exit 1). Under "fail" the run must also show the
+    // controls working: a named failure, or a red/FAIL line, and none of the shapes of a command that broke.
+    const broke = NOT_RAN.find((re) => re.test(text))
+    if (broke)
+      return {
+        caught: false,
+        meaning: `not caught: it exited ${exit}, but its output shows the command itself broke (${broke.source.replace(/\\/g, '')}), not a control going red`,
+      }
+    if (!failures.length && !RED_EVIDENCE.test(text))
+      return {
+        caught: false,
+        meaning: `not caught: it exited ${exit}, but its output names no failing control (a FAIL or "went red" line, or a failing test); a command that never ran exits non-zero too`,
+      }
+    return { caught: true, meaning: 'caught: it exited non-zero and its output shows a failing control' }
+  }
+  return exit === 0
+    ? { caught: true, meaning: 'caught: it exited 0, the command reports every control red' }
+    : { caught: false, meaning: `not caught: it exited ${exit}, and this command is expected to exit 0 once every control went red` }
+}
+
+/** Output of a command that broke before any control could run. */
+const NOT_RAN = [
+  /Missing script/,
+  /ERR_MODULE_NOT_FOUND/,
+  /Cannot find module/,
+  /SyntaxError/,
+  /command not found/,
+  /No such file or directory/,
+  /ENOENT/,
+  /ERR_UNKNOWN_FILE_EXTENSION/,
+]
+/** A line that says a control went red. */
+const RED_EVIDENCE = /(^|[^A-Za-z])(FAIL|FAILED|RED|not ok)([^A-Za-z]|$)|✖|✗|went red/m
